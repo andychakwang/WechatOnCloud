@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TAG="${WOC_VERSION:-andy-automation-usable-r5-2026-06-17}"
+TAG="${WOC_VERSION:-andy-automation-usable-r6-2026-06-17}"
 PREFIX="${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}"
 PORT="${WOC_TEST_HTTP_PORT:-36081}"
 HOSTS="${PANEL_ALLOWED_HOSTS:-nasbot.cloud}"
