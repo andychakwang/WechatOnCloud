@@ -1,0 +1,41 @@
+# fnOS Docker Compose import file for the automation test panel.
+# This is intentionally isolated from the existing production panel on 36080.
+# Before starting on a public NAS, replace PANEL_ADMIN_PASSWORD below.
+
+services:
+  panel-automation-test:
+    image: ghcr.io/andychakwang/woc-panel:andy-automation-usable-r7-2026-06-17
+    container_name: woc-panel-automation-test
+    pull_policy: always
+
+    environment:
+      - PORT=8080
+      - WOC_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r7-2026-06-17
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      - WOC_VIDEO_DEVICES=
+      - WOC_ENABLE_GPU=
+      - WOC_INSTANCE_MEM_GB=
+      - WOC_INSTANCE_MEM_SOFT_MB=1500
+      - WOC_INSTANCE_MEM_HARD_MB=2500
+      - WOC_WATCHDOG_INTERVAL_SEC=300
+      - WOC_SPOOF_OS=1
+      - PANEL_ADMIN_USER=admin
+      - PANEL_ADMIN_PASSWORD=REPLACE_WITH_A_STRONG_PASSWORD_BEFORE_START
+      - PANEL_DATA=/data/accounts.json
+      - PANEL_AUTOMATION_DATA=/data/automation.json
+      - AUTOMATION_AI_API_KEY=
+      - AUTOMATION_AI_BASE_URL=
+      - AUTOMATION_AI_MODEL=
+      - PANEL_ALLOWED_HOSTS=nasbot.cloud
+
+    volumes:
+      - ./data-panel-automation-test:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /dev:/host-dev:ro
+
+    ports:
+      - "36081:8080"
+
+    restart: unless-stopped

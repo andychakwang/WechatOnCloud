@@ -1,0 +1,97 @@
+# 飞牛 NAS 自动化测试部署
+
+> 本文用于把 `andy-automation-usable-r7-2026-06-17` 部署成独立测试面板。
+> 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
+
+## 当前部署目标
+
+- 生产面板保持不变：`http://nasbot.cloud:36080/`
+- 测试面板新开端口：`http://nasbot.cloud:36081/`
+- 测试容器名：`woc-panel-automation-test`
+- 测试数据目录：`data-panel-automation-test`
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r7-2026-06-17`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r7-2026-06-17`
+
+## 飞牛 Docker 面板导入
+
+1. 打开飞牛 Docker 应用：
+
+   ```text
+   http://nasbot.cloud/apps/docker/
+   ```
+
+2. 登录飞牛 NAS 后，进入 Docker 的 Compose/项目管理。
+
+3. 新建项目，项目名建议：
+
+   ```text
+   woc-automation-test
+   ```
+
+4. 导入或粘贴仓库里的 compose 文件：
+
+   ```text
+   fnos/woc-automation-test/docker-compose.yaml
+   ```
+
+5. 启动前先替换管理员初始密码：
+
+   ```yaml
+   - PANEL_ADMIN_PASSWORD=REPLACE_WITH_A_STRONG_PASSWORD_BEFORE_START
+   ```
+
+   这个密码只在测试面板第一次初始化、`data-panel-automation-test/accounts.json` 还不存在时生效。
+
+6. 如需启用 AI 草稿，填写 OpenAI-compatible 配置：
+
+   ```yaml
+   - AUTOMATION_AI_API_KEY=你的Key
+   - AUTOMATION_AI_BASE_URL=https://api.openai.com/v1
+   - AUTOMATION_AI_MODEL=gpt-4o-mini
+   ```
+
+7. 启动项目，等待镜像拉取完成。
+
+8. 验证测试面板：
+
+   ```bash
+   curl -I http://nasbot.cloud:36081/
+   ```
+
+   浏览器打开：
+
+   ```text
+   http://nasbot.cloud:36081/
+   ```
+
+## 首次验收
+
+1. 用 `admin` 和你刚设置的密码登录测试面板。
+2. 新建一个测试微信实例并扫码登录。
+3. 打开管理页的「自动化工作台」。
+4. 先点「实例自检」，确认剪贴板、`xdotool`、窗口状态正常。
+5. AI 回复：先用「读取选中文本」或手动输入客户消息生成 AI 草稿。
+6. 群发：新建一个只包含测试联系人/测试群的队列，先手动确认发送下一条。
+7. 朋友圈：先用「复制到实例剪贴板」模式验证，不直接发布。
+
+## 回滚与清理
+
+测试版和生产版隔离。需要停掉测试版时，只停止或删除以下项目即可：
+
+```text
+woc-automation-test
+```
+
+如需保留测试面板账号、规则、审计和实例记录，不要删除：
+
+```text
+data-panel-automation-test
+```
+
+如需彻底清理测试数据，再删除该目录/卷。
+
+## 注意
+
+- 不要把测试面板的 `36081` 反代到生产域名根路径；先直接用端口验证。
+- 不要复用生产 `data-panel`，否则会混用用户、实例元数据和自动化配置。
+- `docker.sock` 挂载等同宿主 Docker 管理权限，只应让可信管理员访问测试面板。

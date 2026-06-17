@@ -20,10 +20,10 @@ gh release create v1.0.0 --title v1.0.0 --notes "..."
 自动化实验版可用独立 tag，避免覆盖稳定版：
 
 ```bash
-git tag andy-automation-usable-r6-2026-06-17
-git push origin andy-automation-usable-r6-2026-06-17
-# 产出 ghcr.io/<owner>/woc-panel:andy-automation-usable-r6-2026-06-17
-# 以及 ghcr.io/<owner>/wechat-on-cloud:andy-automation-usable-r6-2026-06-17
+git tag andy-automation-usable-r7-2026-06-17
+git push origin andy-automation-usable-r7-2026-06-17
+# 产出 ghcr.io/<owner>/woc-panel:andy-automation-usable-r7-2026-06-17
+# 以及 ghcr.io/<owner>/wechat-on-cloud:andy-automation-usable-r7-2026-06-17
 ```
 
 > 注意：单纯 push tag 只产出 `X.Y.Z / X.Y / X`，**不会更新 `latest`**；要更新 `latest` 请改用 **发布 Release** 或在 Actions 里手动 `workflow_dispatch`。
