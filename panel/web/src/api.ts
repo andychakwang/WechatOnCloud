@@ -103,6 +103,10 @@ export interface AutomationRule {
 
 export interface AutomationSettings {
   enabled: boolean;
+  aiDraftEnabled: boolean;
+  automaticRuleRepliesEnabled: boolean;
+  massSendEnabled: boolean;
+  momentsEnabled: boolean;
   maximumAutomaticSendsPerHour: number;
   perConversationCooldownMinutes: number;
   requireConfirmForSend: boolean;
@@ -134,6 +138,57 @@ export interface AutomationDecision {
   rule: AutomationRule | null;
   risk: { level: 'normal' | 'review' | 'block'; reasons: string[] };
   reasons: string[];
+}
+
+export interface AutomationReplyPlan {
+  mode: 'keyword-rule' | 'ai-draft' | 'manual-review' | 'blocked';
+  decision: AutomationDecision;
+  draft: string;
+  model?: string;
+  ruleId?: string;
+  canSendRule: boolean;
+  canSendText: boolean;
+  reasons: string[];
+}
+
+export interface MassSendItem {
+  id: string;
+  recipientName: string;
+  status: 'pending' | 'sent' | 'failed' | 'skipped';
+  sentAt?: string;
+  auditEventId?: string;
+  error?: string;
+}
+
+export interface MassSendJob {
+  id: string;
+  title: string;
+  message: string;
+  status: 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'cancelled';
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  options: {
+    perSendDelaySeconds: number;
+    requireOperatorConfirmRecipient: boolean;
+  };
+  items: MassSendItem[];
+}
+
+export interface MomentDraft {
+  id: string;
+  title: string;
+  text: string;
+  imageNotes: string;
+  materials: string[];
+  status: 'draft' | 'ready' | 'prepared' | 'published' | 'archived';
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  lastPreparedAt?: string;
+  publishedAt?: string;
 }
 
 // 原始二进制上传（File 直传 application/octet-stream），用于数据卷上传/解压/恢复
@@ -187,6 +242,11 @@ export const api = {
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
   simulateAutomation: (inboundText: string) =>
     req<{ decision: AutomationDecision }>('/api/admin/automation/simulate', { method: 'POST', body: JSON.stringify({ inboundText }) }),
+  automationReplyPlan: (payload: { inboundText: string; conversationContext?: string; extraInstruction?: string }) =>
+    req<{ plan: AutomationReplyPlan }>('/api/admin/automation/reply-plan', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   automationAudit: (limit = 200) =>
     req<{ events: AutomationAuditEvent[] }>(`/api/admin/automation/audit?limit=${encodeURIComponent(limit)}`),
   automationAiDraft: (payload: { inboundText: string; conversationContext?: string; extraInstruction?: string }) =>
@@ -194,6 +254,40 @@ export const api = {
       '/api/admin/automation/ai-draft',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
+  automationMomentAiDraft: (payload: { topic: string; audience?: string; tone?: string; extraInstruction?: string }) =>
+    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string }>(
+      '/api/admin/automation/moment-drafts/ai-draft',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  listMassSendJobs: (limit = 100) =>
+    req<{ jobs: MassSendJob[] }>(`/api/admin/automation/mass-jobs?limit=${encodeURIComponent(limit)}`),
+  createMassSendJob: (payload: {
+    title: string;
+    message: string;
+    recipients: string[];
+    options?: { perSendDelaySeconds?: number; requireOperatorConfirmRecipient?: boolean };
+  }) =>
+    req<{ job: MassSendJob }>('/api/admin/automation/mass-jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  patchMassSendJob: (jobId: string, payload: Partial<Pick<MassSendJob, 'title' | 'message' | 'status' | 'approved'>> & { options?: Partial<MassSendJob['options']> }) =>
+    req<{ job: MassSendJob }>(`/api/admin/automation/mass-jobs/${jobId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  listMomentDrafts: (limit = 100) =>
+    req<{ drafts: MomentDraft[] }>(`/api/admin/automation/moment-drafts?limit=${encodeURIComponent(limit)}`),
+  createMomentDraft: (payload: { title: string; text: string; imageNotes?: string; materials?: string[] }) =>
+    req<{ draft: MomentDraft }>('/api/admin/automation/moment-drafts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  patchMomentDraft: (draftId: string, payload: Partial<Pick<MomentDraft, 'title' | 'text' | 'imageNotes' | 'materials' | 'status' | 'approved'>>) =>
+    req<{ draft: MomentDraft }>(`/api/admin/automation/moment-drafts/${draftId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   automationSendRule: (
     id: string,
     payload: { ruleId: string; inboundText?: string; conversationName?: string; confirm: boolean },
@@ -210,6 +304,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  automationSendNextMassItem: (id: string, jobId: string, payload: { confirm: boolean; operatorConfirmedRecipient: boolean }) =>
+    req<{ job: MassSendJob; item: MassSendItem; event: AutomationAuditEvent }>(
+      `/api/admin/instances/${id}/automation/mass-jobs/${jobId}/send-next`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  automationPrepareMomentDraft: (id: string, draftId: string, payload: { confirm: boolean }) =>
+    req<{ draft: MomentDraft; event: AutomationAuditEvent }>(
+      `/api/admin/instances/${id}/automation/moment-drafts/${draftId}/prepare`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
 
   // 子账号
   listUsers: () => req<{ users: PanelUser[] }>('/api/admin/users'),

@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Cropper from 'react-easy-crop';
-import { api, APP_LABELS, appProfile, type PanelUser, type InstanceWithStatus, type VolEntry, type AppType, type VersionInfo } from '../api';
+import {
+  api,
+  APP_LABELS,
+  appProfile,
+  type AutomationConfig,
+  type AutomationReplyPlan,
+  type MassSendJob,
+  type MomentDraft,
+  type PanelUser,
+  type InstanceWithStatus,
+  type VolEntry,
+  type AppType,
+  type VersionInfo,
+} from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
 import { useUI, PasswordInput } from '../ui';
 import { useAuth } from '../auth';
@@ -88,6 +101,540 @@ const DIAG_RANGE_OPTIONS = [
   { key: '30d', label: '30 天' },
   { key: '1y', label: '1 年' },
 ];
+
+const AUTO_STATUS_LABEL: Record<string, string> = {
+  draft: '草稿',
+  queued: '待发送',
+  running: '进行中',
+  paused: '已暂停',
+  completed: '已完成',
+  cancelled: '已取消',
+  ready: '已就绪',
+  prepared: '已填入',
+  published: '已发布',
+  archived: '已归档',
+  pending: '待发',
+  sent: '已发',
+  failed: '失败',
+  skipped: '跳过',
+};
+
+function linesOf(text: string): string[] {
+  return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
+}
+
+function defaultAutomationConfig(): AutomationConfig {
+  return {
+    settings: {
+      enabled: false,
+      aiDraftEnabled: true,
+      automaticRuleRepliesEnabled: true,
+      massSendEnabled: false,
+      momentsEnabled: false,
+      maximumAutomaticSendsPerHour: 20,
+      perConversationCooldownMinutes: 10,
+      requireConfirmForSend: true,
+    },
+    persona: '',
+    knowledgeNotes: '',
+    rules: [],
+  };
+}
+
+function jobProgress(job: MassSendJob): string {
+  const sent = job.items.filter((item) => item.status === 'sent').length;
+  return `${sent}/${job.items.length}`;
+}
+
+function nextMassTarget(job: MassSendJob): string {
+  return job.items.find((item) => item.status === 'pending')?.recipientName || '';
+}
+
+function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] }) {
+  const { toast, confirm } = useUI();
+  const [config, setConfig] = useState<AutomationConfig | null>(null);
+  const [jobs, setJobs] = useState<MassSendJob[]>([]);
+  const [drafts, setDrafts] = useState<MomentDraft[]>([]);
+  const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState('');
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+
+  const [replyInbound, setReplyInbound] = useState('');
+  const [replyContext, setReplyContext] = useState('');
+  const [replyInstruction, setReplyInstruction] = useState('');
+  const [replyPlan, setReplyPlan] = useState<AutomationReplyPlan | null>(null);
+
+  const [massTitle, setMassTitle] = useState('');
+  const [massRecipients, setMassRecipients] = useState('');
+  const [massMessage, setMassMessage] = useState('');
+  const [massDelay, setMassDelay] = useState('10');
+
+  const [momentTopic, setMomentTopic] = useState('');
+  const [momentAudience, setMomentAudience] = useState('');
+  const [momentTone, setMomentTone] = useState('自然、克制、有个人感');
+  const [momentTitle, setMomentTitle] = useState('');
+  const [momentText, setMomentText] = useState('');
+  const [momentImageNotes, setMomentImageNotes] = useState('');
+  const [momentMaterials, setMomentMaterials] = useState('');
+
+  const runningInstances = instances.filter((inst) => inst.runtime === 'running');
+  const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
+
+  const loadAutomation = async () => {
+    setErr('');
+    try {
+      const [{ config }, { jobs }, { drafts }, { events }] = await Promise.all([
+        api.getAutomationConfig(),
+        api.listMassSendJobs(),
+        api.listMomentDrafts(),
+        api.automationAudit(30),
+      ]);
+      setConfig(config);
+      setJobs(jobs);
+      setDrafts(drafts);
+      setAudit(events);
+    } catch (e: any) {
+      setErr(e.message || '读取自动化配置失败');
+    }
+  };
+
+  useEffect(() => {
+    loadAutomation();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedInstanceId && runningInstances[0]) setSelectedInstanceId(runningInstances[0].id);
+  }, [instances, selectedInstanceId]);
+
+  const cfg = config ?? defaultAutomationConfig();
+  const setSetting = (patch: Partial<AutomationConfig['settings']>) =>
+    setConfig((current) => {
+      const base = current ?? defaultAutomationConfig();
+      return { ...base, settings: { ...base.settings, ...patch } };
+    });
+
+  const saveConfig = async () => {
+    if (!config) return;
+    setBusy('config');
+    try {
+      const { config: saved } = await api.updateAutomationConfig(config);
+      setConfig(saved);
+      toast('自动化配置已保存', 'ok');
+    } catch (e: any) {
+      toast(e.message || '保存失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const buildReplyPlan = async () => {
+    setBusy('reply-plan');
+    setReplyPlan(null);
+    try {
+      const { plan } = await api.automationReplyPlan({
+        inboundText: replyInbound,
+        conversationContext: replyContext,
+        extraInstruction: replyInstruction,
+      });
+      setReplyPlan(plan);
+      toast(plan.mode === 'blocked' ? '回复已被风险拦截' : '已生成回复计划', plan.mode === 'blocked' ? 'error' : 'ok');
+    } catch (e: any) {
+      toast(e.message || '生成失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const sendReplyPlan = async () => {
+    if (!replyPlan || !selectedInstance) return;
+    const ok = await confirm({
+      title: '发送到当前微信会话？',
+      body: `请确认「${selectedInstance.name}」里已经打开正确的聊天窗口。发送后会立刻回车发出。`,
+      confirmText: '确认发送',
+    });
+    if (!ok) return;
+    setBusy('reply-send');
+    try {
+      if (replyPlan.ruleId && replyPlan.canSendRule) {
+        await api.automationSendRule(selectedInstance.id, { ruleId: replyPlan.ruleId, inboundText: replyInbound, confirm: true });
+      } else {
+        await api.automationSendText(selectedInstance.id, { text: replyPlan.draft, inboundText: replyInbound, confirm: true });
+      }
+      toast('已发送回复', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '发送失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const createMassJob = async () => {
+    const recipients = linesOf(massRecipients);
+    setBusy('mass-create');
+    try {
+      const { job } = await api.createMassSendJob({
+        title: massTitle.trim() || `群发队列 ${new Date().toLocaleString()}`,
+        message: massMessage,
+        recipients,
+        options: {
+          perSendDelaySeconds: Number(massDelay) || 0,
+          requireOperatorConfirmRecipient: true,
+        },
+      });
+      setJobs((list) => [job, ...list]);
+      setMassTitle('');
+      setMassRecipients('');
+      setMassMessage('');
+      toast('群发队列已创建，审核后可逐条发送', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '创建失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const patchJob = async (job: MassSendJob, payload: Parameters<typeof api.patchMassSendJob>[1]) => {
+    setBusy(`job-${job.id}`);
+    try {
+      const { job: saved } = await api.patchMassSendJob(job.id, payload);
+      setJobs((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('队列已更新', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const sendNextJobItem = async (job: MassSendJob) => {
+    if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
+    const target = nextMassTarget(job);
+    if (!target) return toast('没有待发送目标', 'error');
+    const ok = await confirm({
+      title: `发送给「${target}」？`,
+      body: `请先在「${selectedInstance.name}」的微信窗口手动打开这个联系人或群聊。确认后面板只负责粘贴群发内容并回车。`,
+      confirmText: '已打开，发送',
+    });
+    if (!ok) return;
+    setBusy(`send-${job.id}`);
+    try {
+      const { job: saved } = await api.automationSendNextMassItem(selectedInstance.id, job.id, {
+        confirm: true,
+        operatorConfirmedRecipient: true,
+      });
+      setJobs((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('已发送当前队列目标', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '发送失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const draftMomentByAI = async () => {
+    setBusy('moment-ai');
+    try {
+      const { draft } = await api.automationMomentAiDraft({
+        topic: momentTopic,
+        audience: momentAudience,
+        tone: momentTone,
+      });
+      setMomentText(draft);
+      if (!momentTitle.trim()) setMomentTitle(momentTopic.slice(0, 28) || 'AI 朋友圈草稿');
+      toast('已生成朋友圈草稿', 'ok');
+    } catch (e: any) {
+      toast(e.message || '生成失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const createMoment = async () => {
+    setBusy('moment-create');
+    try {
+      const { draft } = await api.createMomentDraft({
+        title: momentTitle.trim() || `朋友圈草稿 ${new Date().toLocaleString()}`,
+        text: momentText,
+        imageNotes: momentImageNotes,
+        materials: linesOf(momentMaterials),
+      });
+      setDrafts((list) => [draft, ...list]);
+      setMomentTitle('');
+      setMomentText('');
+      setMomentImageNotes('');
+      setMomentMaterials('');
+      toast('朋友圈草稿已创建，审核后可填入发布框', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '创建失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const patchDraft = async (draft: MomentDraft, payload: Parameters<typeof api.patchMomentDraft>[1]) => {
+    setBusy(`draft-${draft.id}`);
+    try {
+      const { draft: saved } = await api.patchMomentDraft(draft.id, payload);
+      setDrafts((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('朋友圈草稿已更新', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const prepareDraft = async (draft: MomentDraft) => {
+    if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
+    const ok = await confirm({
+      title: `填入朋友圈草稿「${draft.title}」？`,
+      body: `请先在「${selectedInstance.name}」里打开朋友圈发布框并把光标放到正文输入区域。此操作只填入文案，不会点击发布。`,
+      confirmText: '填入文案',
+    });
+    if (!ok) return;
+    setBusy(`prepare-${draft.id}`);
+    try {
+      const { draft: saved } = await api.automationPrepareMomentDraft(selectedInstance.id, draft.id, { confirm: true });
+      setDrafts((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('已填入朋友圈发布框，请人工检查后发布', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '填入失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const sendableReply = !!replyPlan && (replyPlan.canSendRule || replyPlan.canSendText) && !!replyPlan.draft && !!selectedInstance;
+
+  return (
+    <>
+      <div className="section-row" style={{ marginTop: 22 }}>
+        <span className="section-title">自动化工作台</span>
+        <button className="btn-text" onClick={loadAutomation}>
+          刷新
+        </button>
+      </div>
+      <div className="settings-block auto-workbench">
+        {err && <div className="error">{err}</div>}
+        <div className="auto-toolbar">
+          <label className="auto-field compact">
+            <span className="field-label">执行实例</span>
+            <select className="input" value={selectedInstanceId} onChange={(e) => setSelectedInstanceId(e.target.value)}>
+              <option value="">选择运行中的实例</option>
+              {runningInstances.map((inst) => (
+                <option key={inst.id} value={inst.id}>
+                  {inst.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="auto-switches">
+            {[
+              ['enabled', '总开关'],
+              ['aiDraftEnabled', 'AI 草稿'],
+              ['automaticRuleRepliesEnabled', '规则回复'],
+              ['massSendEnabled', '群发队列'],
+              ['momentsEnabled', '朋友圈草稿'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                className={'chip chip-toggle' + ((cfg.settings as any)[key] ? ' on' : '')}
+                onClick={() => setSetting({ [key]: !(cfg.settings as any)[key] } as any)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="auto-grid two">
+          <label className="auto-field">
+            <span className="field-label">每小时发送上限</span>
+            <input
+              className="input"
+              inputMode="numeric"
+              value={cfg.settings.maximumAutomaticSendsPerHour}
+              onChange={(e) => setSetting({ maximumAutomaticSendsPerHour: Number(e.target.value) || 0 })}
+            />
+          </label>
+          <label className="auto-field">
+            <span className="field-label">单会话冷却分钟</span>
+            <input
+              className="input"
+              inputMode="numeric"
+              value={cfg.settings.perConversationCooldownMinutes}
+              onChange={(e) => setSetting({ perConversationCooldownMinutes: Number(e.target.value) || 0 })}
+            />
+          </label>
+        </div>
+        <label className="auto-check">
+          <input type="checkbox" checked={cfg.settings.requireConfirmForSend} onChange={(e) => setSetting({ requireConfirmForSend: e.target.checked })} />
+          <span>发送动作必须二次确认</span>
+        </label>
+        <div className="auto-grid two">
+          <label className="auto-field">
+            <span className="field-label">账号人设</span>
+            <textarea className="input textarea" value={cfg.persona} onChange={(e) => setConfig({ ...cfg, persona: e.target.value })} />
+          </label>
+          <label className="auto-field">
+            <span className="field-label">知识库/禁答边界</span>
+            <textarea className="input textarea" value={cfg.knowledgeNotes} onChange={(e) => setConfig({ ...cfg, knowledgeNotes: e.target.value })} />
+          </label>
+        </div>
+        <div className="settings-actions">
+          <button className="btn btn-primary s-btn" disabled={busy === 'config'} onClick={saveConfig}>
+            保存自动化配置
+          </button>
+          <span className="muted small">当前实例：{selectedInstance?.name || '未选择'}。生产环境保持不变，新功能仍在本地版本中。</span>
+        </div>
+
+        <div className="auto-grid">
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>AI 回复</b>
+              {replyPlan && <span className={'tag ' + (replyPlan.mode === 'blocked' ? 'tag-off' : replyPlan.mode === 'manual-review' ? 'tag-warn' : 'tag-on')}>{replyPlan.mode}</span>}
+            </div>
+            <textarea className="input textarea tall" placeholder="粘贴客户最新消息" value={replyInbound} onChange={(e) => setReplyInbound(e.target.value)} />
+            <textarea className="input textarea" placeholder="可选：上下文/最近对话" value={replyContext} onChange={(e) => setReplyContext(e.target.value)} />
+            <input className="input" placeholder="可选：额外要求" value={replyInstruction} onChange={(e) => setReplyInstruction(e.target.value)} />
+            <div className="settings-actions">
+              <button className="btn btn-primary s-btn" disabled={busy === 'reply-plan' || !replyInbound.trim()} onClick={buildReplyPlan}>
+                生成回复计划
+              </button>
+              <button className="btn s-btn" disabled={!sendableReply || busy === 'reply-send'} onClick={sendReplyPlan}>
+                发送到当前会话
+              </button>
+            </div>
+            {replyPlan && (
+              <div className="auto-result">
+                <div className="muted small">{replyPlan.reasons.join('；')}</div>
+                {replyPlan.draft && <pre>{replyPlan.draft}</pre>}
+              </div>
+            )}
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>群发队列</b>
+              <span className="tag">{jobs.length} 个队列</span>
+            </div>
+            <input className="input" placeholder="队列名称" value={massTitle} onChange={(e) => setMassTitle(e.target.value)} />
+            <textarea className="input textarea tall" placeholder="群发内容" value={massMessage} onChange={(e) => setMassMessage(e.target.value)} />
+            <textarea className="input textarea" placeholder="联系人或群聊名，一行一个" value={massRecipients} onChange={(e) => setMassRecipients(e.target.value)} />
+            <input className="input" inputMode="numeric" placeholder="每条间隔秒数" value={massDelay} onChange={(e) => setMassDelay(e.target.value.replace(/[^0-9]/g, ''))} />
+            <button className="btn btn-primary s-btn" disabled={busy === 'mass-create' || !massMessage.trim() || linesOf(massRecipients).length === 0} onClick={createMassJob}>
+              创建受控队列
+            </button>
+            <div className="auto-list">
+              {jobs.slice(0, 5).map((job) => (
+                <div key={job.id} className="auto-list-item">
+                  <div>
+                    <b>{job.title}</b>
+                    <div className="muted small">
+                      {AUTO_STATUS_LABEL[job.status] || job.status} · {jobProgress(job)} · 下一位 {nextMassTarget(job) || '无'}
+                    </div>
+                  </div>
+                  <div className="auto-actions">
+                    {!job.approved && (
+                      <button className="btn-text" disabled={busy === `job-${job.id}`} onClick={() => patchJob(job, { approved: true, status: 'queued' })}>
+                        审核
+                      </button>
+                    )}
+                    <button className="btn-text" disabled={!job.approved || busy === `send-${job.id}` || !nextMassTarget(job)} onClick={() => sendNextJobItem(job)}>
+                      发下一条
+                    </button>
+                    {job.status !== 'cancelled' && job.status !== 'completed' && (
+                      <button className="btn-text danger" disabled={busy === `job-${job.id}`} onClick={() => patchJob(job, { status: 'cancelled' })}>
+                        取消
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>朋友圈半自动</b>
+              <span className="tag">{drafts.length} 个草稿</span>
+            </div>
+            <input className="input" placeholder="运营主题" value={momentTopic} onChange={(e) => setMomentTopic(e.target.value)} />
+            <input className="input" placeholder="目标人群，可选" value={momentAudience} onChange={(e) => setMomentAudience(e.target.value)} />
+            <input className="input" placeholder="语气" value={momentTone} onChange={(e) => setMomentTone(e.target.value)} />
+            <button className="btn s-btn" disabled={busy === 'moment-ai' || !momentTopic.trim()} onClick={draftMomentByAI}>
+              AI 生成文案
+            </button>
+            <input className="input" placeholder="草稿标题" value={momentTitle} onChange={(e) => setMomentTitle(e.target.value)} />
+            <textarea className="input textarea tall" placeholder="朋友圈正文" value={momentText} onChange={(e) => setMomentText(e.target.value)} />
+            <textarea className="input textarea" placeholder="图片/素材说明" value={momentImageNotes} onChange={(e) => setMomentImageNotes(e.target.value)} />
+            <textarea className="input textarea" placeholder="素材文件名或链接，一行一个" value={momentMaterials} onChange={(e) => setMomentMaterials(e.target.value)} />
+            <button className="btn btn-primary s-btn" disabled={busy === 'moment-create' || !momentText.trim()} onClick={createMoment}>
+              保存朋友圈草稿
+            </button>
+            <div className="auto-list">
+              {drafts.slice(0, 5).map((draft) => (
+                <div key={draft.id} className="auto-list-item">
+                  <div>
+                    <b>{draft.title}</b>
+                    <div className="muted small">
+                      {AUTO_STATUS_LABEL[draft.status] || draft.status} · {draft.approved ? '已审核' : '未审核'}
+                    </div>
+                  </div>
+                  <div className="auto-actions">
+                    {!draft.approved && (
+                      <button className="btn-text" disabled={busy === `draft-${draft.id}`} onClick={() => patchDraft(draft, { approved: true, status: 'ready' })}>
+                        审核
+                      </button>
+                    )}
+                    <button className="btn-text" disabled={!draft.approved || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft)}>
+                      填入
+                    </button>
+                    {draft.status !== 'published' && (
+                      <button className="btn-text" disabled={busy === `draft-${draft.id}`} onClick={() => patchDraft(draft, { status: 'published' })}>
+                        标记发布
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>审计记录</b>
+              <span className="tag">{audit.length}</span>
+            </div>
+            <div className="auto-list audit">
+              {audit.slice(0, 8).map((ev) => (
+                <div key={ev.id} className="auto-list-item">
+                  <div>
+                    <b>{ev.message || ev.action}</b>
+                    <div className="muted small">
+                      {fmtDate(Date.parse(ev.timestamp))} · {ev.actor}
+                      {ev.instanceName ? ` · ${ev.instanceName}` : ''}
+                    </div>
+                  </div>
+                  {ev.riskLevel && <span className={'tag ' + (ev.riskLevel === 'normal' ? 'tag-on' : ev.riskLevel === 'review' ? 'tag-warn' : 'tag-off')}>{ev.riskLevel}</span>}
+                </div>
+              ))}
+              {audit.length === 0 && <div className="muted small">暂无审计记录</div>}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
 
 // 「诊断与日志」（仅管理员）：单实例「日志」只记录该实例日志；这里一键打包全局——系统信息 +
 // 面板运维日志 + 全部实例容器状态/日志 + 容器清单，便于排查部署/创建卡死/黑屏不可用等问题。
@@ -453,6 +1000,8 @@ export default function Admin({ onOpenMenu, onChangePassword }: { onOpenMenu: ()
                 ))}
               </div>
             )}
+
+            <AutomationWorkbench instances={instances} />
 
             <div className="section-row" style={{ marginTop: 22 }}>
               <span className="section-title">子账号</span>

@@ -22,6 +22,10 @@ export interface AutomationRule {
 
 export interface AutomationSettings {
   enabled: boolean;
+  aiDraftEnabled: boolean;
+  automaticRuleRepliesEnabled: boolean;
+  massSendEnabled: boolean;
+  momentsEnabled: boolean;
   maximumAutomaticSendsPerHour: number;
   perConversationCooldownMinutes: number;
   requireConfirmForSend: boolean;
@@ -48,6 +52,66 @@ export interface AutomationDecision {
   reasons: string[];
 }
 
+export type ReplyPlanMode = 'keyword-rule' | 'ai-draft' | 'manual-review' | 'blocked';
+
+export interface AutomationReplyPlan {
+  mode: ReplyPlanMode;
+  decision: AutomationDecision;
+  draft: string;
+  model?: string;
+  ruleId?: string;
+  canSendRule: boolean;
+  canSendText: boolean;
+  reasons: string[];
+}
+
+export type MassSendItemStatus = 'pending' | 'sent' | 'failed' | 'skipped';
+export type MassSendJobStatus = 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'cancelled';
+
+export interface MassSendItem {
+  id: string;
+  recipientName: string;
+  status: MassSendItemStatus;
+  sentAt?: string;
+  auditEventId?: string;
+  error?: string;
+}
+
+export interface MassSendJobOptions {
+  perSendDelaySeconds: number;
+  requireOperatorConfirmRecipient: boolean;
+}
+
+export interface MassSendJob {
+  id: string;
+  title: string;
+  message: string;
+  status: MassSendJobStatus;
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  options: MassSendJobOptions;
+  items: MassSendItem[];
+}
+
+export type MomentDraftStatus = 'draft' | 'ready' | 'prepared' | 'published' | 'archived';
+
+export interface MomentDraft {
+  id: string;
+  title: string;
+  text: string;
+  imageNotes: string;
+  materials: string[];
+  status: MomentDraftStatus;
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  lastPreparedAt?: string;
+  publishedAt?: string;
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -63,6 +127,8 @@ export interface AutomationAuditEvent {
 }
 
 interface AutomationData extends AutomationConfig {
+  massSendJobs: MassSendJob[];
+  momentDrafts: MomentDraft[];
   auditEvents: AutomationAuditEvent[];
 }
 
@@ -71,6 +137,10 @@ const MAX_AUDIT_EVENTS = 1000;
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   enabled: false,
+  aiDraftEnabled: true,
+  automaticRuleRepliesEnabled: true,
+  massSendEnabled: false,
+  momentsEnabled: false,
   maximumAutomaticSendsPerHour: 20,
   perConversationCooldownMinutes: 10,
   requireConfirmForSend: true,
@@ -81,6 +151,8 @@ const DEFAULT_DATA: AutomationData = {
   persona: '',
   knowledgeNotes: '',
   rules: [],
+  massSendJobs: [],
+  momentDrafts: [],
   auditEvents: [],
 };
 
@@ -112,6 +184,8 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       persona: raw?.persona ?? data.persona,
       knowledgeNotes: raw?.knowledgeNotes ?? data.knowledgeNotes,
       rules: raw?.rules ?? data.rules,
+      massSendJobs: data.massSendJobs,
+      momentDrafts: data.momentDrafts,
       auditEvents: data.auditEvents,
     },
     true,
@@ -123,6 +197,126 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
 export function listAutomationAudit(limit = 200): AutomationAuditEvent[] {
   const n = clampInt(limit, 1, 1000, 200);
   return data.auditEvents.slice(-n).reverse();
+}
+
+export function listMassSendJobs(limit = 100): MassSendJob[] {
+  const n = clampInt(limit, 1, 500, 100);
+  return data.massSendJobs.slice(-n).reverse().map(cloneMassSendJob);
+}
+
+export function createMassSendJob(actor: User, raw: any): MassSendJob {
+  const now = new Date().toISOString();
+  const job = normalizeMassSendJob(
+    {
+      ...raw,
+      id: randomUUID(),
+      status: 'draft',
+      approved: false,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor.username,
+    },
+    true,
+    now,
+  );
+  if (job.items.length === 0) throw new Error('群发队列至少需要 1 个联系人或群聊');
+  if (!job.message.trim()) throw new Error('群发内容不能为空');
+  data.massSendJobs.push(job);
+  persist();
+  addAutomationAudit({
+    action: 'mass_job_created',
+    actor: actor.username,
+    message: `创建群发队列「${job.title}」，${job.items.length} 个目标`,
+  });
+  return cloneMassSendJob(job);
+}
+
+export function patchMassSendJob(actor: User, jobId: string, raw: any): MassSendJob {
+  const job = data.massSendJobs.find((j) => j.id === jobId);
+  if (!job) throw new Error('群发队列不存在');
+  const now = new Date().toISOString();
+  if (typeof raw?.approved === 'boolean') job.approved = raw.approved;
+  if (typeof raw?.title === 'string') job.title = str(raw.title, 80).trim() || job.title;
+  if (typeof raw?.message === 'string') {
+    const msg = str(raw.message, 2000).trim();
+    if (!msg) throw new Error('群发内容不能为空');
+    job.message = msg;
+  }
+  if (raw?.status) {
+    const status = normalizeMassSendJobStatus(raw.status);
+    if (!status) throw new Error('群发队列状态不合法');
+    job.status = status;
+  }
+  if (raw?.options && typeof raw.options === 'object') job.options = normalizeMassSendOptions({ ...job.options, ...raw.options });
+  job.updatedAt = now;
+  refreshMassJobCompletion(job);
+  persist();
+  addAutomationAudit({
+    action: 'mass_job_updated',
+    actor: actor.username,
+    message: `更新群发队列「${job.title}」：${job.status}${job.approved ? '，已审核' : '，未审核'}`,
+  });
+  return cloneMassSendJob(job);
+}
+
+export function listMomentDrafts(limit = 100): MomentDraft[] {
+  const n = clampInt(limit, 1, 500, 100);
+  return data.momentDrafts.slice(-n).reverse().map(cloneMomentDraft);
+}
+
+export function createMomentDraft(actor: User, raw: any): MomentDraft {
+  const now = new Date().toISOString();
+  const draft = normalizeMomentDraft(
+    {
+      ...raw,
+      id: randomUUID(),
+      status: 'draft',
+      approved: false,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor.username,
+    },
+    true,
+    now,
+  );
+  if (!draft.text.trim()) throw new Error('朋友圈文案不能为空');
+  data.momentDrafts.push(draft);
+  persist();
+  addAutomationAudit({
+    action: 'moment_draft_created',
+    actor: actor.username,
+    message: `创建朋友圈草稿「${draft.title}」`,
+  });
+  return cloneMomentDraft(draft);
+}
+
+export function patchMomentDraft(actor: User, draftId: string, raw: any): MomentDraft {
+  const draft = data.momentDrafts.find((d) => d.id === draftId);
+  if (!draft) throw new Error('朋友圈草稿不存在');
+  const now = new Date().toISOString();
+  if (typeof raw?.approved === 'boolean') draft.approved = raw.approved;
+  if (typeof raw?.title === 'string') draft.title = str(raw.title, 80).trim() || draft.title;
+  if (typeof raw?.text === 'string') {
+    const text = str(raw.text, 2000).trim();
+    if (!text) throw new Error('朋友圈文案不能为空');
+    draft.text = text;
+  }
+  if (typeof raw?.imageNotes === 'string') draft.imageNotes = str(raw.imageNotes, 2000).trim();
+  if (Array.isArray(raw?.materials)) draft.materials = normalizeMaterials(raw.materials);
+  if (raw?.status) {
+    const status = normalizeMomentDraftStatus(raw.status);
+    if (!status) throw new Error('朋友圈草稿状态不合法');
+    draft.status = status;
+    if (status === 'published' && !draft.publishedAt) draft.publishedAt = now;
+  }
+  draft.updatedAt = now;
+  persist();
+  addAutomationAudit({
+    action: 'moment_draft_updated',
+    actor: actor.username,
+    message: `更新朋友圈草稿「${draft.title}」：${draft.status}${draft.approved ? '，已审核' : '，未审核'}`,
+  });
+  return cloneMomentDraft(draft);
 }
 
 export function addAutomationAudit(event: Omit<AutomationAuditEvent, 'id' | 'timestamp'>): AutomationAuditEvent {
@@ -182,6 +376,72 @@ export function simulateAutomation(inboundText: string): AutomationDecision {
     rule,
     risk,
     reasons: risk.level === 'normal' ? ['命中已审核规则，可在确认后发送'] : risk.reasons,
+  };
+}
+
+export async function planAutomationReply(req: DraftReplyRequest): Promise<AutomationReplyPlan> {
+  const decision = simulateAutomation(req.inboundText);
+  const baseReasons = [...decision.reasons, ...decision.risk.reasons].filter(Boolean);
+  if (decision.action === 'blocked') {
+    return {
+      mode: 'blocked',
+      decision,
+      draft: '',
+      canSendRule: false,
+      canSendText: false,
+      reasons: uniqueStrings(baseReasons),
+    };
+  }
+
+  if (decision.action === 'send-rule' && decision.rule) {
+    const draft = ruleText(decision.rule);
+    return {
+      mode: data.settings.automaticRuleRepliesEnabled ? 'keyword-rule' : 'manual-review',
+      decision,
+      draft,
+      ruleId: decision.rule.id,
+      canSendRule: data.settings.automaticRuleRepliesEnabled && decision.risk.level === 'normal',
+      canSendText: false,
+      reasons: data.settings.automaticRuleRepliesEnabled
+        ? uniqueStrings(baseReasons)
+        : uniqueStrings([...baseReasons, '关键词规则自动回复开关未开启，只生成待确认话术']),
+    };
+  }
+
+  if (!data.settings.aiDraftEnabled) {
+    return {
+      mode: 'manual-review',
+      decision,
+      draft: '',
+      canSendRule: false,
+      canSendText: false,
+      reasons: uniqueStrings([...baseReasons, 'AI 草稿开关未开启，请人工处理']),
+    };
+  }
+
+  const ai = await draftAutomationReply(req);
+  if (ai.risk.level === 'block') {
+    return {
+      mode: 'blocked',
+      decision: { ...decision, action: 'blocked', risk: ai.risk },
+      draft: ai.draft,
+      model: ai.model,
+      canSendRule: false,
+      canSendText: false,
+      reasons: uniqueStrings([...baseReasons, ...ai.risk.reasons]),
+    };
+  }
+  return {
+    mode: ai.risk.level === 'normal' ? 'ai-draft' : 'manual-review',
+    decision: { ...decision, risk: ai.risk },
+    draft: ai.draft,
+    model: ai.model,
+    canSendRule: false,
+    canSendText: ai.risk.level === 'normal',
+    reasons:
+      ai.risk.level === 'normal'
+        ? uniqueStrings([...baseReasons, 'AI 已生成草稿，发送前仍需要人工确认'])
+        : uniqueStrings([...baseReasons, ...ai.risk.reasons, 'AI 草稿需要人工复核后再发送']),
   };
 }
 
@@ -268,6 +528,116 @@ export async function sendAutomationText(
   });
 }
 
+export interface MassSendNextRequest {
+  confirm?: boolean;
+  operatorConfirmedRecipient?: boolean;
+}
+
+export interface MassSendNextResult {
+  job: MassSendJob;
+  item: MassSendItem;
+  event: AutomationAuditEvent;
+}
+
+export async function sendNextMassSendItem(
+  inst: Instance,
+  actor: User,
+  jobId: string,
+  req: MassSendNextRequest,
+  executor: AutomationExecutor,
+): Promise<MassSendNextResult> {
+  ensureFeatureEnabled('mass', req.confirm);
+  const job = data.massSendJobs.find((j) => j.id === jobId);
+  if (!job) throw new Error('群发队列不存在');
+  if (!job.approved) throw new Error('群发队列尚未审核，不能发送');
+  if (job.status === 'cancelled') throw new Error('群发队列已取消');
+  if (job.status === 'completed') throw new Error('群发队列已完成');
+  if (job.status === 'paused') throw new Error('群发队列已暂停');
+  if (job.options.requireOperatorConfirmRecipient && req.operatorConfirmedRecipient !== true) {
+    throw new Error('请先确认当前微信窗口已打开目标联系人/群聊');
+  }
+  const pending = job.items.find((item) => item.status === 'pending');
+  if (!pending) {
+    job.status = 'completed';
+    job.updatedAt = new Date().toISOString();
+    persist();
+    throw new Error('群发队列没有待发送目标');
+  }
+
+  enforceRateLimits(pending.recipientName);
+  enforceMassSendDelay(job);
+  const risk = assessRisk([job.message]);
+  if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
+  if (risk.level === 'review') throw new Error(`群发内容需要人工复核：${risk.reasons.join('；')}`);
+
+  await executor.typeText(job.message);
+  await executor.key('Return');
+
+  const now = new Date().toISOString();
+  job.status = 'running';
+  job.updatedAt = now;
+  pending.status = 'sent';
+  pending.sentAt = now;
+  pending.error = undefined;
+  const event = addAutomationAudit({
+    action: 'mass_item_sent',
+    actor: actor.username,
+    instanceId: inst.id,
+    instanceName: inst.name,
+    conversationName: pending.recipientName,
+    riskLevel: risk.level,
+    message: `群发队列「${job.title}」发送给「${pending.recipientName}」`,
+  });
+  pending.auditEventId = event.id;
+  refreshMassJobCompletion(job);
+  persist();
+  return { job: cloneMassSendJob(job), item: { ...pending }, event };
+}
+
+export interface MomentPrepareRequest {
+  confirm?: boolean;
+}
+
+export interface MomentPrepareResult {
+  draft: MomentDraft;
+  event: AutomationAuditEvent;
+}
+
+export async function prepareMomentDraft(
+  inst: Instance,
+  actor: User,
+  draftId: string,
+  req: MomentPrepareRequest,
+  executor: AutomationExecutor,
+): Promise<MomentPrepareResult> {
+  ensureFeatureEnabled('moments', req.confirm);
+  const draft = data.momentDrafts.find((d) => d.id === draftId);
+  if (!draft) throw new Error('朋友圈草稿不存在');
+  if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能填入发布框');
+  if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
+  if (draft.status === 'published') throw new Error('朋友圈草稿已标记发布');
+  const risk = assessRisk([draft.text, draft.imageNotes]);
+  if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
+  if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
+
+  await executor.typeText(draft.text);
+
+  const now = new Date().toISOString();
+  draft.status = 'prepared';
+  draft.lastPreparedAt = now;
+  draft.updatedAt = now;
+  const event = addAutomationAudit({
+    action: 'moment_draft_prepared',
+    actor: actor.username,
+    instanceId: inst.id,
+    instanceName: inst.name,
+    riskLevel: risk.level,
+    message: `已将朋友圈草稿「${draft.title}」填入当前发布框`,
+  });
+  persist();
+  return { draft: cloneMomentDraft(draft), event };
+}
+
 export interface DraftReplyRequest {
   inboundText: string;
   conversationContext?: string;
@@ -343,14 +713,93 @@ export async function draftAutomationReply(req: DraftReplyRequest): Promise<Draf
   };
 }
 
+export interface DraftMomentRequest {
+  topic: string;
+  audience?: string;
+  tone?: string;
+  extraInstruction?: string;
+}
+
+export interface DraftMomentResult {
+  draft: string;
+  risk: RiskAssessment;
+  model: string;
+}
+
+export async function draftMomentContent(req: DraftMomentRequest): Promise<DraftMomentResult> {
+  const topic = String(req.topic || '').trim();
+  if (!topic) throw new Error('朋友圈主题不能为空');
+  if (topic.length > 1000) throw new Error('朋友圈主题过长');
+  if (!data.settings.aiDraftEnabled) throw new Error('AI 草稿开关未开启');
+
+  const apiKey = process.env.AUTOMATION_AI_API_KEY || process.env.OPENAI_API_KEY || '';
+  if (!apiKey) throw new Error('未配置 AUTOMATION_AI_API_KEY 或 OPENAI_API_KEY');
+  const baseUrl = stripTrailingSlash(process.env.AUTOMATION_AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
+  const model = process.env.AUTOMATION_AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const payload = {
+    model,
+    temperature: 0.55,
+    max_tokens: 650,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          '你是微信朋友圈私域运营文案助手。生成一条可以直接发朋友圈的中文文案。',
+          '表达要像真人，不要像广告，不要夸大承诺，不写敏感承诺和诱导性话术。',
+          '如果主题涉及付款、退款、法律、医疗、账号安全等高风险内容，写成需要人工确认的克制草稿。',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(
+          {
+            persona: data.persona,
+            knowledgeNotes: data.knowledgeNotes.slice(0, 6000),
+            topic,
+            audience: String(req.audience || '').slice(0, 500),
+            tone: String(req.tone || '').slice(0, 120) || '自然、克制、有个人感',
+            extraInstruction: String(req.extraInstruction || '').slice(0, 1000),
+            outputRules: ['只返回朋友圈正文', '不要解释', '控制在 500 字以内', '可以自然分段，但不要堆砌表情'],
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const body: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error?.message || body?.message || `AI 接口请求失败 (${res.status})`);
+  const draft = String(body?.choices?.[0]?.message?.content || '').trim();
+  if (!draft) throw new Error('AI 没有返回朋友圈文案');
+  const clipped = draft.slice(0, 1000);
+  return {
+    draft: clipped,
+    risk: assessRisk([topic, clipped]),
+    model,
+  };
+}
+
 function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const now = new Date().toISOString();
   const rulesRaw = Array.isArray(raw?.rules) ? raw.rules : [];
+  const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
+  const momentDraftsRaw = Array.isArray(raw?.momentDrafts) ? raw.momentDrafts : [];
   return {
     settings: normalizeSettings(raw?.settings),
     persona: str(raw?.persona, 2000),
     knowledgeNotes: str(raw?.knowledgeNotes, 50000),
     rules: rulesRaw.slice(0, 200).map((r: any) => normalizeRule(r, preserveIds, now)),
+    massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
+    momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
     auditEvents: Array.isArray(raw?.auditEvents) ? raw.auditEvents.slice(-MAX_AUDIT_EVENTS).map(normalizeAuditEvent).filter(Boolean) : [],
   };
 }
@@ -358,6 +807,11 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
 function normalizeSettings(raw: any): AutomationSettings {
   return {
     enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : DEFAULT_SETTINGS.enabled,
+    aiDraftEnabled: typeof raw?.aiDraftEnabled === 'boolean' ? raw.aiDraftEnabled : DEFAULT_SETTINGS.aiDraftEnabled,
+    automaticRuleRepliesEnabled:
+      typeof raw?.automaticRuleRepliesEnabled === 'boolean' ? raw.automaticRuleRepliesEnabled : DEFAULT_SETTINGS.automaticRuleRepliesEnabled,
+    massSendEnabled: typeof raw?.massSendEnabled === 'boolean' ? raw.massSendEnabled : DEFAULT_SETTINGS.massSendEnabled,
+    momentsEnabled: typeof raw?.momentsEnabled === 'boolean' ? raw.momentsEnabled : DEFAULT_SETTINGS.momentsEnabled,
     maximumAutomaticSendsPerHour: clampInt(raw?.maximumAutomaticSendsPerHour, 0, 1000, DEFAULT_SETTINGS.maximumAutomaticSendsPerHour),
     perConversationCooldownMinutes: clampInt(raw?.perConversationCooldownMinutes, 0, 24 * 60, DEFAULT_SETTINGS.perConversationCooldownMinutes),
     requireConfirmForSend: typeof raw?.requireConfirmForSend === 'boolean' ? raw.requireConfirmForSend : DEFAULT_SETTINGS.requireConfirmForSend,
@@ -379,6 +833,75 @@ function normalizeRule(raw: any, preserveIds: boolean, now: string): AutomationR
     responseSteps: Array.isArray(raw?.responseSteps) ? raw.responseSteps.map(normalizeStep).filter(Boolean).slice(0, 30) : [],
     createdAt,
     updatedAt: now,
+  };
+}
+
+function normalizeMassSendJob(raw: any, preserveIds: boolean, now: string): MassSendJob {
+  const id = preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID();
+  const recipients = Array.isArray(raw?.recipients)
+    ? raw.recipients
+    : Array.isArray(raw?.items)
+      ? raw.items.map((item: any) => item?.recipientName)
+      : [];
+  const existingItems = Array.isArray(raw?.items) ? raw.items : [];
+  const byName = new Map<string, any>();
+  existingItems.forEach((item: any) => {
+    const name = str(item?.recipientName, 120).trim();
+    if (name) byName.set(name, item);
+  });
+  const items = uniqueStrings(recipients.map((x: any) => str(x, 120).trim()).filter(Boolean))
+    .slice(0, 500)
+    .map((name) => normalizeMassSendItem(byName.get(name) || { recipientName: name }, preserveIds, now));
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  return {
+    id,
+    title: str(raw?.title || '未命名群发队列', 80).trim() || '未命名群发队列',
+    message: str(raw?.message, 2000).trim(),
+    status: normalizeMassSendJobStatus(raw?.status) || 'draft',
+    approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    createdAt,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+    createdBy: str(raw?.createdBy, 80) || 'system',
+    options: normalizeMassSendOptions(raw?.options),
+    items,
+  };
+}
+
+function normalizeMassSendItem(raw: any, preserveIds: boolean, now: string): MassSendItem {
+  const status = normalizeMassSendItemStatus(raw?.status) || 'pending';
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    recipientName: str(raw?.recipientName, 120).trim(),
+    status,
+    sentAt: typeof raw?.sentAt === 'string' && raw.sentAt ? raw.sentAt : undefined,
+    auditEventId: str(raw?.auditEventId, 80) || undefined,
+    error: str(raw?.error, 300) || undefined,
+  };
+}
+
+function normalizeMassSendOptions(raw: any): MassSendJobOptions {
+  return {
+    perSendDelaySeconds: clampInt(raw?.perSendDelaySeconds, 0, 3600, 10),
+    requireOperatorConfirmRecipient: typeof raw?.requireOperatorConfirmRecipient === 'boolean' ? raw.requireOperatorConfirmRecipient : true,
+  };
+}
+
+function normalizeMomentDraft(raw: any, preserveIds: boolean, now: string): MomentDraft {
+  const id = preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID();
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  return {
+    id,
+    title: str(raw?.title || '未命名朋友圈草稿', 80).trim() || '未命名朋友圈草稿',
+    text: str(raw?.text, 2000).trim(),
+    imageNotes: str(raw?.imageNotes, 2000).trim(),
+    materials: normalizeMaterials(raw?.materials),
+    status: normalizeMomentDraftStatus(raw?.status) || 'draft',
+    approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    createdAt,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+    createdBy: str(raw?.createdBy, 80) || 'system',
+    lastPreparedAt: typeof raw?.lastPreparedAt === 'string' && raw.lastPreparedAt ? raw.lastPreparedAt : undefined,
+    publishedAt: typeof raw?.publishedAt === 'string' && raw.publishedAt ? raw.publishedAt : undefined,
   };
 }
 
@@ -469,9 +992,15 @@ function ensureAutomationEnabled(confirm?: boolean) {
   if (data.settings.requireConfirmForSend && confirm !== true) throw new Error('发送动作需要 confirm=true');
 }
 
+function ensureFeatureEnabled(feature: 'mass' | 'moments', confirm?: boolean) {
+  ensureAutomationEnabled(confirm);
+  if (feature === 'mass' && !data.settings.massSendEnabled) throw new Error('群发队列开关未开启');
+  if (feature === 'moments' && !data.settings.momentsEnabled) throw new Error('朋友圈半自动开关未开启');
+}
+
 function enforceRateLimits(conversationName?: string) {
   const now = Date.now();
-  const sends = data.auditEvents.filter((ev) => ['rule_sent', 'text_sent'].includes(ev.action));
+  const sends = data.auditEvents.filter((ev) => ['rule_sent', 'text_sent', 'mass_item_sent'].includes(ev.action));
   const hourlyLimit = data.settings.maximumAutomaticSendsPerHour;
   if (hourlyLimit > 0) {
     const recent = sends.filter((ev) => now - Date.parse(ev.timestamp) < 60 * 60 * 1000);
@@ -482,6 +1011,25 @@ function enforceRateLimits(conversationName?: string) {
     const hit = sends.some((ev) => ev.conversationName === conversationName && now - Date.parse(ev.timestamp) < cooldownMs);
     if (hit) throw new Error('该会话处于自动发送冷却时间内');
   }
+}
+
+function enforceMassSendDelay(job: MassSendJob) {
+  const delayMs = job.options.perSendDelaySeconds * 1000;
+  if (delayMs <= 0) return;
+  const lastSentAt = job.items
+    .filter((item) => item.status === 'sent' && item.sentAt)
+    .map((item) => Date.parse(item.sentAt!))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0];
+  if (!lastSentAt) return;
+  const remaining = delayMs - (Date.now() - lastSentAt);
+  if (remaining > 0) throw new Error(`群发队列冷却中，请 ${Math.ceil(remaining / 1000)} 秒后再发送下一条`);
+}
+
+function refreshMassJobCompletion(job: MassSendJob) {
+  const hasPending = job.items.some((item) => item.status === 'pending');
+  if (!hasPending && job.items.length > 0 && job.status !== 'cancelled') job.status = 'completed';
+  if (hasPending && job.status === 'completed') job.status = 'queued';
 }
 
 async function executeSteps(steps: AutomationStep[], executor: AutomationExecutor) {
@@ -518,6 +1066,43 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 
 function cloneRule(rule: AutomationRule): AutomationRule {
   return { ...rule, triggers: [...rule.triggers], responseSteps: rule.responseSteps.map((s) => ({ ...s })) };
+}
+
+function cloneMassSendJob(job: MassSendJob): MassSendJob {
+  return {
+    ...job,
+    options: { ...job.options },
+    items: job.items.map((item) => ({ ...item })),
+  };
+}
+
+function cloneMomentDraft(draft: MomentDraft): MomentDraft {
+  return {
+    ...draft,
+    materials: [...draft.materials],
+  };
+}
+
+function normalizeMassSendItemStatus(value: unknown): MassSendItemStatus | null {
+  return value === 'pending' || value === 'sent' || value === 'failed' || value === 'skipped' ? value : null;
+}
+
+function normalizeMassSendJobStatus(value: unknown): MassSendJobStatus | null {
+  return value === 'draft' || value === 'queued' || value === 'running' || value === 'paused' || value === 'completed' || value === 'cancelled'
+    ? value
+    : null;
+}
+
+function normalizeMomentDraftStatus(value: unknown): MomentDraftStatus | null {
+  return value === 'draft' || value === 'ready' || value === 'prepared' || value === 'published' || value === 'archived' ? value : null;
+}
+
+function normalizeMaterials(raw: any): string[] {
+  return Array.isArray(raw) ? uniqueStrings(raw.map((x: any) => str(x, 300).trim()).filter(Boolean)).slice(0, 50) : [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function stripTrailingSlash(url: string): string {

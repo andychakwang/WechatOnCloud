@@ -80,9 +80,19 @@ import {
   updateAutomationConfig,
   simulateAutomation,
   listAutomationAudit,
+  listMassSendJobs,
+  createMassSendJob,
+  patchMassSendJob,
+  listMomentDrafts,
+  createMomentDraft,
+  patchMomentDraft,
+  planAutomationReply,
   draftAutomationReply,
+  draftMomentContent,
   sendAutomationRule,
   sendAutomationText,
+  sendNextMassSendItem,
+  prepareMomentDraft,
 } from './automation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -223,6 +233,15 @@ app.post('/api/admin/automation/simulate', async (req, reply) => {
   return { decision: simulateAutomation(inboundText) };
 });
 
+app.post('/api/admin/automation/reply-plan', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  try {
+    return { plan: await planAutomationReply(req.body as any) };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '生成回复计划失败' });
+  }
+});
+
 app.get('/api/admin/automation/audit', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { events: listAutomationAudit(Number((req.query as any)?.limit || 200)) };
@@ -234,6 +253,73 @@ app.post('/api/admin/automation/ai-draft', async (req, reply) => {
     return await draftAutomationReply(req.body as any);
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '生成 AI 草稿失败' });
+  }
+});
+
+app.post('/api/admin/automation/moment-drafts/ai-draft', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  try {
+    return await draftMomentContent(req.body as any);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '生成朋友圈文案失败' });
+  }
+});
+
+app.get('/api/admin/automation/mass-jobs', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { jobs: listMassSendJobs(Number((req.query as any)?.limit || 100)) };
+});
+
+app.post('/api/admin/automation/mass-jobs', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const job = createMassSendJob(admin, req.body as any);
+    appendPanelLog('INFO', `创建群发队列「${job.title}」by ${admin.username}：${job.items.length} 个目标`);
+    return { job };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '创建群发队列失败' });
+  }
+});
+
+app.patch('/api/admin/automation/mass-jobs/:jobId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const job = patchMassSendJob(admin, (req.params as any).jobId, req.body as any);
+    appendPanelLog('INFO', `更新群发队列「${job.title}」by ${admin.username}`);
+    return { job };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新群发队列失败' });
+  }
+});
+
+app.get('/api/admin/automation/moment-drafts', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { drafts: listMomentDrafts(Number((req.query as any)?.limit || 100)) };
+});
+
+app.post('/api/admin/automation/moment-drafts', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const draft = createMomentDraft(admin, req.body as any);
+    appendPanelLog('INFO', `创建朋友圈草稿「${draft.title}」by ${admin.username}`);
+    return { draft };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '创建朋友圈草稿失败' });
+  }
+});
+
+app.patch('/api/admin/automation/moment-drafts/:draftId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const draft = patchMomentDraft(admin, (req.params as any).draftId, req.body as any);
+    appendPanelLog('INFO', `更新朋友圈草稿「${draft.title}」by ${admin.username}`);
+    return { draft };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新朋友圈草稿失败' });
   }
 });
 
@@ -274,6 +360,46 @@ app.post('/api/admin/instances/:id/automation/send-text', async (req, reply) => 
   } catch (e: any) {
     appendPanelLog('WARN', `自动化文本发送被拦截：实例「${inst.name}」by ${admin.username}：${e?.message || e}`);
     return reply.code(400).send({ error: e?.message || '自动化发送失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/mass-jobs/:jobId/send-next', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const { id, jobId } = req.params as any;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const result = await sendNextMassSendItem(inst, admin, jobId, req.body as any, {
+      typeText: (text: string) => typeInInstance(inst, text),
+      key: (key: string) => keyInInstance(inst, key),
+    });
+    appendInstanceLog(inst.id, `[automation] ${result.event.message} by ${admin.username}`);
+    appendPanelLog('INFO', `群发队列「${result.job.title}」发送下一条到实例「${inst.name}」by ${admin.username}`);
+    return result;
+  } catch (e: any) {
+    appendPanelLog('WARN', `群发队列发送被拦截：实例「${inst.name}」by ${admin.username}：${e?.message || e}`);
+    return reply.code(400).send({ error: e?.message || '群发队列发送失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/moment-drafts/:draftId/prepare', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const { id, draftId } = req.params as any;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const result = await prepareMomentDraft(inst, admin, draftId, req.body as any, {
+      typeText: (text: string) => typeInInstance(inst, text),
+      key: (key: string) => keyInInstance(inst, key),
+    });
+    appendInstanceLog(inst.id, `[automation] ${result.event.message} by ${admin.username}`);
+    appendPanelLog('INFO', `朋友圈草稿「${result.draft.title}」填入实例「${inst.name}」by ${admin.username}`);
+    return result;
+  } catch (e: any) {
+    appendPanelLog('WARN', `朋友圈草稿填入被拦截：实例「${inst.name}」by ${admin.username}：${e?.message || e}`);
+    return reply.code(400).send({ error: e?.message || '朋友圈草稿填入失败' });
   }
 });
 
