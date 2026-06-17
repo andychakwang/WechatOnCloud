@@ -80,6 +80,10 @@ export interface MassSendItem {
 export interface MassSendJobOptions {
   perSendDelaySeconds: number;
   requireOperatorConfirmRecipient: boolean;
+  openConversationBeforeSend: boolean;
+  searchShortcut: string;
+  searchResultDelaySeconds: number;
+  postOpenDelaySeconds: number;
 }
 
 export interface MassSendJob {
@@ -463,6 +467,14 @@ export interface AutomationSendTextRequest {
 export interface AutomationExecutor {
   typeText(text: string): Promise<void>;
   key(key: string): Promise<void>;
+  openConversation?(recipientName: string, options: ConversationOpenOptions): Promise<void>;
+  copyText?(text: string): Promise<void>;
+}
+
+export interface ConversationOpenOptions {
+  searchShortcut: string;
+  searchResultDelaySeconds: number;
+  postOpenDelaySeconds: number;
 }
 
 export async function sendAutomationRule(
@@ -531,12 +543,14 @@ export async function sendAutomationText(
 export interface MassSendNextRequest {
   confirm?: boolean;
   operatorConfirmedRecipient?: boolean;
+  openConversationBeforeSend?: boolean;
 }
 
 export interface MassSendNextResult {
   job: MassSendJob;
   item: MassSendItem;
   event: AutomationAuditEvent;
+  openedConversation: boolean;
 }
 
 export async function sendNextMassSendItem(
@@ -553,9 +567,6 @@ export async function sendNextMassSendItem(
   if (job.status === 'cancelled') throw new Error('群发队列已取消');
   if (job.status === 'completed') throw new Error('群发队列已完成');
   if (job.status === 'paused') throw new Error('群发队列已暂停');
-  if (job.options.requireOperatorConfirmRecipient && req.operatorConfirmedRecipient !== true) {
-    throw new Error('请先确认当前微信窗口已打开目标联系人/群聊');
-  }
   const pending = job.items.find((item) => item.status === 'pending');
   if (!pending) {
     job.status = 'completed';
@@ -569,6 +580,20 @@ export async function sendNextMassSendItem(
   const risk = assessRisk([job.message]);
   if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
   if (risk.level === 'review') throw new Error(`群发内容需要人工复核：${risk.reasons.join('；')}`);
+
+  const shouldOpenConversation =
+    typeof req.openConversationBeforeSend === 'boolean' ? req.openConversationBeforeSend : job.options.openConversationBeforeSend;
+  if (job.options.requireOperatorConfirmRecipient && req.operatorConfirmedRecipient !== true) {
+    throw new Error(shouldOpenConversation ? '发送前需要确认允许自动搜索并打开目标会话' : '请先确认当前微信窗口已打开目标联系人/群聊');
+  }
+  if (shouldOpenConversation) {
+    if (!executor.openConversation) throw new Error('当前实例执行器不支持自动打开会话');
+    await executor.openConversation(pending.recipientName, {
+      searchShortcut: job.options.searchShortcut,
+      searchResultDelaySeconds: job.options.searchResultDelaySeconds,
+      postOpenDelaySeconds: job.options.postOpenDelaySeconds,
+    });
+  }
 
   await executor.typeText(job.message);
   await executor.key('Return');
@@ -586,21 +611,25 @@ export async function sendNextMassSendItem(
     instanceName: inst.name,
     conversationName: pending.recipientName,
     riskLevel: risk.level,
-    message: `群发队列「${job.title}」发送给「${pending.recipientName}」`,
+    message: `群发队列「${job.title}」${shouldOpenConversation ? '自动打开会话并' : ''}发送给「${pending.recipientName}」`,
   });
   pending.auditEventId = event.id;
   refreshMassJobCompletion(job);
   persist();
-  return { job: cloneMassSendJob(job), item: { ...pending }, event };
+  return { job: cloneMassSendJob(job), item: { ...pending }, event, openedConversation: shouldOpenConversation };
 }
 
 export interface MomentPrepareRequest {
   confirm?: boolean;
+  mode?: MomentPrepareMode;
 }
+
+export type MomentPrepareMode = 'fill-current-input' | 'copy-to-clipboard';
 
 export interface MomentPrepareResult {
   draft: MomentDraft;
   event: AutomationAuditEvent;
+  mode: MomentPrepareMode;
 }
 
 export async function prepareMomentDraft(
@@ -620,7 +649,13 @@ export async function prepareMomentDraft(
   if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
   if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
 
-  await executor.typeText(draft.text);
+  const mode: MomentPrepareMode = req.mode === 'copy-to-clipboard' ? 'copy-to-clipboard' : 'fill-current-input';
+  if (mode === 'copy-to-clipboard') {
+    if (!executor.copyText) throw new Error('当前实例执行器不支持写入剪贴板');
+    await executor.copyText(draft.text);
+  } else {
+    await executor.typeText(draft.text);
+  }
 
   const now = new Date().toISOString();
   draft.status = 'prepared';
@@ -632,10 +667,10 @@ export async function prepareMomentDraft(
     instanceId: inst.id,
     instanceName: inst.name,
     riskLevel: risk.level,
-    message: `已将朋友圈草稿「${draft.title}」填入当前发布框`,
+    message: mode === 'copy-to-clipboard' ? `已将朋友圈草稿「${draft.title}」复制到实例剪贴板` : `已将朋友圈草稿「${draft.title}」填入当前发布框`,
   });
   persist();
-  return { draft: cloneMomentDraft(draft), event };
+  return { draft: cloneMomentDraft(draft), event, mode };
 }
 
 export interface DraftReplyRequest {
@@ -883,6 +918,10 @@ function normalizeMassSendOptions(raw: any): MassSendJobOptions {
   return {
     perSendDelaySeconds: clampInt(raw?.perSendDelaySeconds, 0, 3600, 10),
     requireOperatorConfirmRecipient: typeof raw?.requireOperatorConfirmRecipient === 'boolean' ? raw.requireOperatorConfirmRecipient : true,
+    openConversationBeforeSend: typeof raw?.openConversationBeforeSend === 'boolean' ? raw.openConversationBeforeSend : false,
+    searchShortcut: normalizeSearchShortcut(raw?.searchShortcut),
+    searchResultDelaySeconds: clampInt(raw?.searchResultDelaySeconds, 1, 30, 2),
+    postOpenDelaySeconds: clampInt(raw?.postOpenDelaySeconds, 0, 30, 1),
   };
 }
 
@@ -1099,6 +1138,12 @@ function normalizeMomentDraftStatus(value: unknown): MomentDraftStatus | null {
 
 function normalizeMaterials(raw: any): string[] {
   return Array.isArray(raw) ? uniqueStrings(raw.map((x: any) => str(x, 300).trim()).filter(Boolean)).slice(0, 50) : [];
+}
+
+function normalizeSearchShortcut(value: unknown): string {
+  const raw = String(value || 'ctrl+f').trim().toLowerCase();
+  const allowed = new Set(['ctrl+f', 'ctrl+k', 'ctrl+l', 'super+s']);
+  return allowed.has(raw) ? raw : 'ctrl+f';
 }
 
 function uniqueStrings(values: string[]): string[] {

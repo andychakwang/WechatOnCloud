@@ -753,6 +753,20 @@ export async function typeInInstance(inst: Instance, text: string): Promise<void
   await execCapture(inst, ['bash', '-c', cmd]);
 }
 
+// 仅写入实例内剪贴板，不触发 Ctrl+V。用于朋友圈半自动：先把文案准备好，用户确认发布框后自己粘贴。
+export async function copyTextToInstanceClipboard(inst: Instance, text: string): Promise<void> {
+  const b64 = Buffer.from(text, 'utf8').toString('base64');
+  const cmd = [
+    'set -e',
+    'display="${DISPLAY:-}"',
+    'if [ -z "$display" ]; then for x in /tmp/.X11-unix/X*; do [ -e "$x" ] || continue; display=":${x##*X}"; break; done; fi',
+    'export DISPLAY="${display:-:1}"',
+    'command -v xclip >/dev/null 2>&1 || { echo "xclip not installed in instance image" >&2; exit 127; }',
+    `echo '${b64}' | base64 -d | xclip -selection clipboard -i >/dev/null 2>&1`,
+  ].join('; ');
+  await execCapture(inst, ['bash', '-c', cmd]);
+}
+
 // 通过 xdotool 在实例容器内模拟一次按键（如 Return / BackSpace）。
 // 用于「无感输入」模式：中文经 xclip 转发期间，把被截下的回车/退格按序送出，保证顺序、避免抢跑。
 // key 仅允许字母与下划线（xdotool keysym 名），杜绝注入。
@@ -767,6 +781,57 @@ export async function keyInInstance(inst: Instance, key: string): Promise<void> 
     `xdotool key --clearmodifiers ${key}`,
   ].join('; ');
   await execCapture(inst, ['bash', '-c', cmd]);
+}
+
+export interface OpenConversationOptions {
+  searchShortcut?: string;
+  searchResultDelaySeconds?: number;
+  postOpenDelaySeconds?: number;
+}
+
+// 尽力通过微信搜索框打开会话：激活微信窗口 → 搜索快捷键 → 粘贴联系人/群名 → 回车。
+// 这是官方客户端 UI 层 RPA，不读取微信数据库、不调用私有协议。失败时让上层保留人工确认兜底。
+export async function openConversationInInstance(inst: Instance, recipientName: string, options: OpenConversationOptions = {}): Promise<void> {
+  const name = recipientName.trim();
+  if (!name || name.length > 120) throw new Error('联系人/群聊名为空或过长');
+  const shortcut = normalizeXdotoolShortcut(options.searchShortcut || 'ctrl+f');
+  const resultDelay = clampSeconds(options.searchResultDelaySeconds, 1, 30, 2);
+  const postOpenDelay = clampSeconds(options.postOpenDelaySeconds, 0, 30, 1);
+  const b64 = Buffer.from(name, 'utf8').toString('base64');
+  const cmd = [
+    'set -e',
+    'display="${DISPLAY:-}"',
+    'if [ -z "$display" ]; then for x in /tmp/.X11-unix/X*; do [ -e "$x" ] || continue; display=":${x##*X}"; break; done; fi',
+    'export DISPLAY="${display:-:1}"',
+    'command -v xclip >/dev/null 2>&1 || { echo "xclip not installed in instance image" >&2; exit 127; }',
+    'command -v xdotool >/dev/null 2>&1 || { echo "xdotool not installed in instance image" >&2; exit 127; }',
+    // 优先激活包含 WeChat/微信 的可见窗口；找不到时沿用当前焦点，方便用户手动把窗口点到前台后继续。
+    `wins="$(xdotool search --onlyvisible --name 'WeChat|微信' 2>/dev/null || true)"`,
+    'if [ -n "$wins" ]; then xdotool windowactivate "$(printf "%s\\n" "$wins" | tail -n 1)" 2>/dev/null || true; fi',
+    `xdotool key --clearmodifiers ${shortcut}`,
+    'sleep 0.2',
+    'xdotool key --clearmodifiers ctrl+a',
+    `echo '${b64}' | base64 -d | xclip -selection clipboard -i >/dev/null 2>&1`,
+    'xdotool key --clearmodifiers ctrl+v',
+    `sleep ${resultDelay}`,
+    'xdotool key --clearmodifiers Return',
+    `sleep ${postOpenDelay}`,
+  ].join('; ');
+  await execCapture(inst, ['bash', '-c', cmd]);
+}
+
+function normalizeXdotoolShortcut(value: string): string {
+  const raw = value.trim().toLowerCase();
+  if (!/^[a-z0-9_]+(\+[a-z0-9_]+){0,3}$/.test(raw)) throw new Error('搜索快捷键不合法');
+  const allowed = new Set(['ctrl+f', 'ctrl+k', 'ctrl+l', 'super+s']);
+  if (!allowed.has(raw)) throw new Error('搜索快捷键不在允许列表');
+  return raw;
+}
+
+function clampSeconds(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 // ---------- 数据卷管理（仅管理员；路由层用 requireAdmin 限制） ----------

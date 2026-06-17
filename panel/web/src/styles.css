@@ -1165,6 +1165,13 @@ button {
 .auto-grid.two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.auto-grid.compact {
+  gap: 8px;
+  margin-top: 4px;
+}
+.auto-grid.compact .field-label {
+  margin-top: 4px;
+}
 .auto-field {
   display: block;
   min-width: 0;
@@ -1221,6 +1228,14 @@ button {
   font-family: inherit;
   font-size: 13px;
   line-height: 1.55;
+}
+.auto-rule-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(var(--green-rgb) / 0.08);
 }
 .auto-list {
   display: flex;

@@ -164,11 +164,18 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [replyContext, setReplyContext] = useState('');
   const [replyInstruction, setReplyInstruction] = useState('');
   const [replyPlan, setReplyPlan] = useState<AutomationReplyPlan | null>(null);
+  const [ruleName, setRuleName] = useState('');
+  const [ruleTriggers, setRuleTriggers] = useState('');
+  const [ruleApprove, setRuleApprove] = useState(false);
 
   const [massTitle, setMassTitle] = useState('');
   const [massRecipients, setMassRecipients] = useState('');
   const [massMessage, setMassMessage] = useState('');
   const [massDelay, setMassDelay] = useState('10');
+  const [massAutoOpen, setMassAutoOpen] = useState(true);
+  const [massSearchShortcut, setMassSearchShortcut] = useState('ctrl+f');
+  const [massSearchDelay, setMassSearchDelay] = useState('2');
+  const [massPostOpenDelay, setMassPostOpenDelay] = useState('1');
 
   const [momentTopic, setMomentTopic] = useState('');
   const [momentAudience, setMomentAudience] = useState('');
@@ -270,6 +277,45 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const saveReplyAsRule = async () => {
+    if (!replyPlan?.draft) return toast('没有可沉淀的话术', 'error');
+    const triggers = linesOf(ruleTriggers || replyInbound);
+    if (triggers.length === 0) return toast('请填写至少一个触发词', 'error');
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID?.() || `rule-${Date.now()}`;
+    const next: AutomationConfig = {
+      ...cfg,
+      rules: [
+        ...cfg.rules,
+        {
+          id,
+          name: ruleName.trim() || `回复规则 ${triggers[0].slice(0, 16)}`,
+          enabled: true,
+          approved: ruleApprove,
+          priority: 100,
+          triggers,
+          responseSteps: [{ type: 'text', text: replyPlan.draft, sendEnter: true }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    };
+    setBusy('rule-save');
+    try {
+      const { config: saved } = await api.updateAutomationConfig(next);
+      setConfig(saved);
+      setRuleName('');
+      setRuleTriggers('');
+      setRuleApprove(false);
+      toast(ruleApprove ? '已保存为已审核关键词规则' : '已保存为待审核关键词规则', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '保存规则失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const createMassJob = async () => {
     const recipients = linesOf(massRecipients);
     setBusy('mass-create');
@@ -281,6 +327,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         options: {
           perSendDelaySeconds: Number(massDelay) || 0,
           requireOperatorConfirmRecipient: true,
+          openConversationBeforeSend: massAutoOpen,
+          searchShortcut: massSearchShortcut,
+          searchResultDelaySeconds: Number(massSearchDelay) || 2,
+          postOpenDelaySeconds: Number(massPostOpenDelay) || 1,
         },
       });
       setJobs((list) => [job, ...list]);
@@ -314,10 +364,13 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
     const target = nextMassTarget(job);
     if (!target) return toast('没有待发送目标', 'error');
+    const autoOpen = job.options.openConversationBeforeSend;
     const ok = await confirm({
-      title: `发送给「${target}」？`,
-      body: `请先在「${selectedInstance.name}」的微信窗口手动打开这个联系人或群聊。确认后面板只负责粘贴群发内容并回车。`,
-      confirmText: '已打开，发送',
+      title: autoOpen ? `自动搜索并发送给「${target}」？` : `发送给「${target}」？`,
+      body: autoOpen
+        ? `请确认「${selectedInstance.name}」的微信窗口可见且已登录。面板会使用 ${job.options.searchShortcut} 搜索目标、回车打开会话，然后粘贴内容并发送。`
+        : `请先在「${selectedInstance.name}」的微信窗口手动打开这个联系人或群聊。确认后面板只负责粘贴群发内容并回车。`,
+      confirmText: autoOpen ? '搜索并发送' : '已打开，发送',
     });
     if (!ok) return;
     setBusy(`send-${job.id}`);
@@ -325,6 +378,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       const { job: saved } = await api.automationSendNextMassItem(selectedInstance.id, job.id, {
         confirm: true,
         operatorConfirmedRecipient: true,
+        openConversationBeforeSend: autoOpen,
       });
       setJobs((list) => list.map((x) => (x.id === saved.id ? saved : x)));
       toast('已发送当前队列目标', 'ok');
@@ -391,19 +445,22 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
-  const prepareDraft = async (draft: MomentDraft) => {
+  const prepareDraft = async (draft: MomentDraft, mode: 'fill-current-input' | 'copy-to-clipboard') => {
     if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
     const ok = await confirm({
-      title: `填入朋友圈草稿「${draft.title}」？`,
-      body: `请先在「${selectedInstance.name}」里打开朋友圈发布框并把光标放到正文输入区域。此操作只填入文案，不会点击发布。`,
-      confirmText: '填入文案',
+      title: mode === 'copy-to-clipboard' ? `复制朋友圈草稿「${draft.title}」？` : `填入朋友圈草稿「${draft.title}」？`,
+      body:
+        mode === 'copy-to-clipboard'
+          ? `文案会写入「${selectedInstance.name}」实例剪贴板，不会粘贴到任何窗口。你之后可以在朋友圈发布框里手动 Ctrl+V。`
+          : `请先在「${selectedInstance.name}」里打开朋友圈发布框并把光标放到正文输入区域。此操作只填入文案，不会点击发布。`,
+      confirmText: mode === 'copy-to-clipboard' ? '复制到剪贴板' : '填入文案',
     });
     if (!ok) return;
     setBusy(`prepare-${draft.id}`);
     try {
-      const { draft: saved } = await api.automationPrepareMomentDraft(selectedInstance.id, draft.id, { confirm: true });
+      const { draft: saved } = await api.automationPrepareMomentDraft(selectedInstance.id, draft.id, { confirm: true, mode });
       setDrafts((list) => list.map((x) => (x.id === saved.id ? saved : x)));
-      toast('已填入朋友圈发布框，请人工检查后发布', 'ok');
+      toast(mode === 'copy-to-clipboard' ? '已复制到实例剪贴板' : '已填入朋友圈发布框，请人工检查后发布', 'ok');
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '填入失败', 'error');
@@ -500,7 +557,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
           <section className="auto-panel">
             <div className="auto-panel-head">
               <b>AI 回复</b>
-              {replyPlan && <span className={'tag ' + (replyPlan.mode === 'blocked' ? 'tag-off' : replyPlan.mode === 'manual-review' ? 'tag-warn' : 'tag-on')}>{replyPlan.mode}</span>}
+              <span>
+                <span className="tag">{cfg.rules.length} 条规则</span>
+                {replyPlan && <span className={'tag ' + (replyPlan.mode === 'blocked' ? 'tag-off' : replyPlan.mode === 'manual-review' ? 'tag-warn' : 'tag-on')}>{replyPlan.mode}</span>}
+              </span>
             </div>
             <textarea className="input textarea tall" placeholder="粘贴客户最新消息" value={replyInbound} onChange={(e) => setReplyInbound(e.target.value)} />
             <textarea className="input textarea" placeholder="可选：上下文/最近对话" value={replyContext} onChange={(e) => setReplyContext(e.target.value)} />
@@ -519,6 +579,24 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 {replyPlan.draft && <pre>{replyPlan.draft}</pre>}
               </div>
             )}
+            {replyPlan?.draft && (
+              <div className="auto-rule-box">
+                <input className="input" placeholder="保存为规则名称" value={ruleName} onChange={(e) => setRuleName(e.target.value)} />
+                <textarea
+                  className="input textarea"
+                  placeholder="触发词，一行一个。留空时会尝试用客户消息作为触发词"
+                  value={ruleTriggers}
+                  onChange={(e) => setRuleTriggers(e.target.value)}
+                />
+                <label className="auto-check">
+                  <input type="checkbox" checked={ruleApprove} onChange={(e) => setRuleApprove(e.target.checked)} />
+                  <span>保存后直接标记为已审核</span>
+                </label>
+                <button className="btn s-btn" disabled={busy === 'rule-save'} onClick={saveReplyAsRule}>
+                  沉淀为关键词规则
+                </button>
+              </div>
+            )}
           </section>
 
           <section className="auto-panel">
@@ -529,7 +607,33 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <input className="input" placeholder="队列名称" value={massTitle} onChange={(e) => setMassTitle(e.target.value)} />
             <textarea className="input textarea tall" placeholder="群发内容" value={massMessage} onChange={(e) => setMassMessage(e.target.value)} />
             <textarea className="input textarea" placeholder="联系人或群聊名，一行一个" value={massRecipients} onChange={(e) => setMassRecipients(e.target.value)} />
-            <input className="input" inputMode="numeric" placeholder="每条间隔秒数" value={massDelay} onChange={(e) => setMassDelay(e.target.value.replace(/[^0-9]/g, ''))} />
+            <label className="auto-check">
+              <input type="checkbox" checked={massAutoOpen} onChange={(e) => setMassAutoOpen(e.target.checked)} />
+              <span>发送前自动搜索并打开目标会话</span>
+            </label>
+            <div className="auto-grid two compact">
+              <label className="auto-field">
+                <span className="field-label">每条间隔秒数</span>
+                <input className="input" inputMode="numeric" value={massDelay} onChange={(e) => setMassDelay(e.target.value.replace(/[^0-9]/g, ''))} />
+              </label>
+              <label className="auto-field">
+                <span className="field-label">搜索快捷键</span>
+                <select className="input" value={massSearchShortcut} onChange={(e) => setMassSearchShortcut(e.target.value)}>
+                  <option value="ctrl+f">Ctrl+F</option>
+                  <option value="ctrl+k">Ctrl+K</option>
+                  <option value="ctrl+l">Ctrl+L</option>
+                  <option value="super+s">Super+S</option>
+                </select>
+              </label>
+              <label className="auto-field">
+                <span className="field-label">等搜索结果秒数</span>
+                <input className="input" inputMode="numeric" value={massSearchDelay} onChange={(e) => setMassSearchDelay(e.target.value.replace(/[^0-9]/g, ''))} />
+              </label>
+              <label className="auto-field">
+                <span className="field-label">打开会话后等待秒数</span>
+                <input className="input" inputMode="numeric" value={massPostOpenDelay} onChange={(e) => setMassPostOpenDelay(e.target.value.replace(/[^0-9]/g, ''))} />
+              </label>
+            </div>
             <button className="btn btn-primary s-btn" disabled={busy === 'mass-create' || !massMessage.trim() || linesOf(massRecipients).length === 0} onClick={createMassJob}>
               创建受控队列
             </button>
@@ -539,7 +643,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   <div>
                     <b>{job.title}</b>
                     <div className="muted small">
-                      {AUTO_STATUS_LABEL[job.status] || job.status} · {jobProgress(job)} · 下一位 {nextMassTarget(job) || '无'}
+                      {AUTO_STATUS_LABEL[job.status] || job.status} · {jobProgress(job)} · {job.options.openConversationBeforeSend ? '自动搜索' : '当前会话'} · 下一位{' '}
+                      {nextMassTarget(job) || '无'}
                     </div>
                   </div>
                   <div className="auto-actions">
@@ -595,7 +700,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         审核
                       </button>
                     )}
-                    <button className="btn-text" disabled={!draft.approved || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft)}>
+                    <button className="btn-text" disabled={!draft.approved || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft, 'copy-to-clipboard')}>
+                      复制
+                    </button>
+                    <button className="btn-text" disabled={!draft.approved || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft, 'fill-current-input')}>
                       填入
                     </button>
                     {draft.status !== 'published' && (

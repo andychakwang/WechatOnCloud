@@ -172,6 +172,10 @@ export interface MassSendJob {
   options: {
     perSendDelaySeconds: number;
     requireOperatorConfirmRecipient: boolean;
+    openConversationBeforeSend: boolean;
+    searchShortcut: string;
+    searchResultDelaySeconds: number;
+    postOpenDelaySeconds: number;
   };
   items: MassSendItem[];
 }
@@ -265,7 +269,14 @@ export const api = {
     title: string;
     message: string;
     recipients: string[];
-    options?: { perSendDelaySeconds?: number; requireOperatorConfirmRecipient?: boolean };
+    options?: {
+      perSendDelaySeconds?: number;
+      requireOperatorConfirmRecipient?: boolean;
+      openConversationBeforeSend?: boolean;
+      searchShortcut?: string;
+      searchResultDelaySeconds?: number;
+      postOpenDelaySeconds?: number;
+    };
   }) =>
     req<{ job: MassSendJob }>('/api/admin/automation/mass-jobs', {
       method: 'POST',
@@ -304,13 +315,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  automationSendNextMassItem: (id: string, jobId: string, payload: { confirm: boolean; operatorConfirmedRecipient: boolean }) =>
-    req<{ job: MassSendJob; item: MassSendItem; event: AutomationAuditEvent }>(
+  automationSendNextMassItem: (
+    id: string,
+    jobId: string,
+    payload: { confirm: boolean; operatorConfirmedRecipient: boolean; openConversationBeforeSend?: boolean },
+  ) =>
+    req<{ job: MassSendJob; item: MassSendItem; event: AutomationAuditEvent; openedConversation: boolean }>(
       `/api/admin/instances/${id}/automation/mass-jobs/${jobId}/send-next`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
-  automationPrepareMomentDraft: (id: string, draftId: string, payload: { confirm: boolean }) =>
-    req<{ draft: MomentDraft; event: AutomationAuditEvent }>(
+  automationPrepareMomentDraft: (id: string, draftId: string, payload: { confirm: boolean; mode?: 'fill-current-input' | 'copy-to-clipboard' }) =>
+    req<{ draft: MomentDraft; event: AutomationAuditEvent; mode: 'fill-current-input' | 'copy-to-clipboard' }>(
       `/api/admin/instances/${id}/automation/moment-drafts/${draftId}/prepare`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),

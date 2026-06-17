@@ -53,6 +53,8 @@ import {
   buildDiagnostics,
   typeInInstance,
   keyInInstance,
+  copyTextToInstanceClipboard,
+  openConversationInInstance,
   listOrphanVolumes,
   removeVolume,
   listOrphanContainers,
@@ -373,6 +375,7 @@ app.post('/api/admin/instances/:id/automation/mass-jobs/:jobId/send-next', async
     const result = await sendNextMassSendItem(inst, admin, jobId, req.body as any, {
       typeText: (text: string) => typeInInstance(inst, text),
       key: (key: string) => keyInInstance(inst, key),
+      openConversation: (recipientName, options) => openConversationInInstance(inst, recipientName, options),
     });
     appendInstanceLog(inst.id, `[automation] ${result.event.message} by ${admin.username}`);
     appendPanelLog('INFO', `群发队列「${result.job.title}」发送下一条到实例「${inst.name}」by ${admin.username}`);
@@ -393,6 +396,7 @@ app.post('/api/admin/instances/:id/automation/moment-drafts/:draftId/prepare', a
     const result = await prepareMomentDraft(inst, admin, draftId, req.body as any, {
       typeText: (text: string) => typeInInstance(inst, text),
       key: (key: string) => keyInInstance(inst, key),
+      copyText: (text: string) => copyTextToInstanceClipboard(inst, text),
     });
     appendInstanceLog(inst.id, `[automation] ${result.event.message} by ${admin.username}`);
     appendPanelLog('INFO', `朋友圈草稿「${result.draft.title}」填入实例「${inst.name}」by ${admin.username}`);
