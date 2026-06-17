@@ -74,6 +74,16 @@ import { createSession, getSession, destroySession, destroyUserSessions } from '
 import { parseHost, parseAllowedHosts, isRequestHostAllowed } from './host-guard.js';
 import { CURRENT_VERSION, versionInfo, ensureChecked, checkForUpdate, startUpdateChecker } from './version.js';
 import { appendInstanceLog, readInstanceLog, appendPanelLog, readPanelLog, pruneOldLogs, filterSince, rangeToMs, DIAG_RANGES } from './logs.js';
+import {
+  initAutomationStore,
+  getAutomationConfig,
+  updateAutomationConfig,
+  simulateAutomation,
+  listAutomationAudit,
+  draftAutomationReply,
+  sendAutomationRule,
+  sendAutomationText,
+} from './automation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -92,6 +102,7 @@ function basicAuth(inst: Instance) {
 }
 
 initStore();
+initAutomationStore();
 
 const app = Fastify({ logger: true, trustProxy: true });
 
@@ -184,6 +195,86 @@ app.get('/api/version', async (req, reply) => {
 app.post('/api/admin/version/check', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return await checkForUpdate();
+});
+
+// ---------- 自动化实验版（管理员） ----------
+// 这是与本地企微 AI 回复助手融合后的保守自动化内核：
+// 规则必须 approved，发送必须 confirm=true，且经过敏感词/限流/冷却校验。
+app.get('/api/admin/automation/config', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { config: getAutomationConfig() };
+});
+
+app.put('/api/admin/automation/config', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const config = updateAutomationConfig(req.body);
+    appendPanelLog('INFO', `自动化配置由 ${admin.username} 更新：${config.rules.length} 条规则，总开关=${config.settings.enabled ? '开' : '关'}`);
+    return { config };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '保存自动化配置失败' });
+  }
+});
+
+app.post('/api/admin/automation/simulate', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const inboundText = String((req.body as any)?.inboundText || '');
+  return { decision: simulateAutomation(inboundText) };
+});
+
+app.get('/api/admin/automation/audit', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { events: listAutomationAudit(Number((req.query as any)?.limit || 200)) };
+});
+
+app.post('/api/admin/automation/ai-draft', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  try {
+    return await draftAutomationReply(req.body as any);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '生成 AI 草稿失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/send-rule', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const id = (req.params as any).id;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const event = await sendAutomationRule(inst, admin, req.body as any, {
+      typeText: (text: string) => typeInInstance(inst, text),
+      key: (key: string) => keyInInstance(inst, key),
+    });
+    appendInstanceLog(inst.id, `[automation] ${event.message} by ${admin.username}`);
+    appendPanelLog('INFO', `自动化发送规则「${event.ruleName || event.ruleId}」到实例「${inst.name}」by ${admin.username}`);
+    return { event };
+  } catch (e: any) {
+    appendPanelLog('WARN', `自动化规则发送被拦截：实例「${inst.name}」by ${admin.username}：${e?.message || e}`);
+    return reply.code(400).send({ error: e?.message || '自动化发送失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/send-text', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const id = (req.params as any).id;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const event = await sendAutomationText(inst, admin, req.body as any, {
+      typeText: (text: string) => typeInInstance(inst, text),
+      key: (key: string) => keyInInstance(inst, key),
+    });
+    appendInstanceLog(inst.id, `[automation] ${event.message} by ${admin.username}`);
+    appendPanelLog('INFO', `自动化确认发送单条文本到实例「${inst.name}」by ${admin.username}`);
+    return { event };
+  } catch (e: any) {
+    appendPanelLog('WARN', `自动化文本发送被拦截：实例「${inst.name}」by ${admin.username}：${e?.message || e}`);
+    return reply.code(400).send({ error: e?.message || '自动化发送失败' });
+  }
 });
 
 // ---------- 自助改密 ----------

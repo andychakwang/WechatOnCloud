@@ -84,6 +84,58 @@ export interface VersionInfo {
   error: string | null; // 检查失败原因
 }
 
+export type AutomationStep =
+  | { type: 'text'; text: string; sendEnter?: boolean }
+  | { type: 'key'; key: string }
+  | { type: 'wait'; seconds: number };
+
+export interface AutomationRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  approved: boolean;
+  priority: number;
+  triggers: string[];
+  responseSteps: AutomationStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationSettings {
+  enabled: boolean;
+  maximumAutomaticSendsPerHour: number;
+  perConversationCooldownMinutes: number;
+  requireConfirmForSend: boolean;
+}
+
+export interface AutomationConfig {
+  settings: AutomationSettings;
+  persona: string;
+  knowledgeNotes: string;
+  rules: AutomationRule[];
+}
+
+export interface AutomationAuditEvent {
+  id: string;
+  timestamp: string;
+  action: string;
+  actor: string;
+  instanceId?: string;
+  instanceName?: string;
+  conversationName?: string;
+  ruleId?: string;
+  ruleName?: string;
+  riskLevel?: 'normal' | 'review' | 'block';
+  message: string;
+}
+
+export interface AutomationDecision {
+  action: 'send-rule' | 'review' | 'none' | 'blocked';
+  rule: AutomationRule | null;
+  risk: { level: 'normal' | 'review' | 'block'; reasons: string[] };
+  reasons: string[];
+}
+
 // 原始二进制上传（File 直传 application/octet-stream），用于数据卷上传/解压/恢复
 async function rawUpload(url: string, file: File): Promise<any> {
   const res = await fetch(url, {
@@ -128,6 +180,36 @@ export const api = {
   // 版本与更新检测
   getVersion: () => req<VersionInfo>('/api/version'),
   checkUpdate: () => req<VersionInfo>('/api/admin/version/check', { method: 'POST' }),
+
+  // 自动化实验版（规则、AI 草稿、确认发送）
+  getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
+  updateAutomationConfig: (config: AutomationConfig) =>
+    req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
+  simulateAutomation: (inboundText: string) =>
+    req<{ decision: AutomationDecision }>('/api/admin/automation/simulate', { method: 'POST', body: JSON.stringify({ inboundText }) }),
+  automationAudit: (limit = 200) =>
+    req<{ events: AutomationAuditEvent[] }>(`/api/admin/automation/audit?limit=${encodeURIComponent(limit)}`),
+  automationAiDraft: (payload: { inboundText: string; conversationContext?: string; extraInstruction?: string }) =>
+    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string }>(
+      '/api/admin/automation/ai-draft',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  automationSendRule: (
+    id: string,
+    payload: { ruleId: string; inboundText?: string; conversationName?: string; confirm: boolean },
+  ) =>
+    req<{ event: AutomationAuditEvent }>(`/api/admin/instances/${id}/automation/send-rule`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  automationSendText: (
+    id: string,
+    payload: { text: string; inboundText?: string; conversationName?: string; confirm: boolean; allowReview?: boolean },
+  ) =>
+    req<{ event: AutomationAuditEvent }>(`/api/admin/instances/${id}/automation/send-text`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // 子账号
   listUsers: () => req<{ users: PanelUser[] }>('/api/admin/users'),

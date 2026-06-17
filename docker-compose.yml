@@ -34,6 +34,11 @@ services:
       - PANEL_ADMIN_USER=${WOC_USER:-admin}
       - PANEL_ADMIN_PASSWORD=${WOC_PASSWORD:-wechat}
       - PANEL_DATA=/data/accounts.json
+      # 自动化实验版：规则/知识库/审计记录独立持久化；AI 草稿走 OpenAI-compatible 接口。
+      - PANEL_AUTOMATION_DATA=/data/automation.json
+      - AUTOMATION_AI_API_KEY=${AUTOMATION_AI_API_KEY:-}
+      - AUTOMATION_AI_BASE_URL=${AUTOMATION_AI_BASE_URL:-}
+      - AUTOMATION_AI_MODEL=${AUTOMATION_AI_MODEL:-}
       # DNS-rebinding 防护：套 HTTPS 反代部署时把对外域名加进 .env（详见 .env.example）。
       # 默认仅放行 loopback + RFC1918 私网，直连 NAS / 局域网无需改动。
       - PANEL_ALLOWED_HOSTS=${PANEL_ALLOWED_HOSTS:-}
