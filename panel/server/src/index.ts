@@ -54,6 +54,7 @@ import {
   typeInInstance,
   keyInInstance,
   copyTextToInstanceClipboard,
+  readTextFromInstanceClipboard,
   openConversationInInstance,
   listOrphanVolumes,
   removeVolume,
@@ -362,6 +363,21 @@ app.post('/api/admin/instances/:id/automation/send-text', async (req, reply) => 
   } catch (e: any) {
     appendPanelLog('WARN', `自动化文本发送被拦截：实例「${inst.name}」by ${admin.username}：${e?.message || e}`);
     return reply.code(400).send({ error: e?.message || '自动化发送失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/read-clipboard', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const id = (req.params as any).id;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const text = await readTextFromInstanceClipboard(inst, !!(req.body as any)?.copySelection);
+    appendPanelLog('INFO', `自动化读取实例「${inst.name}」剪贴板 by ${admin.username}：${text.length} 字`);
+    return { text };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '读取实例剪贴板失败' });
   }
 });
 

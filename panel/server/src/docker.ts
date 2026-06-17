@@ -767,6 +767,21 @@ export async function copyTextToInstanceClipboard(inst: Instance, text: string):
   await execCapture(inst, ['bash', '-c', cmd]);
 }
 
+export async function readTextFromInstanceClipboard(inst: Instance, copySelection = false): Promise<string> {
+  const cmd = [
+    'set -e',
+    'display="${DISPLAY:-}"',
+    'if [ -z "$display" ]; then for x in /tmp/.X11-unix/X*; do [ -e "$x" ] || continue; display=":${x##*X}"; break; done; fi',
+    'export DISPLAY="${display:-:1}"',
+    'command -v xclip >/dev/null 2>&1 || { echo "xclip not installed in instance image" >&2; exit 127; }',
+    copySelection
+      ? 'command -v xdotool >/dev/null 2>&1 || { echo "xdotool not installed in instance image" >&2; exit 127; }; xdotool key --clearmodifiers ctrl+c; sleep 0.2'
+      : ':',
+    'xclip -selection clipboard -o 2>/dev/null || true',
+  ].join('; ');
+  return (await execCapture(inst, ['bash', '-c', cmd])).replace(/\r/g, '').slice(0, 10000);
+}
+
 // 通过 xdotool 在实例容器内模拟一次按键（如 Return / BackSpace）。
 // 用于「无感输入」模式：中文经 xclip 转发期间，把被截下的回车/退格按序送出，保证顺序、避免抢跑。
 // key 仅允许字母与下划线（xdotool keysym 名），杜绝注入。

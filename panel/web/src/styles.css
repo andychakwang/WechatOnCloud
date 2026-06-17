@@ -1266,6 +1266,10 @@ button {
   justify-content: flex-end;
   gap: 2px;
 }
+.auto-actions.inline {
+  justify-content: flex-start;
+  margin-top: -6px;
+}
 .auto-actions .btn-text {
   font-size: 13px;
   padding: 5px 7px;

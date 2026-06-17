@@ -253,6 +253,22 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const readInboundFromClipboard = async (copySelection: boolean) => {
+    if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
+    setBusy(copySelection ? 'reply-copy-selection' : 'reply-read-clipboard');
+    try {
+      const { text } = await api.automationReadClipboard(selectedInstance.id, { copySelection });
+      const clipped = text.trim().slice(0, 2000);
+      if (!clipped) return toast(copySelection ? '没有读到选中文本' : '实例剪贴板为空', 'error');
+      setReplyInbound(clipped);
+      toast('已读取到客户消息', 'ok');
+    } catch (e: any) {
+      toast(e.message || '读取失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const sendReplyPlan = async () => {
     if (!replyPlan || !selectedInstance) return;
     const ok = await confirm({
@@ -563,6 +579,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </span>
             </div>
             <textarea className="input textarea tall" placeholder="粘贴客户最新消息" value={replyInbound} onChange={(e) => setReplyInbound(e.target.value)} />
+            <div className="auto-actions inline">
+              <button className="btn-text" disabled={!selectedInstance || busy === 'reply-copy-selection'} onClick={() => readInboundFromClipboard(true)}>
+                读取选中文本
+              </button>
+              <button className="btn-text" disabled={!selectedInstance || busy === 'reply-read-clipboard'} onClick={() => readInboundFromClipboard(false)}>
+                读取实例剪贴板
+              </button>
+            </div>
             <textarea className="input textarea" placeholder="可选：上下文/最近对话" value={replyContext} onChange={(e) => setReplyContext(e.target.value)} />
             <input className="input" placeholder="可选：额外要求" value={replyInstruction} onChange={(e) => setReplyInstruction(e.target.value)} />
             <div className="settings-actions">

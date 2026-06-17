@@ -315,6 +315,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  automationReadClipboard: (id: string, payload: { copySelection?: boolean }) =>
+    req<{ text: string }>(`/api/admin/instances/${id}/automation/read-clipboard`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   automationSendNextMassItem: (
     id: string,
     jobId: string,
