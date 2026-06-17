@@ -1,11 +1,12 @@
 name: release
 
-# 推送 vX.Y.Z 标签或在 GitHub 上发布 Release 时，构建并推送多架构镜像到 GHCR。
+# 推送 vX.Y.Z / andy-automation-* 标签或在 GitHub 上发布 Release 时，构建并推送多架构镜像到 GHCR。
 # 也可手动触发（workflow_dispatch）只打 latest，便于验证流水线。
 on:
   push:
     tags:
       - 'v*.*.*'
+      - 'andy-automation-*'
   release:
     types: [published]
   workflow_dispatch:
@@ -81,11 +82,12 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
             ${{ vars.DOCKERHUB_USERNAME != '' && format('docker.io/{0}/{1}', vars.DOCKERHUB_USERNAME, matrix.image) || '' }}
-          # 语义化标签：vX.Y.Z → X.Y.Z / X.Y / X；默认分支额外打 latest
+          # 语义化标签：vX.Y.Z → X.Y.Z / X.Y / X；andy-automation-* → 原始 tag 名；默认分支额外打 latest
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=latest,enable=${{ github.event_name == 'release' }}
 
