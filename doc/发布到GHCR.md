@@ -8,13 +8,22 @@
 
 ## 方式 A · GitHub Actions（推荐）
 
-仓库自带 GitHub Actions（[.github/workflows/release.yml](../.github/workflows/release.yml)），在你**推送 `vX.Y.Z` 标签或发布 Release** 时，自动构建多架构（amd64+arm64）镜像并推到 GHCR：
+仓库自带 GitHub Actions（[.github/workflows/release.yml](../.github/workflows/release.yml)），在你**推送 `vX.Y.Z` / `andy-automation-*` 标签或发布 Release** 时，自动构建多架构（amd64+arm64）镜像并推到 GHCR：
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0     # 触发 Actions，产出 ghcr.io/<owner>/woc-panel:1.0.0 等标签
 # 或在 GitHub 上 Publish 一个 Release（会额外打 latest）：
 gh release create v1.0.0 --title v1.0.0 --notes "..."
+```
+
+自动化实验版可用独立 tag，避免覆盖稳定版：
+
+```bash
+git tag andy-automation-usable-r4-2026-06-17
+git push origin andy-automation-usable-r4-2026-06-17
+# 产出 ghcr.io/<owner>/woc-panel:andy-automation-usable-r4-2026-06-17
+# 以及 ghcr.io/<owner>/wechat-on-cloud:andy-automation-usable-r4-2026-06-17
 ```
 
 > 注意：单纯 push tag 只产出 `X.Y.Z / X.Y / X`，**不会更新 `latest`**；要更新 `latest` 请改用 **发布 Release** 或在 Actions 里手动 `workflow_dispatch`。

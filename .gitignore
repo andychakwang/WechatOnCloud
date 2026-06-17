@@ -139,5 +139,6 @@ dist
 /data/
 # WechatOnCloud: 面板账号数据（含密码哈希，勿提交）
 /data-panel/
+/data-panel-automation-test/
 /.claude
 .DS_Store
