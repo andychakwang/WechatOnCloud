@@ -7,6 +7,7 @@ import {
   appProfile,
   type AutomationConfig,
   type AutomationReplyPlan,
+  type InstanceAutomationSelfTest,
   type MassSendJob,
   type MomentDraft,
   type PanelUser,
@@ -159,6 +160,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
+  const [selfTest, setSelfTest] = useState<InstanceAutomationSelfTest | null>(null);
 
   const [replyInbound, setReplyInbound] = useState('');
   const [replyContext, setReplyContext] = useState('');
@@ -230,6 +232,21 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       toast('自动化配置已保存', 'ok');
     } catch (e: any) {
       toast(e.message || '保存失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const runSelfTest = async () => {
+    if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
+    setBusy('self-test');
+    setSelfTest(null);
+    try {
+      const { result } = await api.automationSelfTest(selectedInstance.id);
+      setSelfTest(result);
+      toast(result.ok ? '实例自动化自检通过' : '实例自动化自检未通过', result.ok ? 'ok' : 'error');
+    } catch (e: any) {
+      toast(e.message || '自检失败', 'error');
     } finally {
       setBusy('');
     }
@@ -368,6 +385,20 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       const { job: saved } = await api.patchMassSendJob(job.id, payload);
       setJobs((list) => list.map((x) => (x.id === saved.id ? saved : x)));
       toast('队列已更新', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const patchJobItem = async (job: MassSendJob, itemId: string, status: 'pending' | 'failed' | 'skipped', reason?: string) => {
+    setBusy(`item-${itemId}`);
+    try {
+      const { job: saved } = await api.patchMassSendItem(job.id, itemId, { status, reason });
+      setJobs((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('目标状态已更新', 'ok');
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '更新失败', 'error');
@@ -525,8 +556,24 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 {label}
               </button>
             ))}
+            <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'self-test'} onClick={runSelfTest}>
+              实例自检
+            </button>
           </div>
         </div>
+        {selfTest && (
+          <div className={'auto-self-test ' + (selfTest.ok ? 'ok' : 'bad')}>
+            <b>{selfTest.ok ? '自检通过' : '自检未通过'}</b>
+            <span className="muted small">DISPLAY {selfTest.display || 'unknown'}</span>
+            <div className="chip-row">
+              {selfTest.checks.map((check) => (
+                <span key={check.name} className={'chip chip-static ' + (check.ok ? '' : 'chip-bad')}>
+                  {check.name}: {check.ok ? 'ok' : check.detail || 'fail'}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="auto-grid two">
           <label className="auto-field">
@@ -685,6 +732,36 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         取消
                       </button>
                     )}
+                  </div>
+                  <div className="auto-targets">
+                    {job.items.slice(0, 6).map((item) => (
+                      <div key={item.id} className="auto-target-row">
+                        <span className={'tag ' + (item.status === 'sent' ? 'tag-on' : item.status === 'failed' ? 'tag-off' : item.status === 'skipped' ? 'tag-warn' : '')}>
+                          {AUTO_STATUS_LABEL[item.status] || item.status}
+                        </span>
+                        <span className="auto-target-name" title={item.error || item.recipientName}>
+                          {item.recipientName}
+                        </span>
+                        <span className="auto-target-actions">
+                          {item.status === 'pending' && (
+                            <button className="btn-text" disabled={busy === `item-${item.id}`} onClick={() => patchJobItem(job, item.id, 'skipped', '手动跳过')}>
+                              跳过
+                            </button>
+                          )}
+                          {(item.status === 'failed' || item.status === 'skipped') && (
+                            <button className="btn-text" disabled={busy === `item-${item.id}`} onClick={() => patchJobItem(job, item.id, 'pending')}>
+                              重置
+                            </button>
+                          )}
+                          {item.status === 'pending' && (
+                            <button className="btn-text danger" disabled={busy === `item-${item.id}`} onClick={() => patchJobItem(job, item.id, 'failed', '手动标记失败')}>
+                              标失败
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                    {job.items.length > 6 && <div className="muted small">还有 {job.items.length - 6} 个目标未展开</div>}
                   </div>
                 </div>
               ))}

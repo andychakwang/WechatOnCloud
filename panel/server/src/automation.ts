@@ -263,6 +263,33 @@ export function patchMassSendJob(actor: User, jobId: string, raw: any): MassSend
   return cloneMassSendJob(job);
 }
 
+export function patchMassSendItem(actor: User, jobId: string, itemId: string, raw: any): MassSendJob {
+  const job = data.massSendJobs.find((j) => j.id === jobId);
+  if (!job) throw new Error('群发队列不存在');
+  const item = job.items.find((x) => x.id === itemId);
+  if (!item) throw new Error('群发目标不存在');
+  const status = normalizeMassSendItemStatus(raw?.status);
+  if (!status) throw new Error('群发目标状态不合法');
+  if (status === 'sent') throw new Error('不能手动标记为已发送');
+  const reason = str(raw?.error || raw?.reason, 300).trim();
+  item.status = status;
+  item.error = status === 'pending' ? undefined : reason || (status === 'skipped' ? '手动跳过' : '手动标记失败');
+  if (status === 'pending') {
+    item.sentAt = undefined;
+    item.auditEventId = undefined;
+  }
+  job.updatedAt = new Date().toISOString();
+  refreshMassJobCompletion(job);
+  persist();
+  addAutomationAudit({
+    action: `mass_item_${status}`,
+    actor: actor.username,
+    conversationName: item.recipientName,
+    message: `群发队列「${job.title}」目标「${item.recipientName}」标记为 ${status}${item.error ? `：${item.error}` : ''}`,
+  });
+  return cloneMassSendJob(job);
+}
+
 export function listMomentDrafts(limit = 100): MomentDraft[] {
   const n = clampInt(limit, 1, 500, 100);
   return data.momentDrafts.slice(-n).reverse().map(cloneMomentDraft);
@@ -586,17 +613,37 @@ export async function sendNextMassSendItem(
   if (job.options.requireOperatorConfirmRecipient && req.operatorConfirmedRecipient !== true) {
     throw new Error(shouldOpenConversation ? '发送前需要确认允许自动搜索并打开目标会话' : '请先确认当前微信窗口已打开目标联系人/群聊');
   }
-  if (shouldOpenConversation) {
-    if (!executor.openConversation) throw new Error('当前实例执行器不支持自动打开会话');
-    await executor.openConversation(pending.recipientName, {
-      searchShortcut: job.options.searchShortcut,
-      searchResultDelaySeconds: job.options.searchResultDelaySeconds,
-      postOpenDelaySeconds: job.options.postOpenDelaySeconds,
-    });
-  }
+  try {
+    if (shouldOpenConversation) {
+      if (!executor.openConversation) throw new Error('当前实例执行器不支持自动打开会话');
+      await executor.openConversation(pending.recipientName, {
+        searchShortcut: job.options.searchShortcut,
+        searchResultDelaySeconds: job.options.searchResultDelaySeconds,
+        postOpenDelaySeconds: job.options.postOpenDelaySeconds,
+      });
+    }
 
-  await executor.typeText(job.message);
-  await executor.key('Return');
+    await executor.typeText(job.message);
+    await executor.key('Return');
+  } catch (e: any) {
+    const msg = str(e?.message || e, 300) || '执行失败';
+    const now = new Date().toISOString();
+    job.status = 'paused';
+    job.updatedAt = now;
+    pending.status = 'failed';
+    pending.error = msg;
+    const event = addAutomationAudit({
+      action: 'mass_item_failed',
+      actor: actor.username,
+      instanceId: inst.id,
+      instanceName: inst.name,
+      conversationName: pending.recipientName,
+      message: `群发队列「${job.title}」发送给「${pending.recipientName}」失败：${msg}`,
+    });
+    pending.auditEventId = event.id;
+    persist();
+    throw new Error(`群发执行失败，队列已暂停：${msg}`);
+  }
 
   const now = new Date().toISOString();
   job.status = 'running';

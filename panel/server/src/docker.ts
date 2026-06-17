@@ -835,6 +835,38 @@ export async function openConversationInInstance(inst: Instance, recipientName: 
   await execCapture(inst, ['bash', '-c', cmd]);
 }
 
+export interface InstanceAutomationSelfTest {
+  ok: boolean;
+  display: string;
+  checks: { name: string; ok: boolean; detail: string }[];
+}
+
+export async function automationSelfTestInInstance(inst: Instance): Promise<InstanceAutomationSelfTest> {
+  const marker = `woc-selftest-${Date.now()}`;
+  const b64 = Buffer.from(marker, 'utf8').toString('base64');
+  const cmd = [
+    'set -e',
+    'display="${DISPLAY:-}"',
+    'if [ -z "$display" ]; then for x in /tmp/.X11-unix/X*; do [ -e "$x" ] || continue; display=":${x##*X}"; break; done; fi',
+    'export DISPLAY="${display:-:1}"',
+    'printf "DISPLAY=%s\\n" "$DISPLAY"',
+    'if command -v xclip >/dev/null 2>&1; then echo "CHECK:xclip:ok:installed"; else echo "CHECK:xclip:fail:not installed"; fi',
+    'if command -v xdotool >/dev/null 2>&1; then echo "CHECK:xdotool:ok:installed"; else echo "CHECK:xdotool:fail:not installed"; fi',
+    'if xdotool getactivewindow >/tmp/woc-active-window 2>/dev/null; then echo "CHECK:activeWindow:ok:$(cat /tmp/woc-active-window)"; else echo "CHECK:activeWindow:fail:no active window"; fi',
+    `if echo '${b64}' | base64 -d | xclip -selection clipboard -i >/dev/null 2>&1 && [ "$(xclip -selection clipboard -o 2>/dev/null || true)" = '${marker}' ]; then echo "CHECK:clipboard:ok:roundtrip"; else echo "CHECK:clipboard:fail:roundtrip failed"; fi`,
+  ].join('; ');
+  const out = await execCapture(inst, ['bash', '-c', cmd]);
+  const display = /^DISPLAY=(.*)$/m.exec(out)?.[1]?.trim() || '';
+  const checks = out
+    .split('\n')
+    .filter((line) => line.startsWith('CHECK:'))
+    .map((line) => {
+      const [, name = '', status = '', ...rest] = line.split(':');
+      return { name, ok: status === 'ok', detail: rest.join(':') };
+    });
+  return { ok: checks.length > 0 && checks.every((check) => check.ok), display, checks };
+}
+
 function normalizeXdotoolShortcut(value: string): string {
   const raw = value.trim().toLowerCase();
   if (!/^[a-z0-9_]+(\+[a-z0-9_]+){0,3}$/.test(raw)) throw new Error('搜索快捷键不合法');

@@ -56,6 +56,7 @@ import {
   copyTextToInstanceClipboard,
   readTextFromInstanceClipboard,
   openConversationInInstance,
+  automationSelfTestInInstance,
   listOrphanVolumes,
   removeVolume,
   listOrphanContainers,
@@ -86,6 +87,7 @@ import {
   listMassSendJobs,
   createMassSendJob,
   patchMassSendJob,
+  patchMassSendItem,
   listMomentDrafts,
   createMomentDraft,
   patchMomentDraft,
@@ -297,6 +299,18 @@ app.patch('/api/admin/automation/mass-jobs/:jobId', async (req, reply) => {
   }
 });
 
+app.patch('/api/admin/automation/mass-jobs/:jobId/items/:itemId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const job = patchMassSendItem(admin, (req.params as any).jobId, (req.params as any).itemId, req.body as any);
+    appendPanelLog('INFO', `更新群发队列「${job.title}」目标状态 by ${admin.username}`);
+    return { job };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新群发目标失败' });
+  }
+});
+
 app.get('/api/admin/automation/moment-drafts', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { drafts: listMomentDrafts(Number((req.query as any)?.limit || 100)) };
@@ -378,6 +392,21 @@ app.post('/api/admin/instances/:id/automation/read-clipboard', async (req, reply
     return { text };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '读取实例剪贴板失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/self-test', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const id = (req.params as any).id;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const result = await automationSelfTestInInstance(inst);
+    appendPanelLog('INFO', `实例「${inst.name}」自动化自检 by ${admin.username}：${result.ok ? '通过' : '未通过'}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '自动化自检失败' });
   }
 });
 

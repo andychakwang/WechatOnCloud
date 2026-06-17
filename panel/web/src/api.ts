@@ -180,6 +180,12 @@ export interface MassSendJob {
   items: MassSendItem[];
 }
 
+export interface InstanceAutomationSelfTest {
+  ok: boolean;
+  display: string;
+  checks: { name: string; ok: boolean; detail: string }[];
+}
+
 export interface MomentDraft {
   id: string;
   title: string;
@@ -287,6 +293,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  patchMassSendItem: (jobId: string, itemId: string, payload: { status: MassSendItem['status']; error?: string; reason?: string }) =>
+    req<{ job: MassSendJob }>(`/api/admin/automation/mass-jobs/${jobId}/items/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   listMomentDrafts: (limit = 100) =>
     req<{ drafts: MomentDraft[] }>(`/api/admin/automation/moment-drafts?limit=${encodeURIComponent(limit)}`),
   createMomentDraft: (payload: { title: string; text: string; imageNotes?: string; materials?: string[] }) =>
@@ -320,6 +331,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  automationSelfTest: (id: string) =>
+    req<{ result: InstanceAutomationSelfTest }>(`/api/admin/instances/${id}/automation/self-test`, { method: 'POST' }),
   automationSendNextMassItem: (
     id: string,
     jobId: string,
