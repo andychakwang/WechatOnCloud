@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PANEL_URL="${PANEL_URL:-http://192.168.8.152:36081}"
+PANEL_USER="${PANEL_USER:-admin}"
+PANEL_PASSWORD="${PANEL_PASSWORD:-${PANEL_ADMIN_PASSWORD:-${WOC_TEST_PASSWORD:-wechat}}}"
+
+PANEL_URL="${PANEL_URL%/}"
+stamp="$(date +%Y%m%d%H%M%S)"
+cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
+body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
+
+cleanup() {
+  rm -f "$cookie_jar" "$body_file"
+}
+trap cleanup EXIT
+
+say() {
+  printf '==> %s\n' "$*"
+}
+
+request_json() {
+  local method="$1"
+  local path="$2"
+  local payload="${3:-}"
+  local expect="${4:-200}"
+  local status
+
+  if [[ -n "$payload" ]]; then
+    status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+      -b "$cookie_jar" -c "$cookie_jar" \
+      -X "$method" \
+      -H 'content-type: application/json' \
+      --data "$payload" \
+      "$PANEL_URL$path")"
+  else
+    status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+      -b "$cookie_jar" -c "$cookie_jar" \
+      -X "$method" \
+      "$PANEL_URL$path")"
+  fi
+
+  if [[ "$status" != "$expect" ]]; then
+    echo "ERROR: $method $path expected HTTP $expect, got $status" >&2
+    sed -n '1,80p' "$body_file" >&2
+    exit 1
+  fi
+}
+
+json_get() {
+  local path="$1"
+  python3 - "$body_file" "$path" <<'PY'
+import json
+import sys
+
+file, path = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    value = json.load(fh)
+for part in path.split("."):
+    if part.endswith("]"):
+        name, idx = part[:-1].split("[", 1)
+        if name:
+            value = value[name]
+        value = value[int(idx)]
+    else:
+        value = value[part]
+if isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False))
+else:
+    print(value)
+PY
+}
+
+json_assert_path() {
+  local path="$1"
+  python3 - "$body_file" "$path" <<'PY'
+import json
+import sys
+
+file, path = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    value = json.load(fh)
+for part in path.split("."):
+    if part.endswith("]"):
+        name, idx = part[:-1].split("[", 1)
+        if name:
+            value = value[name]
+        value = value[int(idx)]
+    else:
+        value = value[part]
+PY
+}
+
+json_assert_eq() {
+  local path="$1"
+  local expected="$2"
+  local actual
+  actual="$(json_get "$path")"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: expected JSON path $path to be '$expected', got '$actual'" >&2
+    sed -n '1,80p' "$body_file" >&2
+    exit 1
+  fi
+}
+
+say "Smoke target: $PANEL_URL"
+
+say "Login"
+login_payload="$(python3 - "$PANEL_USER" "$PANEL_PASSWORD" <<'PY'
+import json
+import sys
+
+print(json.dumps({"username": sys.argv[1], "password": sys.argv[2]}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/auth/login "$login_payload"
+json_assert_path user.username
+
+say "Read version and automation config"
+request_json GET /api/version
+json_assert_path current
+request_json GET /api/admin/automation/config
+json_assert_path config.settings
+
+say "Simulate inbound message without sending"
+request_json POST /api/admin/automation/simulate '{"inboundText":"你好，我想了解服务价格"}'
+json_assert_path decision.action
+
+say "Create and cancel controlled mass-send queue"
+mass_title="smoke-mass-$stamp"
+mass_payload="$(python3 - "$mass_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1]
+print(json.dumps({
+    "title": title,
+    "message": "这是一条自动化 smoke 测试队列，不会发送。",
+    "recipients": ["Smoke Test Contact"],
+    "options": {
+        "perSendDelaySeconds": 1,
+        "requireOperatorConfirmRecipient": True,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/mass-jobs "$mass_payload"
+json_assert_path job.id
+job_id="$(json_get job.id)"
+request_json PATCH "/api/admin/automation/mass-jobs/$job_id" '{"status":"cancelled","approved":false}'
+json_assert_eq job.status cancelled
+
+say "Create and archive Moments draft"
+moment_title="smoke-moment-$stamp"
+moment_payload="$(python3 - "$moment_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1]
+print(json.dumps({
+    "title": title,
+    "text": "这是一条朋友圈半自动 smoke 测试草稿，不会发布。",
+    "imageNotes": "无需配图",
+    "materials": [],
+}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/moment-drafts "$moment_payload"
+json_assert_path draft.id
+draft_id="$(json_get draft.id)"
+request_json PATCH "/api/admin/automation/moment-drafts/$draft_id" '{"status":"archived","approved":false}'
+json_assert_eq draft.status archived
+
+say "Read automation audit"
+request_json GET "/api/admin/automation/audit?limit=20"
+json_assert_path events
+
+say "Automation panel smoke test passed"
