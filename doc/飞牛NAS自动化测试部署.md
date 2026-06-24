@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r7-2026-06-17` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r8-2026-06-25` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,8 +9,8 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r7-2026-06-17`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r7-2026-06-17`
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r8-2026-06-25`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r8-2026-06-25`
 
 ## 飞牛 Docker 面板导入
 
