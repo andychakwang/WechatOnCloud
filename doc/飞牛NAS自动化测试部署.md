@@ -64,6 +64,27 @@
    http://nasbot.cloud:36081/
    ```
 
+## SSH 一键部署
+
+如果飞牛 NAS 开启了 SSH，可以不走网页面板。先设置测试面板初始密码，再执行：
+
+```bash
+PANEL_ADMIN_PASSWORD='替换成强密码' \
+SSH_TARGET='admin@192.168.8.152' \
+./scripts/deploy-fnos-automation-test-ssh.sh
+```
+
+可选参数：
+
+```bash
+REMOTE_DIR='~/woc-automation-test'
+AUTOMATION_AI_API_KEY='你的Key'
+AUTOMATION_AI_BASE_URL='https://api.openai.com/v1'
+AUTOMATION_AI_MODEL='gpt-4o-mini'
+```
+
+这个脚本只创建/更新测试项目 `woc-panel-automation-test`，不会改动现有 `36080` 生产面板。
+
 ## 首次验收
 
 1. 用 `admin` 和你刚设置的密码登录测试面板。
