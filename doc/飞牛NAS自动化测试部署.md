@@ -77,10 +77,17 @@ SSH_TARGET='admin@192.168.8.152' \
 可选参数：
 
 ```bash
-REMOTE_DIR='~/woc-automation-test'
+REMOTE_DIR='woc-automation-test'
 AUTOMATION_AI_API_KEY='你的Key'
 AUTOMATION_AI_BASE_URL='https://api.openai.com/v1'
 AUTOMATION_AI_MODEL='gpt-4o-mini'
+```
+
+正式连接 NAS 前，可以先本地预检渲染后的 Compose：
+
+```bash
+PANEL_ADMIN_PASSWORD='替换成强密码' \
+./scripts/deploy-fnos-automation-test-ssh.sh --dry-run
 ```
 
 这个脚本只创建/更新测试项目 `woc-panel-automation-test`，不会改动现有 `36080` 生产面板。
