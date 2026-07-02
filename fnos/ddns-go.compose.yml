@@ -1,0 +1,11 @@
+services:
+  ddns-go:
+    image: jeessy/ddns-go:latest
+    container_name: ddns-go
+    network_mode: host
+    volumes:
+      - ./data-ddns-go:/root
+    restart: unless-stopped
+    command:
+      - -l
+      - ":9876"
