@@ -1,0 +1,10 @@
+{
+  "id": "bridge-event-sample-001",
+  "source": "wecom-mac",
+  "conversationName": "客户A",
+  "senderName": "客户A",
+  "inboundText": "你们这个服务适合什么样的人？",
+  "replyDraft": "适合已经有私域沟通、但常见咨询回复压力比较大的团队。建议先从 FAQ 和人工确认回复开始，不建议一上来全自动发送。",
+  "replyApproved": true,
+  "replyApprovedAt": "2026-07-05T04:40:00.000Z"
+}

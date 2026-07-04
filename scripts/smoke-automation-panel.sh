@@ -8,6 +8,7 @@ PANEL_PASSWORD="${PANEL_PASSWORD:-${PANEL_ADMIN_PASSWORD:-${WOC_TEST_PASSWORD:-w
 PANEL_URL="${PANEL_URL%/}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRIDGE_CLIENT="${BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
+WECOM_REPLY_HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
 stamp="$(date +%Y%m%d%H%M%S)"
 cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
 body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
@@ -199,6 +200,10 @@ request_json DELETE "/api/admin/automation/knowledge/$knowledge_id"
 json_assert_path ok
 
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
+  say "Check WeCom Mac handler dry-run"
+  WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" < "$ROOT/doc/examples/wecom-bridge-reply.sample.json" > "$body_file"
+  json_assert_path ok
+
   say "Import WeCom knowledge through Bridge"
   bridge_title="smoke-bridge-$stamp"
   bridge_payload="$(python3 - "$bridge_title" <<'PY'
