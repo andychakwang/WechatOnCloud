@@ -200,6 +200,32 @@ PY
   bridge_id="$(json_get result.items[0].id)"
   request_json DELETE "/api/admin/automation/knowledge/$bridge_id"
   json_assert_path ok
+
+  say "Push WeCom inbound message through Bridge"
+  bridge_event_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-msg-{stamp}",
+        "conversationName": "Smoke Test Conversation",
+        "senderName": "Smoke Sender",
+        "inboundText": "你好，我想了解一下这个自动化服务适合谁。",
+        "conversationContext": "客户来自企业微信自动化 Mac 版 smoke 测试。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/events "$bridge_event_payload"
+  json_assert_path result.events[0].id
+  bridge_event_id="$(json_get result.events[0].id)"
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"planned"}'
+  json_assert_eq event.status planned
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
+  json_assert_eq event.status archived
 fi
 
 say "Simulate inbound message without sending"

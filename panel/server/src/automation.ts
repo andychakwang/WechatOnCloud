@@ -45,6 +45,31 @@ export interface AutomationKnowledgeImportResult {
   errors: string[];
 }
 
+export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
+
+export interface WecomBridgeEvent {
+  id: string;
+  source: string;
+  externalId?: string;
+  conversationName: string;
+  senderName: string;
+  inboundText: string;
+  conversationContext: string;
+  status: WecomBridgeEventStatus;
+  receivedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  lastPlannedAt?: string;
+}
+
+export interface WecomBridgeEventIngestResult {
+  events: WecomBridgeEvent[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface AutomationSettings {
   enabled: boolean;
   aiDraftEnabled: boolean;
@@ -157,6 +182,7 @@ export interface AutomationAuditEvent {
 }
 
 interface AutomationData extends AutomationConfig {
+  bridgeEvents: WecomBridgeEvent[];
   massSendJobs: MassSendJob[];
   momentDrafts: MomentDraft[];
   auditEvents: AutomationAuditEvent[];
@@ -165,6 +191,7 @@ interface AutomationData extends AutomationConfig {
 const FILE = process.env.PANEL_AUTOMATION_DATA || '/data/automation.json';
 const MAX_AUDIT_EVENTS = 1000;
 const MAX_KNOWLEDGE_ITEMS = 500;
+const MAX_BRIDGE_EVENTS = 500;
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   enabled: false,
@@ -183,6 +210,7 @@ const DEFAULT_DATA: AutomationData = {
   knowledgeNotes: '',
   rules: [],
   knowledgeItems: [],
+  bridgeEvents: [],
   massSendJobs: [],
   momentDrafts: [],
   auditEvents: [],
@@ -218,6 +246,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       knowledgeNotes: raw?.knowledgeNotes ?? data.knowledgeNotes,
       rules: raw?.rules ?? data.rules,
       knowledgeItems: raw?.knowledgeItems ?? data.knowledgeItems,
+      bridgeEvents: data.bridgeEvents,
       massSendJobs: data.massSendJobs,
       momentDrafts: data.momentDrafts,
       auditEvents: data.auditEvents,
@@ -226,6 +255,94 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
   );
   persist();
   return getAutomationConfig();
+}
+
+export function listWecomBridgeEvents(limit = 100, status?: string): WecomBridgeEvent[] {
+  const n = clampInt(limit, 1, 500, 100);
+  const wantedStatus = normalizeBridgeEventStatus(status);
+  return data.bridgeEvents
+    .filter((event) => !wantedStatus || event.status === wantedStatus)
+    .slice(-n)
+    .reverse()
+    .map(cloneBridgeEvent);
+}
+
+export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEventIngestResult {
+  const now = new Date().toISOString();
+  const source = str(raw?.source || raw?.sourceName || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge';
+  const rawEvents = extractBridgeEventItems(raw).slice(0, 100);
+  const result: WecomBridgeEventIngestResult = {
+    events: [],
+    imported: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const [index, rawEvent] of rawEvents.entries()) {
+    try {
+      const event = normalizeBridgeEvent({ ...rawEvent, source: rawEvent?.source || source }, false, now);
+      if (!event.inboundText.trim()) throw new Error('消息内容为空');
+      if (!event.conversationName.trim() && !event.senderName.trim()) throw new Error('会话名和发送人不能同时为空');
+
+      const existingIndex = event.externalId
+        ? data.bridgeEvents.findIndex((x) => x.source.toLowerCase() === event.source.toLowerCase() && x.externalId === event.externalId)
+        : -1;
+      if (existingIndex >= 0) {
+        const existing = data.bridgeEvents[existingIndex];
+        const saved: WecomBridgeEvent = {
+          ...event,
+          id: existing.id,
+          status: existing.status === 'archived' ? 'archived' : event.status,
+          createdAt: existing.createdAt,
+          updatedAt: now,
+          lastPlannedAt: existing.lastPlannedAt,
+        };
+        data.bridgeEvents[existingIndex] = saved;
+        result.updated += 1;
+        result.events.push(cloneBridgeEvent(saved));
+      } else {
+        data.bridgeEvents.push(event);
+        result.imported += 1;
+        result.events.push(cloneBridgeEvent(event));
+      }
+    } catch (e: any) {
+      result.skipped += 1;
+      result.errors.push(`第 ${index + 1} 条跳过：${e?.message || e}`);
+    }
+  }
+
+  if (data.bridgeEvents.length > MAX_BRIDGE_EVENTS) {
+    data.bridgeEvents = data.bridgeEvents.slice(-MAX_BRIDGE_EVENTS);
+  }
+  if (result.imported || result.updated) {
+    persist();
+    addAutomationAudit({
+      action: 'bridge_events_ingested',
+      actor: actor.username,
+      message: `Bridge 收到企微消息事件：新增 ${result.imported} 条，更新 ${result.updated} 条，跳过 ${result.skipped} 条`,
+    });
+  }
+  return result;
+}
+
+export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): WecomBridgeEvent {
+  const event = data.bridgeEvents.find((item) => item.id === eventId);
+  if (!event) throw new Error('Bridge 消息事件不存在');
+  const status = normalizeBridgeEventStatus(raw?.status);
+  if (!status) throw new Error('Bridge 消息事件状态不合法');
+  const now = new Date().toISOString();
+  event.status = status;
+  event.updatedAt = now;
+  if (status === 'planned') event.lastPlannedAt = now;
+  persist();
+  addAutomationAudit({
+    action: 'bridge_event_updated',
+    actor: actor.username,
+    conversationName: event.conversationName || event.senderName,
+    message: `更新企微消息事件「${event.conversationName || event.senderName}」：${status}`,
+  });
+  return cloneBridgeEvent(event);
 }
 
 export function importAutomationKnowledge(actor: User, raw: any): AutomationKnowledgeImportResult {
@@ -1029,6 +1146,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const now = new Date().toISOString();
   const rulesRaw = Array.isArray(raw?.rules) ? raw.rules : [];
   const knowledgeRaw = Array.isArray(raw?.knowledgeItems) ? raw.knowledgeItems : [];
+  const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
   const momentDraftsRaw = Array.isArray(raw?.momentDrafts) ? raw.momentDrafts : [];
   return {
@@ -1037,6 +1155,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     knowledgeNotes: str(raw?.knowledgeNotes, 50000),
     rules: rulesRaw.slice(0, 200).map((r: any) => normalizeRule(r, preserveIds, now)),
     knowledgeItems: knowledgeRaw.slice(-MAX_KNOWLEDGE_ITEMS).map((item: any) => normalizeKnowledgeItem(item, preserveIds, now)),
+    bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
     auditEvents: Array.isArray(raw?.auditEvents) ? raw.auditEvents.slice(-MAX_AUDIT_EVENTS).map(normalizeAuditEvent).filter(Boolean) : [],
@@ -1097,6 +1216,29 @@ function normalizeKnowledgeItem(raw: any, preserveIds: boolean, now: string): Au
     targetNames,
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+  };
+}
+
+function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): WecomBridgeEvent {
+  const id = preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID();
+  const inboundText = str(raw?.inboundText ?? raw?.text ?? raw?.content ?? raw?.message ?? raw?.body, 4000).trim();
+  const conversationName = str(raw?.conversationName ?? raw?.chatName ?? raw?.roomName ?? raw?.contactName ?? raw?.conversation, 120).trim();
+  const senderName = str(raw?.senderName ?? raw?.sender ?? raw?.fromName ?? raw?.from ?? raw?.author, 120).trim();
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  const receivedAt = normalizeIsoDate(raw?.receivedAt ?? raw?.messageTime ?? raw?.timestamp ?? raw?.time, now);
+  return {
+    id,
+    source: str(raw?.source || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge',
+    externalId: str(raw?.externalId ?? raw?.messageId ?? raw?.msgId ?? raw?.eventId, 120).trim() || undefined,
+    conversationName,
+    senderName,
+    inboundText,
+    conversationContext: str(raw?.conversationContext ?? raw?.context ?? raw?.recentMessages ?? raw?.history, 6000).trim(),
+    status: normalizeBridgeEventStatus(raw?.status) || 'new',
+    receivedAt,
+    createdAt,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+    lastPlannedAt: typeof raw?.lastPlannedAt === 'string' && raw.lastPlannedAt ? raw.lastPlannedAt : undefined,
   };
 }
 
@@ -1399,6 +1541,10 @@ function cloneKnowledgeItem(item: AutomationKnowledgeItem): AutomationKnowledgeI
   };
 }
 
+function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
+  return { ...event };
+}
+
 function cloneMassSendJob(job: MassSendJob): MassSendJob {
   return {
     ...job,
@@ -1428,6 +1574,10 @@ function normalizeMomentDraftStatus(value: unknown): MomentDraftStatus | null {
   return value === 'draft' || value === 'ready' || value === 'prepared' || value === 'published' || value === 'archived' ? value : null;
 }
 
+function normalizeBridgeEventStatus(value: unknown): WecomBridgeEventStatus | null {
+  return value === 'new' || value === 'planned' || value === 'archived' ? value : null;
+}
+
 function normalizeKnowledgeCategory(value: unknown): AutomationKnowledgeCategory | null {
   const raw = String(value || '')
     .trim()
@@ -1453,6 +1603,14 @@ function extractKnowledgeImportItems(raw: any, fallbackCategory: AutomationKnowl
   if (parsed && Array.isArray(parsed.items)) return parsed.items;
   if (parsed && typeof parsed === 'object') return [parsed];
   return parseKnowledgeText(rawText, fallbackCategory);
+}
+
+function extractBridgeEventItems(raw: any): any[] {
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.events)) return raw.events;
+  if (Array.isArray(raw?.messages)) return raw.messages;
+  if (Array.isArray(raw?.items)) return raw.items;
+  return [raw];
 }
 
 function tryParseJson(text: string): any | null {
@@ -1514,6 +1672,18 @@ function deriveTitleFromContent(content: string): string {
     .map((line) => line.replace(/^#+\s*/, '').trim())
     .find(Boolean)
     ?.slice(0, 40) || '';
+}
+
+function normalizeIsoDate(value: unknown, fallback: string): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const ms = value > 100000000000 ? value : value * 1000;
+    return new Date(ms).toISOString();
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+  }
+  return fallback;
 }
 
 function normalizeMaterials(raw: any): string[] {

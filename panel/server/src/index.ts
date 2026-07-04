@@ -83,8 +83,11 @@ import {
   initAutomationStore,
   getAutomationConfig,
   updateAutomationConfig,
+  ingestWecomBridgeEvents,
   importAutomationKnowledge,
+  listWecomBridgeEvents,
   patchAutomationKnowledge,
+  patchWecomBridgeEvent,
   deleteAutomationKnowledge,
   simulateAutomation,
   listAutomationAudit,
@@ -111,6 +114,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const STATIC_DIR = process.env.STATIC_DIR || join(__dirname, '../../web/dist');
 const COOKIE = 'woc_sess';
 const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
+const AUTOMATION_BRIDGE_EVENT_ENDPOINT = '/api/automation/bridge/wecom/events';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
@@ -187,6 +191,8 @@ function automationBridgeStatus() {
     tokenEnvName: 'AUTOMATION_BRIDGE_TOKEN',
     compatibilityEnvName: 'WECOM_BRIDGE_TOKEN',
     endpoint: AUTOMATION_BRIDGE_ENDPOINT,
+    knowledgeEndpoint: AUTOMATION_BRIDGE_ENDPOINT,
+    eventEndpoint: AUTOMATION_BRIDGE_EVENT_ENDPOINT,
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
   };
 }
@@ -302,6 +308,24 @@ app.get('/api/admin/automation/bridge', async (req, reply) => {
   return { bridge: automationBridgeStatus() };
 });
 
+app.get('/api/admin/automation/bridge-events', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return { events: listWecomBridgeEvents(Number(query?.limit || 100), query?.status) };
+});
+
+app.patch('/api/admin/automation/bridge-events/:eventId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const event = patchWecomBridgeEvent(admin, (req.params as any).eventId, req.body as any);
+    appendPanelLog('INFO', `更新企微 Bridge 消息事件「${event.conversationName || event.senderName}」by ${admin.username}`);
+    return { event };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新 Bridge 消息事件失败' });
+  }
+});
+
 app.post('/api/admin/automation/knowledge/import', async (req, reply) => {
   const admin = requireAdmin(req, reply);
   if (!admin) return;
@@ -325,6 +349,20 @@ app.post(AUTOMATION_BRIDGE_ENDPOINT, async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 导入接入资料失败' });
+  }
+});
+
+app.post(AUTOMATION_BRIDGE_EVENT_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const result = ingestWecomBridgeEvents(AUTOMATION_BRIDGE_USER, {
+      ...(req.body as any),
+      source: (req.body as any)?.source || 'wecom-mac-bridge',
+    });
+    appendPanelLog('INFO', `Bridge 收到企微消息事件：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 写入消息事件失败' });
   }
 });
 

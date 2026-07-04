@@ -133,7 +133,24 @@ export interface AutomationBridgeStatus {
   tokenEnvName: string;
   compatibilityEnvName: string;
   endpoint: string;
+  knowledgeEndpoint: string;
+  eventEndpoint: string;
   authHeaders: string[];
+}
+
+export interface WecomBridgeEvent {
+  id: string;
+  source: string;
+  externalId?: string;
+  conversationName: string;
+  senderName: string;
+  inboundText: string;
+  conversationContext: string;
+  status: 'new' | 'planned' | 'archived';
+  receivedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  lastPlannedAt?: string;
 }
 
 export interface AutomationSettings {
@@ -287,6 +304,15 @@ export const api = {
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
   getAutomationBridge: () => req<{ bridge: AutomationBridgeStatus }>('/api/admin/automation/bridge'),
+  listWecomBridgeEvents: (limit = 100, status?: WecomBridgeEvent['status']) =>
+    req<{ events: WecomBridgeEvent[] }>(
+      `/api/admin/automation/bridge-events?limit=${encodeURIComponent(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`,
+    ),
+  patchWecomBridgeEvent: (eventId: string, payload: { status: WecomBridgeEvent['status'] }) =>
+    req<{ event: WecomBridgeEvent }>(`/api/admin/automation/bridge-events/${eventId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   importAutomationKnowledge: (payload: {
     source?: string;
     category?: AutomationKnowledgeCategory;

@@ -18,6 +18,7 @@ import {
   type VolEntry,
   type AppType,
   type VersionInfo,
+  type WecomBridgeEvent,
 } from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
 import { useUI, PasswordInput } from '../ui';
@@ -121,6 +122,8 @@ const AUTO_STATUS_LABEL: Record<string, string> = {
   sent: '已发',
   failed: '失败',
   skipped: '跳过',
+  new: '新消息',
+  planned: '已生成',
 };
 
 const KNOWLEDGE_CATEGORY_LABEL: Record<AutomationKnowledgeCategory, string> = {
@@ -171,6 +174,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
+  const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -212,17 +216,19 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { jobs }, { drafts }, { events }] = await Promise.all([
+      const [{ config }, { jobs }, { drafts }, { events }, { events: bridgeEvents }] = await Promise.all([
         api.getAutomationConfig(),
         api.listMassSendJobs(),
         api.listMomentDrafts(),
         api.automationAudit(30),
+        api.listWecomBridgeEvents(20),
       ]);
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
       setJobs(jobs);
       setDrafts(drafts);
       setAudit(events);
+      setBridgeEvents(bridgeEvents.filter((event) => event.status !== 'archived'));
     } catch (e: any) {
       setErr(e.message || '读取自动化配置失败');
     }
@@ -333,6 +339,43 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (item.targetNames.length === 0) return toast('这条资料没有目标名单', 'error');
     setMassRecipients((current) => linesOf([current, item.targetNames.join('\n')].filter(Boolean).join('\n')).join('\n'));
     toast('已填入群发目标', 'ok');
+  };
+
+  const useBridgeEventForReply = async (event: WecomBridgeEvent) => {
+    const context = [
+      event.conversationName ? `会话：${event.conversationName}` : '',
+      event.senderName ? `发送人：${event.senderName}` : '',
+      event.receivedAt ? `时间：${fmtDate(Date.parse(event.receivedAt))}` : '',
+      event.conversationContext,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    setReplyInbound(event.inboundText);
+    setReplyContext(context.slice(0, 4000));
+    setReplyInstruction('基于企微 Bridge 收件箱消息生成一条克制、可人工确认后发送的回复。');
+    setBusy(`bridge-event-${event.id}`);
+    try {
+      const { event: saved } = await api.patchWecomBridgeEvent(event.id, { status: 'planned' });
+      setBridgeEvents((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('已填入 AI 回复工作台', 'ok');
+    } catch (e: any) {
+      toast(e.message || '标记消息失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const archiveBridgeEvent = async (event: WecomBridgeEvent) => {
+    setBusy(`bridge-event-${event.id}`);
+    try {
+      const { event: saved } = await api.patchWecomBridgeEvent(event.id, { status: 'archived' });
+      setBridgeEvents((list) => list.filter((x) => x.id !== saved.id));
+      toast('企微消息已归档', 'ok');
+    } catch (e: any) {
+      toast(e.message || '归档失败', 'error');
+    } finally {
+      setBusy('');
+    }
   };
 
   const runSelfTest = async () => {
@@ -756,7 +799,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               <div className={'auto-bridge ' + (bridge.enabled ? 'ok' : 'bad')}>
                 <b>Mac Bridge {bridge.enabled ? '已启用' : '未启用'}</b>
                 <div className="muted small">
-                  URL <code>{location.origin + bridge.endpoint}</code>
+                  资料 <code>{location.origin + bridge.knowledgeEndpoint}</code>
+                </div>
+                <div className="muted small">
+                  消息 <code>{location.origin + bridge.eventEndpoint}</code>
                 </div>
                 <div className="chip-row">
                   <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
@@ -796,6 +842,36 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </div>
               ))}
               {knowledgeItems.length === 0 && <div className="muted small">暂无接入资料</div>}
+            </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>企微消息收件箱</b>
+              <span className="tag">{bridgeEvents.length} 条</span>
+            </div>
+            <div className="auto-list">
+              {bridgeEvents.slice(0, 6).map((event) => (
+                <div key={event.id} className="auto-list-item">
+                  <div>
+                    <b>{event.conversationName || event.senderName || '未命名会话'}</b>
+                    <div className="muted small">
+                      {AUTO_STATUS_LABEL[event.status] || event.status} · {event.source} · {fmtDate(Date.parse(event.receivedAt || event.createdAt))}
+                      {event.senderName ? ` · ${event.senderName}` : ''}
+                    </div>
+                    <div className="muted small auto-snippet">{event.inboundText}</div>
+                  </div>
+                  <div className="auto-actions">
+                    <button className="btn-text" disabled={busy === `bridge-event-${event.id}`} onClick={() => useBridgeEventForReply(event)}>
+                      生成回复
+                    </button>
+                    <button className="btn-text" disabled={busy === `bridge-event-${event.id}`} onClick={() => archiveBridgeEvent(event)}>
+                      归档
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {bridgeEvents.length === 0 && <div className="muted small">暂无企微 Bridge 消息</div>}
             </div>
           </section>
 
