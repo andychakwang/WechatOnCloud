@@ -892,7 +892,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             {worker.pid ? ` · pid ${worker.pid}` : ''}
                           </div>
                           <div className="muted small">
-                            最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks}
+                            最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks} · 待朋友圈 {worker.pendingMomentTasks}
                           </div>
                         </div>
                         <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>
@@ -1183,6 +1183,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     <b>{draft.title}</b>
                     <div className="muted small">
                       {AUTO_STATUS_LABEL[draft.status] || draft.status} · {draft.approved ? '已审核' : '未审核'}
+                      {draft.bridgeClaimedBy ? ` · ${draft.bridgeClaimedBy} 已领取` : ''}
+                      {draft.bridgeError ? ` · ${draft.bridgeError}` : ''}
                     </div>
                   </div>
                   <div className="auto-actions">

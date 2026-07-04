@@ -88,10 +88,12 @@ import {
   listWecomBridgeWorkers,
   listApprovedWecomBridgeReplies,
   listApprovedWecomBridgeMassTasks,
+  listApprovedWecomBridgeMomentTasks,
   listWecomBridgeEvents,
   recordWecomBridgeHeartbeat,
   patchWecomBridgeReplyDelivery,
   patchWecomBridgeMassTaskDelivery,
+  patchWecomBridgeMomentTaskDelivery,
   patchAutomationKnowledge,
   patchWecomBridgeEvent,
   deleteAutomationKnowledge,
@@ -123,6 +125,7 @@ const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
 const AUTOMATION_BRIDGE_EVENT_ENDPOINT = '/api/automation/bridge/wecom/events';
 const AUTOMATION_BRIDGE_REPLY_ENDPOINT = '/api/automation/bridge/wecom/replies';
 const AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT = '/api/automation/bridge/wecom/mass-tasks';
+const AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT = '/api/automation/bridge/wecom/moment-tasks';
 const AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT = '/api/automation/bridge/wecom/heartbeat';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
@@ -204,6 +207,7 @@ function automationBridgeStatus() {
     eventEndpoint: AUTOMATION_BRIDGE_EVENT_ENDPOINT,
     replyEndpoint: AUTOMATION_BRIDGE_REPLY_ENDPOINT,
     massTaskEndpoint: AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT,
+    momentTaskEndpoint: AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT,
     heartbeatEndpoint: AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT,
     workers: listWecomBridgeWorkers(20),
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
@@ -384,12 +388,14 @@ app.post(AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT, async (req, reply) => {
   try {
     const pendingReplies = listApprovedWecomBridgeReplies(200).length;
     const pendingMassTasks = listApprovedWecomBridgeMassTasks(200).length;
+    const pendingMomentTasks = listApprovedWecomBridgeMomentTasks(200).length;
     const worker = recordWecomBridgeHeartbeat(AUTOMATION_BRIDGE_USER, {
       ...(req.body as any),
       pendingReplies,
       pendingMassTasks,
+      pendingMomentTasks,
     });
-    return { worker, pendingReplies, pendingMassTasks, serverTime: new Date().toISOString() };
+    return { worker, pendingReplies, pendingMassTasks, pendingMomentTasks, serverTime: new Date().toISOString() };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 心跳写入失败' });
   }
@@ -428,6 +434,33 @@ app.patch(`${AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT}/:taskId`, async (req, reply) 
     return result;
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 更新群发任务失败' });
+  }
+});
+
+app.get(AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  const query = req.query as any;
+  return { tasks: listApprovedWecomBridgeMomentTasks(Number(query?.limit || 50)) };
+});
+
+app.patch(`${AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT}/:taskId`, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const result = patchWecomBridgeMomentTaskDelivery(AUTOMATION_BRIDGE_USER, (req.params as any).taskId, req.body as any);
+    const state =
+      result.draft.status === 'published'
+        ? '已发布'
+        : result.draft.status === 'prepared'
+          ? '已准备'
+          : result.draft.bridgeFailedAt
+            ? '准备失败'
+            : result.draft.bridgeClaimedAt
+              ? '已领取'
+              : '已释放领取';
+    appendPanelLog('INFO', `Bridge 标记朋友圈任务${state}：「${result.draft.title}」`);
+    return result;
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 更新朋友圈任务失败' });
   }
 });
 

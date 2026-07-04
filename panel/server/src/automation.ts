@@ -48,6 +48,7 @@ export interface AutomationKnowledgeImportResult {
 export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
 type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
 type WecomBridgeMassDeliveryStatus = 'claimed' | 'failed' | 'sent' | 'delivered' | 'released';
+type WecomBridgeMomentDeliveryStatus = 'claimed' | 'failed' | 'prepared' | 'published' | 'released';
 
 export interface WecomBridgeEvent {
   id: string;
@@ -84,6 +85,7 @@ export interface WecomBridgeWorker {
   note?: string;
   pendingReplies: number;
   pendingMassTasks: number;
+  pendingMomentTasks: number;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
@@ -214,6 +216,24 @@ export interface MomentDraft {
   createdBy: string;
   lastPreparedAt?: string;
   publishedAt?: string;
+  bridgeClaimedAt?: string;
+  bridgeClaimedBy?: string;
+  bridgeClaimExpiresAt?: string;
+  bridgeFailedAt?: string;
+  bridgeError?: string;
+}
+
+export interface WecomBridgeMomentTask {
+  id: string;
+  draftId: string;
+  title: string;
+  text: string;
+  imageNotes: string;
+  materials: string[];
+  status: MomentDraftStatus;
+  claimedAt?: string;
+  claimedBy?: string;
+  claimExpiresAt?: string;
 }
 
 export interface AutomationAuditEvent {
@@ -351,6 +371,7 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
     note: str(raw?.note || raw?.message || '', 300).trim() || undefined,
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
     pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
+    pendingMomentTasks: clampInt(raw?.pendingMomentTasks, 0, 100000, 0),
     lastSeenAt: now,
     createdAt: now,
     updatedAt: now,
@@ -948,21 +969,50 @@ export function patchMomentDraft(actor: User, draftId: string, raw: any): Moment
   const draft = data.momentDrafts.find((d) => d.id === draftId);
   if (!draft) throw new Error('朋友圈草稿不存在');
   const now = new Date().toISOString();
-  if (typeof raw?.approved === 'boolean') draft.approved = raw.approved;
-  if (typeof raw?.title === 'string') draft.title = str(raw.title, 80).trim() || draft.title;
+  let shouldClearBridgeState = false;
+  if (typeof raw?.approved === 'boolean' && raw.approved !== draft.approved) {
+    draft.approved = raw.approved;
+    shouldClearBridgeState = true;
+  }
+  if (typeof raw?.title === 'string') {
+    const title = str(raw.title, 80).trim() || draft.title;
+    if (title !== draft.title) {
+      draft.title = title;
+      shouldClearBridgeState = true;
+    }
+  }
   if (typeof raw?.text === 'string') {
     const text = str(raw.text, 2000).trim();
     if (!text) throw new Error('朋友圈文案不能为空');
-    draft.text = text;
+    if (text !== draft.text) {
+      draft.text = text;
+      shouldClearBridgeState = true;
+    }
   }
-  if (typeof raw?.imageNotes === 'string') draft.imageNotes = str(raw.imageNotes, 2000).trim();
-  if (Array.isArray(raw?.materials)) draft.materials = normalizeMaterials(raw.materials);
+  if (typeof raw?.imageNotes === 'string') {
+    const imageNotes = str(raw.imageNotes, 2000).trim();
+    if (imageNotes !== draft.imageNotes) {
+      draft.imageNotes = imageNotes;
+      shouldClearBridgeState = true;
+    }
+  }
+  if (Array.isArray(raw?.materials)) {
+    const materials = normalizeMaterials(raw.materials);
+    if (materials.join('\n') !== draft.materials.join('\n')) {
+      draft.materials = materials;
+      shouldClearBridgeState = true;
+    }
+  }
   if (raw?.status) {
     const status = normalizeMomentDraftStatus(raw.status);
     if (!status) throw new Error('朋友圈草稿状态不合法');
-    draft.status = status;
+    if (status !== draft.status) {
+      draft.status = status;
+      shouldClearBridgeState = true;
+    }
     if (status === 'published' && !draft.publishedAt) draft.publishedAt = now;
   }
+  if (shouldClearBridgeState) clearMomentBridgeState(draft);
   draft.updatedAt = now;
   persist();
   addAutomationAudit({
@@ -971,6 +1021,124 @@ export function patchMomentDraft(actor: User, draftId: string, raw: any): Moment
     message: `更新朋友圈草稿「${draft.title}」：${draft.status}${draft.approved ? '，已审核' : '，未审核'}`,
   });
   return cloneMomentDraft(draft);
+}
+
+export function listApprovedWecomBridgeMomentTasks(limit = 50): WecomBridgeMomentTask[] {
+  const n = clampInt(limit, 1, 200, 50);
+  if (!data.settings.enabled || !data.settings.momentsEnabled) return [];
+  const now = new Date().toISOString();
+  const tasks: WecomBridgeMomentTask[] = [];
+  for (const draft of data.momentDrafts) {
+    if (tasks.length >= n) break;
+    if (!isMomentDraftBridgeRunnable(draft)) continue;
+    if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, now)) continue;
+    const risk = assessRisk([draft.text, draft.imageNotes]);
+    if (risk.level !== 'normal') continue;
+    tasks.push(momentTaskFrom(draft));
+  }
+  return tasks;
+}
+
+export function patchWecomBridgeMomentTaskDelivery(
+  actor: User,
+  taskId: string,
+  raw: any,
+): { task?: WecomBridgeMomentTask; draft: MomentDraft; event?: AutomationAuditEvent } {
+  ensureBridgeMomentTaskEnabled();
+  const draftId = String(taskId || raw?.draftId || '').trim();
+  const draft = data.momentDrafts.find((candidate) => candidate.id === draftId);
+  if (!draft) throw new Error('朋友圈 Bridge 任务不存在');
+  const deliveryStatus = normalizeBridgeMomentDeliveryStatus(raw?.deliveryStatus ?? raw?.status);
+  if (!deliveryStatus) throw new Error('Bridge 朋友圈任务状态不合法');
+  const now = new Date().toISOString();
+  const workerId = str(raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
+
+  if (deliveryStatus === 'claimed') {
+    if (!isMomentDraftBridgeRunnable(draft)) throw new Error('朋友圈草稿当前不可领取');
+    if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, now) && draft.bridgeClaimedBy && draft.bridgeClaimedBy !== workerId) {
+      throw new Error(`朋友圈草稿已由 ${draft.bridgeClaimedBy} 领取，未超时前不能重复领取`);
+    }
+    const risk = assessRisk([draft.text, draft.imageNotes]);
+    if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
+    if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
+    draft.bridgeClaimedAt = now;
+    draft.bridgeClaimedBy = workerId;
+    draft.bridgeClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
+    draft.bridgeFailedAt = undefined;
+    draft.bridgeError = undefined;
+    draft.updatedAt = now;
+    persist();
+    return { task: momentTaskFrom(draft), draft: cloneMomentDraft(draft) };
+  }
+
+  if (deliveryStatus === 'released') {
+    if (draft.status === 'published') throw new Error('已发布草稿不能释放领取');
+    clearMomentBridgeClaim(draft);
+    draft.updatedAt = now;
+    persist();
+    return { task: isMomentDraftBridgeRunnable(draft) ? momentTaskFrom(draft) : undefined, draft: cloneMomentDraft(draft) };
+  }
+
+  if (deliveryStatus === 'failed') {
+    if (draft.status === 'published') throw new Error('已发布草稿不能标记失败');
+    const msg = str(raw?.error ?? raw?.message ?? raw?.reason ?? 'Mac 端朋友圈执行失败', 300).trim() || 'Mac 端朋友圈执行失败';
+    draft.status = 'draft';
+    draft.approved = false;
+    draft.bridgeFailedAt = now;
+    draft.bridgeError = msg;
+    clearMomentBridgeClaim(draft);
+    draft.updatedAt = now;
+    const event = addAutomationAudit({
+      action: 'moment_draft_failed',
+      actor: actor.username,
+      message: `Bridge 朋友圈草稿「${draft.title}」准备失败：${msg}`,
+    });
+    persist();
+    return { draft: cloneMomentDraft(draft), event };
+  }
+
+  if (deliveryStatus === 'prepared') {
+    if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能标记已准备');
+    if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
+    if (draft.status === 'published') throw new Error('朋友圈草稿已标记发布');
+    const risk = assessRisk([draft.text, draft.imageNotes]);
+    if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
+    if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
+    draft.status = 'prepared';
+    draft.lastPreparedAt = now;
+    draft.bridgeFailedAt = undefined;
+    draft.bridgeError = undefined;
+    clearMomentBridgeClaim(draft);
+    draft.updatedAt = now;
+    const event = addAutomationAudit({
+      action: 'moment_draft_prepared',
+      actor: actor.username,
+      riskLevel: risk.level,
+      message: `Bridge 已准备朋友圈草稿「${draft.title}」，等待人工确认发布`,
+    });
+    persist();
+    return { draft: cloneMomentDraft(draft), event };
+  }
+
+  if (deliveryStatus === 'published') {
+    if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能标记发布');
+    if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
+    draft.status = 'published';
+    draft.publishedAt = now;
+    draft.bridgeFailedAt = undefined;
+    draft.bridgeError = undefined;
+    clearMomentBridgeClaim(draft);
+    draft.updatedAt = now;
+    const event = addAutomationAudit({
+      action: 'moment_draft_published',
+      actor: actor.username,
+      message: `Bridge 标记朋友圈草稿「${draft.title}」已发布`,
+    });
+    persist();
+    return { draft: cloneMomentDraft(draft), event };
+  }
+
+  throw new Error('Bridge 朋友圈任务状态不合法');
 }
 
 export function addAutomationAudit(event: Omit<AutomationAuditEvent, 'id' | 'timestamp'>): AutomationAuditEvent {
@@ -1324,6 +1492,9 @@ export async function prepareMomentDraft(
   if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能填入发布框');
   if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
   if (draft.status === 'published') throw new Error('朋友圈草稿已标记发布');
+  if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft)) {
+    throw new Error(`朋友圈草稿已由 ${draft.bridgeClaimedBy || 'Mac Bridge'} 领取，未超时前不能从 Web 重复准备`);
+  }
   const risk = assessRisk([draft.text, draft.imageNotes]);
   if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
   if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
@@ -1339,6 +1510,9 @@ export async function prepareMomentDraft(
   const now = new Date().toISOString();
   draft.status = 'prepared';
   draft.lastPreparedAt = now;
+  draft.bridgeFailedAt = undefined;
+  draft.bridgeError = undefined;
+  clearMomentBridgeClaim(draft);
   draft.updatedAt = now;
   const event = addAutomationAudit({
     action: 'moment_draft_prepared',
@@ -1639,6 +1813,7 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     note: str(raw?.note || '', 300).trim() || undefined,
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
     pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
+    pendingMomentTasks: clampInt(raw?.pendingMomentTasks, 0, 100000, 0),
     lastSeenAt: normalizeIsoDate(raw?.lastSeenAt, updatedAt),
     createdAt,
     updatedAt,
@@ -1718,6 +1893,11 @@ function normalizeMomentDraft(raw: any, preserveIds: boolean, now: string): Mome
     createdBy: str(raw?.createdBy, 80) || 'system',
     lastPreparedAt: typeof raw?.lastPreparedAt === 'string' && raw.lastPreparedAt ? raw.lastPreparedAt : undefined,
     publishedAt: typeof raw?.publishedAt === 'string' && raw.publishedAt ? raw.publishedAt : undefined,
+    bridgeClaimedAt: typeof raw?.bridgeClaimedAt === 'string' && raw.bridgeClaimedAt ? raw.bridgeClaimedAt : undefined,
+    bridgeClaimedBy: str(raw?.bridgeClaimedBy, 120).trim() || undefined,
+    bridgeClaimExpiresAt: typeof raw?.bridgeClaimExpiresAt === 'string' && raw.bridgeClaimExpiresAt ? raw.bridgeClaimExpiresAt : undefined,
+    bridgeFailedAt: typeof raw?.bridgeFailedAt === 'string' && raw.bridgeFailedAt ? raw.bridgeFailedAt : undefined,
+    bridgeError: str(raw?.bridgeError, 300).trim() || undefined,
   };
 }
 
@@ -1952,6 +2132,11 @@ function ensureBridgeMassTaskEnabled() {
   if (!data.settings.massSendEnabled) throw new Error('群发队列开关未开启');
 }
 
+function ensureBridgeMomentTaskEnabled() {
+  if (!data.settings.enabled) throw new Error('自动化总开关未开启');
+  if (!data.settings.momentsEnabled) throw new Error('朋友圈半自动开关未开启');
+}
+
 function isMassJobBridgeRunnable(job: MassSendJob): boolean {
   return job.approved && (job.status === 'queued' || job.status === 'running') && !!job.message.trim();
 }
@@ -1984,6 +2169,45 @@ function parseMassTaskId(taskId: string): { jobId: string; itemId: string } {
   const index = raw.indexOf(':');
   if (index <= 0 || index >= raw.length - 1) throw new Error('群发任务 ID 不合法');
   return { jobId: raw.slice(0, index), itemId: raw.slice(index + 1) };
+}
+
+function isMomentDraftBridgeRunnable(draft: MomentDraft): boolean {
+  return draft.approved && draft.status === 'ready' && !!draft.text.trim() && !draft.bridgeFailedAt;
+}
+
+function isMomentDraftBridgeClaimExpired(draft: MomentDraft, nowIso = new Date().toISOString()): boolean {
+  if (!draft.bridgeClaimedAt) return false;
+  const expiresAt = draft.bridgeClaimExpiresAt || claimExpiresAt(draft.bridgeClaimedAt, DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS);
+  const expiresMs = Date.parse(expiresAt);
+  const nowMs = Date.parse(nowIso);
+  return Number.isFinite(expiresMs) && Number.isFinite(nowMs) && expiresMs <= nowMs;
+}
+
+function momentTaskFrom(draft: MomentDraft): WecomBridgeMomentTask {
+  return {
+    id: draft.id,
+    draftId: draft.id,
+    title: draft.title,
+    text: draft.text,
+    imageNotes: draft.imageNotes,
+    materials: [...draft.materials],
+    status: draft.status,
+    claimedAt: draft.bridgeClaimedAt,
+    claimedBy: draft.bridgeClaimedBy,
+    claimExpiresAt: draft.bridgeClaimExpiresAt,
+  };
+}
+
+function clearMomentBridgeClaim(draft: MomentDraft) {
+  draft.bridgeClaimedAt = undefined;
+  draft.bridgeClaimedBy = undefined;
+  draft.bridgeClaimExpiresAt = undefined;
+}
+
+function clearMomentBridgeState(draft: MomentDraft) {
+  clearMomentBridgeClaim(draft);
+  draft.bridgeFailedAt = undefined;
+  draft.bridgeError = undefined;
 }
 
 function cloneRule(rule: AutomationRule): AutomationRule {
@@ -2053,6 +2277,11 @@ function normalizeBridgeReplyDeliveryStatus(value: unknown): WecomBridgeReplyDel
 
 function normalizeBridgeMassDeliveryStatus(value: unknown): WecomBridgeMassDeliveryStatus | null {
   if (value === 'claimed' || value === 'failed' || value === 'sent' || value === 'delivered' || value === 'released') return value;
+  return null;
+}
+
+function normalizeBridgeMomentDeliveryStatus(value: unknown): WecomBridgeMomentDeliveryStatus | null {
+  if (value === 'claimed' || value === 'failed' || value === 'prepared' || value === 'published' || value === 'released') return value;
   return null;
 }
 

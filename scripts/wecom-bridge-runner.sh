@@ -17,6 +17,7 @@ fi
 CLIENT="${WECOM_BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
 MASS_HANDLER="${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}"
+MOMENT_HANDLER="${WECOM_MOMENT_HANDLER:-$ROOT/scripts/wecom-mac-moment-handler.sh}"
 MODE="${WECOM_RUNNER_MODE:-dry-run}"
 TARGET="${WECOM_RUNNER_TARGET:-replies}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
@@ -35,18 +36,23 @@ Required environment/config:
 
 Optional:
   WECOM_RUNNER_MODE=dry-run|prepare|send   default: dry-run
-  WECOM_RUNNER_TARGET=replies|mass          default: replies
+  WECOM_RUNNER_TARGET=replies|mass|moments  default: replies
   WECOM_RUNNER_LIMIT=5
   WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
   WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
+  WECOM_MOMENT_HANDLER=./scripts/wecom-mac-moment-handler.sh
+  WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
   WECOM_ALLOW_SEND=1                       required for send
 
 Modes:
-  dry-run  - list approved replies only; no claim, no window automation
-  prepare  - claim one or more replies, paste into WeCom input box, do not send
-  send     - claim, paste, press Enter, mark delivered; requires WECOM_ALLOW_SEND=1
+  dry-run  - list target tasks only; no claim, no window automation
+  prepare  - claim target tasks, prepare content in WeCom, do not publish/send
+  send     - claim reply/mass tasks, paste, press Enter, mark delivered; requires WECOM_ALLOW_SEND=1
+
+For WECOM_RUNNER_TARGET=moments, only dry-run and prepare are supported. prepare
+copies the approved draft to the clipboard by default and marks it prepared.
 EOF
 }
 
@@ -57,7 +63,7 @@ case "$cmd" in
     exit 0
     ;;
   print-config)
-    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MODE" "$TARGET" "$LIMIT"
+    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT"
     exit 0
     ;;
   run-once)
@@ -73,8 +79,13 @@ if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
   exit 2
 fi
 
-if [[ "$TARGET" != "replies" && "$TARGET" != "mass" ]]; then
-  echo "ERROR: WECOM_RUNNER_TARGET must be replies or mass." >&2
+if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" ]]; then
+  echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, or moments." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" == "moments" && "$MODE" == "send" ]]; then
+  echo "ERROR: WECOM_RUNNER_TARGET=moments does not support send mode; run prepare, review manually, then use mark-moment-published." >&2
   exit 2
 fi
 
@@ -95,6 +106,9 @@ case "$MODE" in
     if [[ "$TARGET" == "mass" ]]; then
       exec node "$CLIENT" run-mass --limit "$LIMIT" --dry-run
     fi
+    if [[ "$TARGET" == "moments" ]]; then
+      exec node "$CLIENT" run-moments --limit "$LIMIT" --dry-run
+    fi
     exec node "$CLIENT" run-approved --limit "$LIMIT" --dry-run
     ;;
   prepare)
@@ -105,6 +119,15 @@ case "$MODE" in
         --handler "$MASS_HANDLER" \
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
+        --report-failure
+    fi
+    if [[ "$TARGET" == "moments" ]]; then
+      exec node "$CLIENT" run-moments \
+        --limit "$LIMIT" \
+        --handler "$MOMENT_HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --mark-prepared \
         --report-failure
     fi
     exec node "$CLIENT" run-approved \

@@ -10,6 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRIDGE_CLIENT="${BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 WECOM_REPLY_HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
 WECOM_MASS_HANDLER="${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}"
+WECOM_MOMENT_HANDLER="${WECOM_MOMENT_HANDLER:-$ROOT/scripts/wecom-mac-moment-handler.sh}"
 WECOM_BRIDGE_RUNNER="${WECOM_BRIDGE_RUNNER:-$ROOT/scripts/wecom-bridge-runner.sh}"
 stamp="$(date +%Y%m%d%H%M%S)"
 cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
@@ -370,6 +371,22 @@ PY
   WECOM_HANDLER_MODE=dry-run "$WECOM_MASS_HANDLER" <<<"$mass_handler_payload" > "$body_file"
   json_assert_path ok
 
+  say "Check WeCom moment handler dry-run"
+  moment_handler_payload="$(python3 <<'PY'
+import json
+print(json.dumps({
+    "id": "smoke-moment",
+    "draftId": "smoke-moment",
+    "title": "smoke moment handler",
+    "text": "这是一条 Bridge smoke 测试朋友圈草稿，不会发布。",
+    "imageNotes": "无需配图",
+    "materials": [],
+}, ensure_ascii=False))
+PY
+)"
+  WECOM_HANDLER_MODE=dry-run "$WECOM_MOMENT_HANDLER" <<<"$moment_handler_payload" > "$body_file"
+  json_assert_path ok
+
   say "Enable automation mass-send for Bridge task smoke"
   request_json GET /api/admin/automation/config
   mass_config_payload="$(python3 - "$body_file" <<'PY'
@@ -382,6 +399,7 @@ config = payload["config"]
 settings = config["settings"]
 settings["enabled"] = True
 settings["massSendEnabled"] = True
+settings["momentsEnabled"] = True
 settings["maximumAutomaticSendsPerHour"] = 200
 settings["perConversationCooldownMinutes"] = 0
 config["settings"] = settings
@@ -464,6 +482,73 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-mass-sent "$bridge_mass_sent_task_id" --worker-id smoke-worker > "$body_file"
   json_assert_eq item.status sent
   json_assert_eq job.status completed
+
+  say "Claim, release, fail, prepare and publish WeCom moment Bridge tasks"
+  bridge_moment_title="smoke-bridge-moment-$stamp"
+  bridge_moment_payload="$(python3 - "$bridge_moment_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1]
+print(json.dumps({
+    "title": title,
+    "text": "这是一条 Bridge smoke 测试朋友圈草稿，不会发布。",
+    "imageNotes": "无需配图",
+    "materials": [],
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/moment-drafts "$bridge_moment_payload"
+  json_assert_path draft.id
+  bridge_moment_draft_id="$(json_get draft.id)"
+  request_json PATCH "/api/admin/automation/moment-drafts/$bridge_moment_draft_id" '{"approved":true,"status":"ready"}'
+  json_assert_eq draft.status ready
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=moments "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  json_assert_path handled[0].dryRun
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 20 > "$body_file"
+  json_assert_path tasks[0].id
+  bridge_moment_task_id="$(json_get tasks[0].id)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-moment-task "$bridge_moment_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_path task.claimedAt
+  json_assert_eq task.claimedBy smoke-worker
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 20 > "$body_file"
+  json_assert_no_task_id "$bridge_moment_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" release-moment-task "$bridge_moment_task_id" --worker-id smoke-worker --reason "smoke release moment task" > "$body_file"
+  json_assert_missing_or_empty task.claimedAt
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 20 > "$body_file"
+  json_assert_task_id "$bridge_moment_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-moment-task "$bridge_moment_task_id" --worker-id smoke-worker --claim-ttl-seconds 120 > "$body_file"
+  json_assert_path task.claimExpiresAt
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-moment-failed "$bridge_moment_task_id" --worker-id smoke-worker --error "smoke moment handler failed once" > "$body_file"
+  json_assert_eq draft.status draft
+  json_assert_eq draft.approved False
+
+  bridge_moment_prepare_payload="$(python3 - "$bridge_moment_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1] + "-prepared"
+print(json.dumps({
+    "title": title,
+    "text": "这是一条 Bridge smoke 测试朋友圈草稿，不会发布。",
+    "imageNotes": "无需配图",
+    "materials": [],
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/moment-drafts "$bridge_moment_prepare_payload"
+  json_assert_path draft.id
+  bridge_moment_prepare_id="$(json_get draft.id)"
+  request_json PATCH "/api/admin/automation/moment-drafts/$bridge_moment_prepare_id" '{"approved":true,"status":"ready"}'
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 20 > "$body_file"
+  json_assert_path tasks[0].id
+  bridge_moment_prepare_task_id="$(json_get tasks[0].id)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-moment-task "$bridge_moment_prepare_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_path task.claimedAt
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-moment-prepared "$bridge_moment_prepare_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_eq draft.status prepared
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-moment-published "$bridge_moment_prepare_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_eq draft.status published
 fi
 
 say "Simulate inbound message without sending"

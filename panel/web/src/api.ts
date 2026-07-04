@@ -137,6 +137,7 @@ export interface WecomBridgeWorkerStatus {
   note?: string;
   pendingReplies: number;
   pendingMassTasks: number;
+  pendingMomentTasks: number;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
@@ -156,6 +157,7 @@ export interface AutomationBridgeStatus {
   eventEndpoint: string;
   replyEndpoint: string;
   massTaskEndpoint: string;
+  momentTaskEndpoint: string;
   heartbeatEndpoint: string;
   workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];
@@ -284,6 +286,11 @@ export interface MomentDraft {
   createdBy: string;
   lastPreparedAt?: string;
   publishedAt?: string;
+  bridgeClaimedAt?: string;
+  bridgeClaimedBy?: string;
+  bridgeClaimExpiresAt?: string;
+  bridgeFailedAt?: string;
+  bridgeError?: string;
 }
 
 // 原始二进制上传（File 直传 application/octet-stream），用于数据卷上传/解压/恢复

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r19-mass-bridge';
+const CLIENT_VERSION = 'automation-lab-r20-moment-bridge';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -29,6 +29,13 @@ Commands:
   mark-mass-sent <taskId> [--worker-id name]
   mark-mass-failed <taskId> [--worker-id name] [--error text]
   run-mass --handler "command" [--limit 10] [--claim] [--mark-sent] [--report-failure]
+  pull-moment-tasks [--limit 50]
+  claim-moment-task <taskId> [--worker-id name] [--claim-ttl-seconds 300]
+  release-moment-task <taskId> [--worker-id name] [--reason text]
+  mark-moment-prepared <taskId> [--worker-id name]
+  mark-moment-published <taskId> [--worker-id name]
+  mark-moment-failed <taskId> [--worker-id name] [--error text]
+  run-moments --handler "command" [--limit 10] [--claim] [--mark-prepared] [--report-failure]
 
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
@@ -39,6 +46,7 @@ Examples:
   node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --claim-ttl-seconds 300 --mark-delivered --report-failure
   node scripts/wecom-bridge-client.mjs pull-mass-tasks --limit 5
   node scripts/wecom-bridge-client.mjs run-mass --handler "./scripts/wecom-mac-mass-handler.sh" --claim --mark-sent --report-failure
+  node scripts/wecom-bridge-client.mjs run-moments --handler "./scripts/wecom-mac-moment-handler.sh" --claim --mark-prepared --report-failure
 `;
 
 class BridgeError extends Error {
@@ -214,6 +222,27 @@ async function runMassHandler(command, task) {
   });
 }
 
+async function runMomentHandler(command, task) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, {
+      shell: true,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      env: {
+        ...process.env,
+        WECOM_BRIDGE_MOMENT_TASK_ID: task.id || '',
+        WECOM_BRIDGE_MOMENT_DRAFT_ID: task.draftId || task.id || '',
+        WECOM_BRIDGE_MOMENT_TITLE: task.title || '',
+        WECOM_BRIDGE_MOMENT_TEXT: task.text || '',
+        WECOM_BRIDGE_MOMENT_IMAGE_NOTES: task.imageNotes || '',
+        WECOM_BRIDGE_MOMENT_MATERIALS: Array.isArray(task.materials) ? task.materials.join('\n') : '',
+      },
+    });
+    child.on('error', reject);
+    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal }));
+    child.stdin.end(`${JSON.stringify(task)}\n`);
+  });
+}
+
 async function main() {
   const { command, options, positional } = parseArgs(process.argv.slice(2));
   if (command === 'help' || command === '--help' || command === '-h') {
@@ -261,6 +290,12 @@ async function main() {
   if (command === 'pull-mass-tasks') {
     const limit = intOpt(options.limit, 50, 1, 200);
     printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`));
+    return;
+  }
+
+  if (command === 'pull-moment-tasks') {
+    const limit = intOpt(options.limit, 50, 1, 200);
+    printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`));
     return;
   }
 
@@ -366,6 +401,69 @@ async function main() {
     return;
   }
 
+  if (command === 'claim-moment-task') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for claim-moment-task.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'claimed',
+        workerId: workerId(options),
+        claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'release-moment-task') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for release-moment-task.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'released',
+        workerId: workerId(options),
+        reason: String(options.reason || options.message || 'released by Mac bridge client'),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'mark-moment-prepared') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for mark-moment-prepared.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'prepared',
+        workerId: workerId(options),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'mark-moment-published') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for mark-moment-published.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'published',
+        workerId: workerId(options),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'mark-moment-failed') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for mark-moment-failed.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'failed',
+        workerId: workerId(options),
+        error: String(options.error || options.message || 'Mac moment handler failed'),
+      }),
+    );
+    return;
+  }
+
   if (command === 'run-approved') {
     const handler = options.handler;
     const limit = intOpt(options.limit, 10, 1, 50);
@@ -455,6 +553,67 @@ async function main() {
       handled.push(item);
     }
     printJson({ handled, total: tasks.length, claimed: claim, markedSent: markSent, reportedFailure: reportFailure });
+    return;
+  }
+
+  if (command === 'run-moments') {
+    const handler = options.handler;
+    const limit = intOpt(options.limit, 10, 1, 50);
+    const claim = boolOpt(options, 'claim', 'claim-first');
+    const markPrepared = boolOpt(options, 'mark-prepared', 'ack', 'ack-prepared');
+    const markPublished = boolOpt(options, 'mark-published', 'ack-published');
+    const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
+    const dryRun = boolOpt(options, 'dry-run');
+    if (!handler && !dryRun) throw new BridgeError('run-moments requires --handler or --dry-run.');
+    if (markPrepared && markPublished) throw new BridgeError('run-moments cannot use --mark-prepared and --mark-published together.');
+    const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`);
+    const handled = [];
+    for (const task of tasks) {
+      if (dryRun) {
+        handled.push({ id: task.id, title: task.title, dryRun: true });
+        continue;
+      }
+      let runnable = task;
+      if (claim) {
+        const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'claimed',
+          workerId: workerId(options),
+          claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
+        });
+        runnable = claimed.task || task;
+      }
+      const result = await runMomentHandler(handler, runnable);
+      const ok = result.code === 0;
+      const item = { id: task.id, title: task.title, ok, exitCode: result.code, signal: result.signal, claimed: claim };
+      if (ok && markPrepared) {
+        item.prepared = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'prepared',
+          workerId: workerId(options),
+        });
+      }
+      if (ok && markPublished) {
+        item.published = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'published',
+          workerId: workerId(options),
+        });
+      }
+      if (!ok && reportFailure) {
+        item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'failed',
+          workerId: workerId(options),
+          error: `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
+        });
+      }
+      handled.push(item);
+    }
+    printJson({
+      handled,
+      total: tasks.length,
+      claimed: claim,
+      markedPrepared: markPrepared,
+      markedPublished: markPublished,
+      reportedFailure: reportFailure,
+    });
     return;
   }
 
