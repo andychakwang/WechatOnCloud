@@ -1273,6 +1273,14 @@ button {
   white-space: nowrap;
   font-size: 13.5px;
 }
+.auto-snippet {
+  display: -webkit-box;
+  margin-top: 3px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
+}
 .auto-actions {
   display: flex;
   flex-wrap: wrap;

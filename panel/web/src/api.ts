@@ -101,6 +101,31 @@ export interface AutomationRule {
   updatedAt: string;
 }
 
+export type AutomationKnowledgeCategory = 'faq' | 'script' | 'policy' | 'contact-group' | 'moment-material' | 'other';
+
+export interface AutomationKnowledgeItem {
+  id: string;
+  title: string;
+  category: AutomationKnowledgeCategory;
+  enabled: boolean;
+  approved: boolean;
+  source: string;
+  tags: string[];
+  triggers: string[];
+  content: string;
+  targetNames: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationKnowledgeImportResult {
+  items: AutomationKnowledgeItem[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface AutomationSettings {
   enabled: boolean;
   aiDraftEnabled: boolean;
@@ -117,6 +142,7 @@ export interface AutomationConfig {
   persona: string;
   knowledgeNotes: string;
   rules: AutomationRule[];
+  knowledgeItems: AutomationKnowledgeItem[];
 }
 
 export interface AutomationAuditEvent {
@@ -250,6 +276,29 @@ export const api = {
   getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
+  importAutomationKnowledge: (payload: {
+    source?: string;
+    category?: AutomationKnowledgeCategory;
+    approveImported?: boolean;
+    enabled?: boolean;
+    mode?: 'append' | 'upsert';
+    items?: any[];
+    rawText?: string;
+    text?: string;
+  }) =>
+    req<{ result: AutomationKnowledgeImportResult }>('/api/admin/automation/knowledge/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  patchAutomationKnowledge: (itemId: string, payload: Partial<AutomationKnowledgeItem>) =>
+    req<{ item: AutomationKnowledgeItem }>(`/api/admin/automation/knowledge/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteAutomationKnowledge: (itemId: string) =>
+    req<{ ok: true }>(`/api/admin/automation/knowledge/${itemId}`, {
+      method: 'DELETE',
+    }),
   simulateAutomation: (inboundText: string) =>
     req<{ decision: AutomationDecision }>('/api/admin/automation/simulate', { method: 'POST', body: JSON.stringify({ inboundText }) }),
   automationReplyPlan: (payload: { inboundText: string; conversationContext?: string; extraInstruction?: string }) =>

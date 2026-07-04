@@ -20,6 +20,31 @@ export interface AutomationRule {
   updatedAt: string;
 }
 
+export type AutomationKnowledgeCategory = 'faq' | 'script' | 'policy' | 'contact-group' | 'moment-material' | 'other';
+
+export interface AutomationKnowledgeItem {
+  id: string;
+  title: string;
+  category: AutomationKnowledgeCategory;
+  enabled: boolean;
+  approved: boolean;
+  source: string;
+  tags: string[];
+  triggers: string[];
+  content: string;
+  targetNames: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationKnowledgeImportResult {
+  items: AutomationKnowledgeItem[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface AutomationSettings {
   enabled: boolean;
   aiDraftEnabled: boolean;
@@ -36,6 +61,7 @@ export interface AutomationConfig {
   persona: string;
   knowledgeNotes: string;
   rules: AutomationRule[];
+  knowledgeItems: AutomationKnowledgeItem[];
 }
 
 export type RiskLevel = 'normal' | 'review' | 'block';
@@ -138,6 +164,7 @@ interface AutomationData extends AutomationConfig {
 
 const FILE = process.env.PANEL_AUTOMATION_DATA || '/data/automation.json';
 const MAX_AUDIT_EVENTS = 1000;
+const MAX_KNOWLEDGE_ITEMS = 500;
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   enabled: false,
@@ -155,6 +182,7 @@ const DEFAULT_DATA: AutomationData = {
   persona: '',
   knowledgeNotes: '',
   rules: [],
+  knowledgeItems: [],
   massSendJobs: [],
   momentDrafts: [],
   auditEvents: [],
@@ -178,6 +206,7 @@ export function getAutomationConfig(): AutomationConfig {
     persona: data.persona,
     knowledgeNotes: data.knowledgeNotes,
     rules: data.rules.map(cloneRule),
+    knowledgeItems: data.knowledgeItems.map(cloneKnowledgeItem),
   };
 }
 
@@ -188,6 +217,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       persona: raw?.persona ?? data.persona,
       knowledgeNotes: raw?.knowledgeNotes ?? data.knowledgeNotes,
       rules: raw?.rules ?? data.rules,
+      knowledgeItems: raw?.knowledgeItems ?? data.knowledgeItems,
       massSendJobs: data.massSendJobs,
       momentDrafts: data.momentDrafts,
       auditEvents: data.auditEvents,
@@ -196,6 +226,121 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
   );
   persist();
   return getAutomationConfig();
+}
+
+export function importAutomationKnowledge(actor: User, raw: any): AutomationKnowledgeImportResult {
+  const now = new Date().toISOString();
+  const source = str(raw?.source || raw?.sourceName || 'wecom-mac', 80).trim() || 'wecom-mac';
+  const defaultCategory = normalizeKnowledgeCategory(raw?.category) || 'faq';
+  const defaultApproved = raw?.approveImported === true || raw?.approved === true;
+  const defaultEnabled = raw?.enabled !== false;
+  const mode = raw?.mode === 'append' ? 'append' : 'upsert';
+  const rawItems = extractKnowledgeImportItems(raw, defaultCategory).slice(0, 200);
+  const result: AutomationKnowledgeImportResult = {
+    items: [],
+    imported: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const [index, rawItem] of rawItems.entries()) {
+    try {
+      const item = normalizeKnowledgeItem(
+        {
+          ...rawItem,
+          source: rawItem?.source || source,
+          category: rawItem?.category || defaultCategory,
+          enabled: typeof rawItem?.enabled === 'boolean' ? rawItem.enabled : defaultEnabled,
+          approved: typeof rawItem?.approved === 'boolean' ? rawItem.approved : defaultApproved,
+          createdAt: now,
+          updatedAt: now,
+        },
+        false,
+        now,
+      );
+      if (!item.title.trim()) throw new Error('标题为空');
+      if (!item.content.trim() && item.targetNames.length === 0) throw new Error('内容和目标名单都为空');
+
+      const existingIndex =
+        mode === 'upsert'
+          ? data.knowledgeItems.findIndex(
+              (x) => x.source.toLowerCase() === item.source.toLowerCase() && x.title.toLowerCase() === item.title.toLowerCase(),
+            )
+          : -1;
+      if (existingIndex >= 0) {
+        const existing = data.knowledgeItems[existingIndex];
+        const saved = {
+          ...item,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          updatedAt: now,
+        };
+        data.knowledgeItems[existingIndex] = saved;
+        result.updated += 1;
+        result.items.push(cloneKnowledgeItem(saved));
+      } else {
+        data.knowledgeItems.push(item);
+        result.imported += 1;
+        result.items.push(cloneKnowledgeItem(item));
+      }
+    } catch (e: any) {
+      result.skipped += 1;
+      result.errors.push(`第 ${index + 1} 条跳过：${e?.message || e}`);
+    }
+  }
+
+  if (data.knowledgeItems.length > MAX_KNOWLEDGE_ITEMS) {
+    data.knowledgeItems = data.knowledgeItems.slice(-MAX_KNOWLEDGE_ITEMS);
+  }
+  if (result.imported || result.updated) {
+    persist();
+    addAutomationAudit({
+      action: 'knowledge_imported',
+      actor: actor.username,
+      message: `导入企微接入资料：新增 ${result.imported} 条，更新 ${result.updated} 条，跳过 ${result.skipped} 条`,
+    });
+  }
+  return result;
+}
+
+export function patchAutomationKnowledge(actor: User, itemId: string, raw: any): AutomationKnowledgeItem {
+  const current = data.knowledgeItems.find((item) => item.id === itemId);
+  if (!current) throw new Error('接入资料不存在');
+  const now = new Date().toISOString();
+  const next = normalizeKnowledgeItem(
+    {
+      ...current,
+      ...raw,
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: now,
+    },
+    true,
+    now,
+  );
+  if (!next.content.trim() && next.targetNames.length === 0) throw new Error('内容和目标名单不能同时为空');
+  Object.assign(current, next);
+  persist();
+  addAutomationAudit({
+    action: 'knowledge_updated',
+    actor: actor.username,
+    message: `更新企微接入资料「${current.title}」：${current.enabled ? '启用' : '停用'}，${current.approved ? '已审核' : '未审核'}`,
+  });
+  return cloneKnowledgeItem(current);
+}
+
+export function deleteAutomationKnowledge(actor: User, itemId: string): { ok: true } {
+  const index = data.knowledgeItems.findIndex((item) => item.id === itemId);
+  if (index < 0) throw new Error('接入资料不存在');
+  const [removed] = data.knowledgeItems.splice(index, 1);
+  persist();
+  addAutomationAudit({
+    action: 'knowledge_deleted',
+    actor: actor.username,
+    message: `删除企微接入资料「${removed.title}」`,
+  });
+  return { ok: true };
 }
 
 export function listAutomationAudit(limit = 200): AutomationAuditEvent[] {
@@ -741,6 +886,10 @@ export async function draftAutomationReply(req: DraftReplyRequest): Promise<Draf
   if (!apiKey) throw new Error('未配置 AUTOMATION_AI_API_KEY 或 OPENAI_API_KEY');
   const baseUrl = stripTrailingSlash(process.env.AUTOMATION_AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
   const model = process.env.AUTOMATION_AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const matchedKnowledgeItems = selectKnowledgeForAi(
+    [inboundText, String(req.conversationContext || ''), String(req.extraInstruction || '')],
+    8,
+  );
 
   const payload = {
     model,
@@ -761,6 +910,7 @@ export async function draftAutomationReply(req: DraftReplyRequest): Promise<Draf
           {
             persona: data.persona,
             knowledgeNotes: data.knowledgeNotes.slice(0, 6000),
+            matchedKnowledgeItems: formatKnowledgeForPrompt(matchedKnowledgeItems),
             conversationContext: String(req.conversationContext || '').slice(0, 4000),
             inboundText,
             extraInstruction: String(req.extraInstruction || '').slice(0, 1000),
@@ -818,6 +968,10 @@ export async function draftMomentContent(req: DraftMomentRequest): Promise<Draft
   if (!apiKey) throw new Error('未配置 AUTOMATION_AI_API_KEY 或 OPENAI_API_KEY');
   const baseUrl = stripTrailingSlash(process.env.AUTOMATION_AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
   const model = process.env.AUTOMATION_AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const matchedKnowledgeItems = selectKnowledgeForAi(
+    [topic, String(req.audience || ''), String(req.tone || ''), String(req.extraInstruction || '')],
+    8,
+  );
   const payload = {
     model,
     temperature: 0.55,
@@ -837,6 +991,7 @@ export async function draftMomentContent(req: DraftMomentRequest): Promise<Draft
           {
             persona: data.persona,
             knowledgeNotes: data.knowledgeNotes.slice(0, 6000),
+            matchedKnowledgeItems: formatKnowledgeForPrompt(matchedKnowledgeItems),
             topic,
             audience: String(req.audience || '').slice(0, 500),
             tone: String(req.tone || '').slice(0, 120) || '自然、克制、有个人感',
@@ -873,6 +1028,7 @@ export async function draftMomentContent(req: DraftMomentRequest): Promise<Draft
 function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const now = new Date().toISOString();
   const rulesRaw = Array.isArray(raw?.rules) ? raw.rules : [];
+  const knowledgeRaw = Array.isArray(raw?.knowledgeItems) ? raw.knowledgeItems : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
   const momentDraftsRaw = Array.isArray(raw?.momentDrafts) ? raw.momentDrafts : [];
   return {
@@ -880,6 +1036,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     persona: str(raw?.persona, 2000),
     knowledgeNotes: str(raw?.knowledgeNotes, 50000),
     rules: rulesRaw.slice(0, 200).map((r: any) => normalizeRule(r, preserveIds, now)),
+    knowledgeItems: knowledgeRaw.slice(-MAX_KNOWLEDGE_ITEMS).map((item: any) => normalizeKnowledgeItem(item, preserveIds, now)),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
     auditEvents: Array.isArray(raw?.auditEvents) ? raw.auditEvents.slice(-MAX_AUDIT_EVENTS).map(normalizeAuditEvent).filter(Boolean) : [],
@@ -915,6 +1072,31 @@ function normalizeRule(raw: any, preserveIds: boolean, now: string): AutomationR
     responseSteps: Array.isArray(raw?.responseSteps) ? raw.responseSteps.map(normalizeStep).filter(Boolean).slice(0, 30) : [],
     createdAt,
     updatedAt: now,
+  };
+}
+
+function normalizeKnowledgeItem(raw: any, preserveIds: boolean, now: string): AutomationKnowledgeItem {
+  const content = str(raw?.content ?? raw?.answer ?? raw?.text ?? raw?.script ?? raw?.body ?? raw?.notes ?? raw?.reply, 12000).trim();
+  const targetNames = normalizeStringList(raw?.targetNames ?? raw?.targets ?? raw?.recipients ?? raw?.contacts ?? raw?.groups, 120, 500);
+  const title =
+    str(raw?.title ?? raw?.name ?? raw?.question ?? raw?.label, 120).trim() ||
+    deriveTitleFromContent(content) ||
+    (targetNames.length ? `联系人分组 ${targetNames[0]}` : '未命名资料');
+  const category = normalizeKnowledgeCategory(raw?.category ?? raw?.type) || 'other';
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    title,
+    category,
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : true,
+    approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    source: str(raw?.source || 'manual', 80).trim() || 'manual',
+    tags: normalizeStringList(raw?.tags ?? raw?.labels ?? raw?.keywords, 60, 30),
+    triggers: normalizeStringList(raw?.triggers ?? raw?.keywords ?? raw?.questions ?? raw?.match, 80, 50),
+    content,
+    targetNames,
+    createdAt,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
   };
 }
 
@@ -1051,6 +1233,60 @@ function ruleText(rule: AutomationRule): string {
     .join('\n');
 }
 
+function selectKnowledgeForAi(parts: string[], limit: number): AutomationKnowledgeItem[] {
+  const haystack = parts
+    .map((part) => String(part || '').toLowerCase())
+    .filter(Boolean)
+    .join('\n');
+  const candidates = data.knowledgeItems.filter((item) => item.enabled && item.approved);
+  const scored = candidates
+    .map((item) => ({ item, score: scoreKnowledgeItem(item, haystack) }))
+    .filter((hit) => hit.score > 0)
+    .sort((a, b) => b.score - a.score || Date.parse(b.item.updatedAt) - Date.parse(a.item.updatedAt));
+
+  if (scored.length) return scored.slice(0, limit).map((hit) => cloneKnowledgeItem(hit.item));
+
+  return candidates
+    .filter((item) => item.category === 'policy' || item.category === 'faq' || item.category === 'script')
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, Math.min(limit, 5))
+    .map(cloneKnowledgeItem);
+}
+
+function scoreKnowledgeItem(item: AutomationKnowledgeItem, haystack: string): number {
+  if (!haystack) return 0;
+  let score = 0;
+  for (const trigger of item.triggers) {
+    if (needleHit(trigger, haystack)) score += 8;
+  }
+  for (const tag of item.tags) {
+    if (needleHit(tag, haystack)) score += 4;
+  }
+  if (needleHit(item.title, haystack)) score += 3;
+  for (const target of item.targetNames) {
+    if (needleHit(target, haystack)) score += 2;
+  }
+  if (item.category === 'policy') score += 1;
+  return score;
+}
+
+function needleHit(value: string, haystack: string): boolean {
+  const needle = value.trim().toLowerCase();
+  return needle.length >= 2 && haystack.includes(needle);
+}
+
+function formatKnowledgeForPrompt(items: AutomationKnowledgeItem[]) {
+  return items.map((item) => ({
+    title: item.title,
+    category: item.category,
+    source: item.source,
+    tags: item.tags.slice(0, 12),
+    triggers: item.triggers.slice(0, 12),
+    targetNames: item.targetNames.slice(0, 30),
+    content: item.content.slice(0, 1600),
+  }));
+}
+
 function assessRisk(parts: string[]): RiskAssessment {
   const content = parts.join('\n');
   const blocked = ['投诉', '举报', '律师', '起诉', '报警', '退款', '退费', '转账', '付款', '支付', '银行卡', '账号', '验证码', '保证通过', '包过', '承诺'];
@@ -1154,6 +1390,15 @@ function cloneRule(rule: AutomationRule): AutomationRule {
   return { ...rule, triggers: [...rule.triggers], responseSteps: rule.responseSteps.map((s) => ({ ...s })) };
 }
 
+function cloneKnowledgeItem(item: AutomationKnowledgeItem): AutomationKnowledgeItem {
+  return {
+    ...item,
+    tags: [...item.tags],
+    triggers: [...item.triggers],
+    targetNames: [...item.targetNames],
+  };
+}
+
 function cloneMassSendJob(job: MassSendJob): MassSendJob {
   return {
     ...job,
@@ -1181,6 +1426,94 @@ function normalizeMassSendJobStatus(value: unknown): MassSendJobStatus | null {
 
 function normalizeMomentDraftStatus(value: unknown): MomentDraftStatus | null {
   return value === 'draft' || value === 'ready' || value === 'prepared' || value === 'published' || value === 'archived' ? value : null;
+}
+
+function normalizeKnowledgeCategory(value: unknown): AutomationKnowledgeCategory | null {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (!raw) return null;
+  if (['faq', 'qa', '问答', '常见问题'].includes(raw)) return 'faq';
+  if (['script', '话术', 'sop', 'reply', '回复'].includes(raw)) return 'script';
+  if (['policy', '规则', '边界', '禁答', 'policy-note'].includes(raw)) return 'policy';
+  if (['contact-group', 'contacts', 'group', '联系人', '群发名单', '人群分组'].includes(raw)) return 'contact-group';
+  if (['moment-material', 'moments', '朋友圈', '素材', '运营素材'].includes(raw)) return 'moment-material';
+  if (raw === 'other' || raw === '其它' || raw === '其他') return 'other';
+  return 'other';
+}
+
+function extractKnowledgeImportItems(raw: any, fallbackCategory: AutomationKnowledgeCategory): any[] {
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.items)) return raw.items;
+  const rawText = typeof raw?.rawText === 'string' ? raw.rawText : typeof raw?.text === 'string' ? raw.text : '';
+  if (!rawText.trim()) return [];
+
+  const parsed = tryParseJson(rawText);
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && Array.isArray(parsed.items)) return parsed.items;
+  if (parsed && typeof parsed === 'object') return [parsed];
+  return parseKnowledgeText(rawText, fallbackCategory);
+}
+
+function tryParseJson(text: string): any | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function parseKnowledgeText(text: string, fallbackCategory: AutomationKnowledgeCategory): any[] {
+  return str(text, 120000)
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .slice(0, 200)
+    .map((block) => parseKnowledgeBlock(block, fallbackCategory));
+}
+
+function parseKnowledgeBlock(block: string, fallbackCategory: AutomationKnowledgeCategory): any {
+  const lines = block
+    .split(/\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const mapped: Record<string, string> = {};
+  const body: string[] = [];
+  for (const line of lines) {
+    const match = line.match(/^(title|name|question|tags|triggers|targets|recipients|category|标题|名称|问题|标签|关键词|触发词|目标|联系人|分类)\s*[:：]\s*(.+)$/i);
+    if (match) {
+      mapped[match[1].toLowerCase()] = match[2].trim();
+    } else {
+      body.push(line.replace(/^#+\s*/, ''));
+    }
+  }
+  const title = mapped.title || mapped.name || mapped.question || mapped['标题'] || mapped['名称'] || mapped['问题'] || body[0] || deriveTitleFromContent(block);
+  const content = body.length > 1 ? body.slice(1).join('\n') : body.join('\n');
+  return {
+    title,
+    category: mapped.category || mapped['分类'] || fallbackCategory,
+    tags: mapped.tags || mapped['标签'],
+    triggers: mapped.triggers || mapped['关键词'] || mapped['触发词'],
+    targetNames: mapped.targets || mapped.recipients || mapped['目标'] || mapped['联系人'],
+    content: content || block,
+  };
+}
+
+function normalizeStringList(raw: any, maxLen: number, limit: number): string[] {
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? raw.split(/[\n,，、;；]+/g)
+      : [];
+  return uniqueStrings(values.map((x: any) => str(x, maxLen).trim()).filter(Boolean)).slice(0, limit);
+}
+
+function deriveTitleFromContent(content: string): string {
+  return content
+    .split(/\n/g)
+    .map((line) => line.replace(/^#+\s*/, '').trim())
+    .find(Boolean)
+    ?.slice(0, 40) || '';
 }
 
 function normalizeMaterials(raw: any): string[] {

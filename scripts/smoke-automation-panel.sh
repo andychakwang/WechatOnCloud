@@ -122,6 +122,36 @@ json_assert_path current
 request_json GET /api/admin/automation/config
 json_assert_path config.settings
 
+say "Import and remove WeCom knowledge item"
+knowledge_title="smoke-knowledge-$stamp"
+knowledge_payload="$(python3 - "$knowledge_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-mac",
+    "category": "faq",
+    "approveImported": False,
+    "mode": "upsert",
+    "items": [{
+        "title": title,
+        "tags": ["smoke"],
+        "triggers": ["smoke 测试"],
+        "content": "这是一条企业微信自动化接入资料 smoke 测试，不会用于真实发送。",
+        "targetNames": ["Smoke Test Contact"],
+    }],
+}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/knowledge/import "$knowledge_payload"
+json_assert_path result.items[0].id
+knowledge_id="$(json_get result.items[0].id)"
+request_json PATCH "/api/admin/automation/knowledge/$knowledge_id" '{"approved":true,"enabled":true}'
+json_assert_path item.approved
+request_json DELETE "/api/admin/automation/knowledge/$knowledge_id"
+json_assert_path ok
+
 say "Simulate inbound message without sending"
 request_json POST /api/admin/automation/simulate '{"inboundText":"你好，我想了解服务价格"}'
 json_assert_path decision.action

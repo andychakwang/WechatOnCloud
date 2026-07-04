@@ -82,6 +82,9 @@ import {
   initAutomationStore,
   getAutomationConfig,
   updateAutomationConfig,
+  importAutomationKnowledge,
+  patchAutomationKnowledge,
+  deleteAutomationKnowledge,
   simulateAutomation,
   listAutomationAudit,
   listMassSendJobs,
@@ -229,6 +232,40 @@ app.put('/api/admin/automation/config', async (req, reply) => {
     return { config };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '保存自动化配置失败' });
+  }
+});
+
+app.post('/api/admin/automation/knowledge/import', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = importAutomationKnowledge(admin, req.body as any);
+    appendPanelLog('INFO', `导入企微接入资料 by ${admin.username}：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '导入接入资料失败' });
+  }
+});
+
+app.patch('/api/admin/automation/knowledge/:itemId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const item = patchAutomationKnowledge(admin, (req.params as any).itemId, req.body as any);
+    appendPanelLog('INFO', `更新企微接入资料「${item.title}」by ${admin.username}`);
+    return { item };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新接入资料失败' });
+  }
+});
+
+app.delete('/api/admin/automation/knowledge/:itemId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    return deleteAutomationKnowledge(admin, (req.params as any).itemId);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '删除接入资料失败' });
   }
 });
 

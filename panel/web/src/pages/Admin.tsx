@@ -6,6 +6,8 @@ import {
   APP_LABELS,
   appProfile,
   type AutomationConfig,
+  type AutomationKnowledgeCategory,
+  type AutomationKnowledgeItem,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type MassSendJob,
@@ -120,6 +122,15 @@ const AUTO_STATUS_LABEL: Record<string, string> = {
   skipped: '跳过',
 };
 
+const KNOWLEDGE_CATEGORY_LABEL: Record<AutomationKnowledgeCategory, string> = {
+  faq: 'FAQ',
+  script: '话术',
+  policy: '边界',
+  'contact-group': '人群',
+  'moment-material': '朋友圈',
+  other: '其他',
+};
+
 function linesOf(text: string): string[] {
   return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
 }
@@ -139,6 +150,7 @@ function defaultAutomationConfig(): AutomationConfig {
     persona: '',
     knowledgeNotes: '',
     rules: [],
+    knowledgeItems: [],
   };
 }
 
@@ -187,6 +199,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [momentImageNotes, setMomentImageNotes] = useState('');
   const [momentMaterials, setMomentMaterials] = useState('');
 
+  const [knowledgeSource, setKnowledgeSource] = useState('wecom-mac');
+  const [knowledgeCategory, setKnowledgeCategory] = useState<AutomationKnowledgeCategory>('faq');
+  const [knowledgeApproveImported, setKnowledgeApproveImported] = useState(false);
+  const [knowledgeImportText, setKnowledgeImportText] = useState('');
+
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
 
@@ -217,6 +234,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   }, [instances, selectedInstanceId]);
 
   const cfg = config ?? defaultAutomationConfig();
+  const knowledgeItems = cfg.knowledgeItems ?? [];
+  const approvedKnowledgeCount = knowledgeItems.filter((item) => item.enabled && item.approved).length;
   const setSetting = (patch: Partial<AutomationConfig['settings']>) =>
     setConfig((current) => {
       const base = current ?? defaultAutomationConfig();
@@ -235,6 +254,82 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     } finally {
       setBusy('');
     }
+  };
+
+  const importKnowledge = async () => {
+    const rawText = knowledgeImportText.trim();
+    if (!rawText) return toast('请先粘贴要导入的资料', 'error');
+    setBusy('knowledge-import');
+    try {
+      const { result } = await api.importAutomationKnowledge({
+        source: knowledgeSource.trim() || 'wecom-mac',
+        category: knowledgeCategory,
+        approveImported: knowledgeApproveImported,
+        enabled: true,
+        mode: 'upsert',
+        rawText,
+      });
+      setKnowledgeImportText('');
+      toast(`接入资料已导入：新增 ${result.imported}，更新 ${result.updated}`, 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '导入失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const patchKnowledge = async (item: AutomationKnowledgeItem, payload: Partial<AutomationKnowledgeItem>) => {
+    setBusy(`knowledge-${item.id}`);
+    try {
+      const { item: saved } = await api.patchAutomationKnowledge(item.id, payload);
+      setConfig((current) => {
+        const base = current ?? defaultAutomationConfig();
+        return { ...base, knowledgeItems: (base.knowledgeItems ?? []).map((x) => (x.id === saved.id ? saved : x)) };
+      });
+      toast('接入资料已更新', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const removeKnowledge = async (item: AutomationKnowledgeItem) => {
+    const ok = await confirm({
+      title: `删除接入资料「${item.title}」？`,
+      body: '删除后不会影响已创建的群发队列、朋友圈草稿和关键词规则。',
+      danger: true,
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    setBusy(`knowledge-${item.id}`);
+    try {
+      await api.deleteAutomationKnowledge(item.id);
+      setConfig((current) => {
+        const base = current ?? defaultAutomationConfig();
+        return { ...base, knowledgeItems: (base.knowledgeItems ?? []).filter((x) => x.id !== item.id) };
+      });
+      toast('接入资料已删除', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '删除失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const useKnowledgeAsReplyContext = (item: AutomationKnowledgeItem) => {
+    const chunk = [`[${item.title}]`, item.content, item.targetNames.length ? `目标：${item.targetNames.join('、')}` : ''].filter(Boolean).join('\n');
+    setReplyContext((current) => [current.trim(), chunk].filter(Boolean).join('\n\n').slice(0, 4000));
+    toast('已加入 AI 回复上下文', 'ok');
+  };
+
+  const useKnowledgeTargetsForMass = (item: AutomationKnowledgeItem) => {
+    if (item.targetNames.length === 0) return toast('这条资料没有目标名单', 'error');
+    setMassRecipients((current) => linesOf([current, item.targetNames.join('\n')].filter(Boolean).join('\n')).join('\n'));
+    toast('已填入群发目标', 'ok');
   };
 
   const runSelfTest = async () => {
@@ -617,6 +712,77 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         </div>
 
         <div className="auto-grid">
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>企微接入资料</b>
+              <span>
+                <span className="tag">{knowledgeItems.length} 条</span>
+                <span className="tag tag-on">{approvedKnowledgeCount} 可用</span>
+              </span>
+            </div>
+            <div className="auto-grid two compact">
+              <label className="auto-field">
+                <span className="field-label">来源</span>
+                <input className="input" value={knowledgeSource} onChange={(e) => setKnowledgeSource(e.target.value)} />
+              </label>
+              <label className="auto-field">
+                <span className="field-label">分类</span>
+                <select className="input" value={knowledgeCategory} onChange={(e) => setKnowledgeCategory(e.target.value as AutomationKnowledgeCategory)}>
+                  {(Object.keys(KNOWLEDGE_CATEGORY_LABEL) as AutomationKnowledgeCategory[]).map((key) => (
+                    <option key={key} value={key}>
+                      {KNOWLEDGE_CATEGORY_LABEL[key]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <textarea
+              className="input textarea tall"
+              placeholder="粘贴企业微信自动化 Mac 版导出的 JSON、Markdown 或话术文本"
+              value={knowledgeImportText}
+              onChange={(e) => setKnowledgeImportText(e.target.value)}
+            />
+            <label className="auto-check">
+              <input type="checkbox" checked={knowledgeApproveImported} onChange={(e) => setKnowledgeApproveImported(e.target.checked)} />
+              <span>导入后标记为已审核</span>
+            </label>
+            <button className="btn btn-primary s-btn" disabled={busy === 'knowledge-import' || !knowledgeImportText.trim()} onClick={importKnowledge}>
+              导入接入资料
+            </button>
+            <div className="auto-list">
+              {knowledgeItems.slice(0, 5).map((item) => (
+                <div key={item.id} className="auto-list-item">
+                  <div>
+                    <b>{item.title}</b>
+                    <div className="muted small">
+                      {KNOWLEDGE_CATEGORY_LABEL[item.category]} · {item.source} · {item.enabled ? '启用' : '停用'} · {item.approved ? '已审核' : '未审核'}
+                    </div>
+                    {item.content && <div className="muted small auto-snippet">{item.content}</div>}
+                    {item.targetNames.length > 0 && <div className="muted small auto-snippet">目标 {item.targetNames.slice(0, 6).join('、')}</div>}
+                  </div>
+                  <div className="auto-actions">
+                    <button className="btn-text" disabled={busy === `knowledge-${item.id}`} onClick={() => patchKnowledge(item, { approved: !item.approved })}>
+                      {item.approved ? '撤审' : '审核'}
+                    </button>
+                    <button className="btn-text" disabled={busy === `knowledge-${item.id}`} onClick={() => patchKnowledge(item, { enabled: !item.enabled })}>
+                      {item.enabled ? '停用' : '启用'}
+                    </button>
+                    <button className="btn-text" disabled={!item.content} onClick={() => useKnowledgeAsReplyContext(item)}>
+                      上下文
+                    </button>
+                    <button className="btn-text" disabled={item.targetNames.length === 0} onClick={() => useKnowledgeTargetsForMass(item)}>
+                      群发目标
+                    </button>
+                    <button className="btn-text danger" disabled={busy === `knowledge-${item.id}`} onClick={() => removeKnowledge(item)}>
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {knowledgeItems.length === 0 && <div className="muted small">暂无接入资料</div>}
+            </div>
+          </section>
+
           <section className="auto-panel">
             <div className="auto-panel-head">
               <b>AI 回复</b>
