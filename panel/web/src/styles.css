@@ -1169,6 +1169,17 @@ button {
 .auto-self-test.bad {
   background: rgba(var(--danger-rgb) / 0.08);
 }
+.auto-bridge {
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(var(--green-rgb) / 0.08);
+}
+.auto-bridge.bad {
+  background: rgba(var(--danger-rgb) / 0.08);
+}
+.auto-bridge code {
+  word-break: break-all;
+}
 .auto-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

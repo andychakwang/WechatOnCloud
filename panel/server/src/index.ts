@@ -4,6 +4,7 @@ import fstatic from '@fastify/static';
 import httpProxy from 'http-proxy';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Socket } from 'node:net';
 import {
@@ -109,6 +110,9 @@ const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 const STATIC_DIR = process.env.STATIC_DIR || join(__dirname, '../../web/dist');
 const COOKIE = 'woc_sess';
+const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
+const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
+const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
 // always-on loopback + RFC1918 LAN allowlist. Required for HTTPS reverse-proxy
 // deploys (Caddy/nginx/飞牛 内置反代) where the public hostname differs from
@@ -173,6 +177,64 @@ function requireAdmin(req: FastifyRequest, reply: FastifyReply): User | null {
   return u;
 }
 
+function automationBridgeStatus() {
+  const configured = AUTOMATION_BRIDGE_TOKEN.length > 0;
+  const tokenLengthOk = AUTOMATION_BRIDGE_TOKEN.length >= AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH;
+  return {
+    enabled: configured && tokenLengthOk,
+    configured,
+    tokenLengthOk,
+    tokenEnvName: 'AUTOMATION_BRIDGE_TOKEN',
+    compatibilityEnvName: 'WECOM_BRIDGE_TOKEN',
+    endpoint: AUTOMATION_BRIDGE_ENDPOINT,
+    authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
+  };
+}
+
+function bridgeTokenFrom(req: FastifyRequest): string {
+  const auth = String(req.headers.authorization || '').trim();
+  if (/^bearer\s+/i.test(auth)) return auth.replace(/^bearer\s+/i, '').trim();
+  return String(req.headers['x-automation-token'] || '').trim();
+}
+
+function tokenEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function requireAutomationBridge(req: FastifyRequest, reply: FastifyReply): boolean {
+  const status = automationBridgeStatus();
+  if (!status.configured) {
+    reply.code(404).send({ error: '自动化 Bridge 未启用' });
+    return false;
+  }
+  if (!status.tokenLengthOk) {
+    reply.code(503).send({ error: `AUTOMATION_BRIDGE_TOKEN 至少需要 ${AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH} 个字符` });
+    return false;
+  }
+  const token = bridgeTokenFrom(req);
+  if (!token) {
+    reply.code(401).send({ error: '缺少 Bridge token' });
+    return false;
+  }
+  if (!tokenEquals(token, AUTOMATION_BRIDGE_TOKEN)) {
+    reply.code(403).send({ error: 'Bridge token 不正确' });
+    return false;
+  }
+  return true;
+}
+
+const AUTOMATION_BRIDGE_USER: User = {
+  id: 'automation-bridge',
+  username: 'automation-bridge',
+  role: 'admin',
+  passwordHash: '',
+  disabled: false,
+  createdAt: new Date(0).toISOString(),
+  allowedInstances: [],
+};
+
 // ---------- 登录 / 会话 ----------
 app.post('/api/auth/login', async (req, reply) => {
   const { username, password } = (req.body as any) ?? {};
@@ -235,6 +297,11 @@ app.put('/api/admin/automation/config', async (req, reply) => {
   }
 });
 
+app.get('/api/admin/automation/bridge', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { bridge: automationBridgeStatus() };
+});
+
 app.post('/api/admin/automation/knowledge/import', async (req, reply) => {
   const admin = requireAdmin(req, reply);
   if (!admin) return;
@@ -244,6 +311,20 @@ app.post('/api/admin/automation/knowledge/import', async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '导入接入资料失败' });
+  }
+});
+
+app.post(AUTOMATION_BRIDGE_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const result = importAutomationKnowledge(AUTOMATION_BRIDGE_USER, {
+      ...(req.body as any),
+      source: (req.body as any)?.source || 'wecom-mac-bridge',
+    });
+    appendPanelLog('INFO', `Bridge 导入企微接入资料：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 导入接入资料失败' });
   }
 });
 

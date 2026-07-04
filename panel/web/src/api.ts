@@ -126,6 +126,16 @@ export interface AutomationKnowledgeImportResult {
   errors: string[];
 }
 
+export interface AutomationBridgeStatus {
+  enabled: boolean;
+  configured: boolean;
+  tokenLengthOk: boolean;
+  tokenEnvName: string;
+  compatibilityEnvName: string;
+  endpoint: string;
+  authHeaders: string[];
+}
+
 export interface AutomationSettings {
   enabled: boolean;
   aiDraftEnabled: boolean;
@@ -276,6 +286,7 @@ export const api = {
   getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
+  getAutomationBridge: () => req<{ bridge: AutomationBridgeStatus }>('/api/admin/automation/bridge'),
   importAutomationKnowledge: (payload: {
     source?: string;
     category?: AutomationKnowledgeCategory;

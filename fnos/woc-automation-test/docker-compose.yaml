@@ -4,13 +4,13 @@
 
 services:
   panel-automation-test:
-    image: ghcr.io/andychakwang/woc-panel:andy-automation-usable-r9-2026-07-05
+    image: ghcr.io/andychakwang/woc-panel:andy-automation-usable-r10-2026-07-05
     container_name: woc-panel-automation-test
     pull_policy: always
 
     environment:
       - PORT=8080
-      - WOC_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r9-2026-07-05
+      - WOC_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r10-2026-07-05
       - PUID=1000
       - PGID=1000
       - TZ=Asia/Shanghai
@@ -28,6 +28,7 @@ services:
       - AUTOMATION_AI_API_KEY=
       - AUTOMATION_AI_BASE_URL=
       - AUTOMATION_AI_MODEL=
+      - AUTOMATION_BRIDGE_TOKEN=
       - PANEL_ALLOWED_HOSTS=nasbot.cloud
 
     volumes:

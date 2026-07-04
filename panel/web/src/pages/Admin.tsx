@@ -5,6 +5,7 @@ import {
   api,
   APP_LABELS,
   appProfile,
+  type AutomationBridgeStatus,
   type AutomationConfig,
   type AutomationKnowledgeCategory,
   type AutomationKnowledgeItem,
@@ -169,6 +170,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [jobs, setJobs] = useState<MassSendJob[]>([]);
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
+  const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -216,6 +218,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.listMomentDrafts(),
         api.automationAudit(30),
       ]);
+      api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
       setJobs(jobs);
       setDrafts(drafts);
@@ -749,6 +752,19 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <button className="btn btn-primary s-btn" disabled={busy === 'knowledge-import' || !knowledgeImportText.trim()} onClick={importKnowledge}>
               导入接入资料
             </button>
+            {bridge && (
+              <div className={'auto-bridge ' + (bridge.enabled ? 'ok' : 'bad')}>
+                <b>Mac Bridge {bridge.enabled ? '已启用' : '未启用'}</b>
+                <div className="muted small">
+                  URL <code>{location.origin + bridge.endpoint}</code>
+                </div>
+                <div className="chip-row">
+                  <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
+                  <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
+                  <span className="chip chip-static">Bearer / X-Automation-Token</span>
+                </div>
+              </div>
+            )}
             <div className="auto-list">
               {knowledgeItems.slice(0, 5).map((item) => (
                 <div key={item.id} className="auto-list-item">

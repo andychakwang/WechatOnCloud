@@ -55,6 +55,7 @@ optional_envs = [
     "AUTOMATION_AI_API_KEY",
     "AUTOMATION_AI_BASE_URL",
     "AUTOMATION_AI_MODEL",
+    "AUTOMATION_BRIDGE_TOKEN",
 ]
 for key in optional_envs:
     if os.environ.get(key):
@@ -73,7 +74,7 @@ src, dst = sys.argv[1], sys.argv[2]
 with open(src, "r", encoding="utf-8") as fh:
     text = fh.read()
 
-for key in ("PANEL_ADMIN_PASSWORD", "AUTOMATION_AI_API_KEY"):
+for key in ("PANEL_ADMIN_PASSWORD", "AUTOMATION_AI_API_KEY", "AUTOMATION_BRIDGE_TOKEN"):
     text = re.sub(
         rf"^(\s*-\s*)\"?{key}=.*$",
         rf'\1"{key}=***REDACTED***"',

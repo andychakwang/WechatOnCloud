@@ -47,6 +47,27 @@ request_json() {
   fi
 }
 
+request_bridge_json() {
+  local method="$1"
+  local path="$2"
+  local payload="${3:-}"
+  local expect="${4:-200}"
+  local status
+
+  status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+    -X "$method" \
+    -H 'content-type: application/json' \
+    -H "Authorization: Bearer $AUTOMATION_BRIDGE_TOKEN" \
+    --data "$payload" \
+    "$PANEL_URL$path")"
+
+  if [[ "$status" != "$expect" ]]; then
+    echo "ERROR: $method $path expected HTTP $expect, got $status" >&2
+    sed -n '1,80p' "$body_file" >&2
+    exit 1
+  fi
+}
+
 json_get() {
   local path="$1"
   python3 - "$body_file" "$path" <<'PY'
@@ -151,6 +172,35 @@ request_json PATCH "/api/admin/automation/knowledge/$knowledge_id" '{"approved":
 json_assert_path item.approved
 request_json DELETE "/api/admin/automation/knowledge/$knowledge_id"
 json_assert_path ok
+
+if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
+  say "Import WeCom knowledge through Bridge"
+  bridge_title="smoke-bridge-$stamp"
+  bridge_payload="$(python3 - "$bridge_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "category": "script",
+    "approveImported": False,
+    "mode": "upsert",
+    "items": [{
+        "title": title,
+        "tags": ["bridge"],
+        "triggers": ["bridge 测试"],
+        "content": "这是一条通过 Mac Bridge 推送的 smoke 测试资料，不会用于真实发送。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/import "$bridge_payload"
+  json_assert_path result.items[0].id
+  bridge_id="$(json_get result.items[0].id)"
+  request_json DELETE "/api/admin/automation/knowledge/$bridge_id"
+  json_assert_path ok
+fi
 
 say "Simulate inbound message without sending"
 request_json POST /api/admin/automation/simulate '{"inboundText":"你好，我想了解服务价格"}'
