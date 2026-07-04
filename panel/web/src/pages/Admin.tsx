@@ -175,6 +175,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
+  const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -229,6 +230,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setDrafts(drafts);
       setAudit(events);
       setBridgeEvents(bridgeEvents.filter((event) => event.status !== 'archived'));
+      setBridgeReplyDrafts(
+        Object.fromEntries(bridgeEvents.filter((event) => event.status !== 'archived').map((event) => [event.id, event.replyDraft || ''])),
+      );
     } catch (e: any) {
       setErr(e.message || '读取自动化配置失败');
     }
@@ -373,6 +377,39 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       toast('企微消息已归档', 'ok');
     } catch (e: any) {
       toast(e.message || '归档失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const saveBridgeReplyDraft = async (event: WecomBridgeEvent, approve = false) => {
+    const draft = (bridgeReplyDrafts[event.id] || '').trim();
+    if (!draft) return toast('请先填写回复草稿', 'error');
+    setBusy(`bridge-reply-${event.id}`);
+    try {
+      const { event: saved } = await api.patchWecomBridgeEvent(event.id, {
+        status: 'planned',
+        replyDraft: draft,
+        replyApproved: approve ? true : event.replyApproved,
+      });
+      setBridgeEvents((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      setBridgeReplyDrafts((map) => ({ ...map, [saved.id]: saved.replyDraft || '' }));
+      toast(approve ? '回复草稿已批准，Mac 端可拉取' : '回复草稿已保存', 'ok');
+    } catch (e: any) {
+      toast(e.message || '保存回复草稿失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggleBridgeReplyApproval = async (event: WecomBridgeEvent, approved: boolean) => {
+    setBusy(`bridge-reply-${event.id}`);
+    try {
+      const { event: saved } = await api.patchWecomBridgeEvent(event.id, { replyApproved: approved });
+      setBridgeEvents((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast(approved ? '回复草稿已批准' : '已取消回复批准', 'ok');
+    } catch (e: any) {
+      toast(e.message || '更新批准状态失败', 'error');
     } finally {
       setBusy('');
     }
@@ -804,6 +841,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <div className="muted small">
                   消息 <code>{location.origin + bridge.eventEndpoint}</code>
                 </div>
+                <div className="muted small">
+                  回复 <code>{location.origin + bridge.replyEndpoint}</code>
+                </div>
                 <div className="chip-row">
                   <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
                   <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
@@ -858,6 +898,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     <div className="muted small">
                       {AUTO_STATUS_LABEL[event.status] || event.status} · {event.source} · {fmtDate(Date.parse(event.receivedAt || event.createdAt))}
                       {event.senderName ? ` · ${event.senderName}` : ''}
+                      {event.replyApproved ? ' · 回复已批准' : ''}
+                      {event.replyDeliveredAt ? ' · 已交付 Mac' : ''}
                     </div>
                     <div className="muted small auto-snippet">{event.inboundText}</div>
                   </div>
@@ -868,6 +910,27 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     <button className="btn-text" disabled={busy === `bridge-event-${event.id}`} onClick={() => archiveBridgeEvent(event)}>
                       归档
                     </button>
+                  </div>
+                  <div className="auto-targets">
+                    <textarea
+                      className="input textarea"
+                      placeholder="人工确认后的回复草稿。批准后，企微 Mac 工具可以通过 Bridge 拉取。"
+                      value={bridgeReplyDrafts[event.id] ?? event.replyDraft ?? ''}
+                      onChange={(e) => setBridgeReplyDrafts((map) => ({ ...map, [event.id]: e.target.value }))}
+                    />
+                    <div className="auto-actions inline">
+                      <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => saveBridgeReplyDraft(event)}>
+                        保存草稿
+                      </button>
+                      <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => saveBridgeReplyDraft(event, true)}>
+                        保存并批准
+                      </button>
+                      {event.replyApproved && (
+                        <button className="btn-text danger" disabled={busy === `bridge-reply-${event.id}`} onClick={() => toggleBridgeReplyApproval(event, false)}>
+                          取消批准
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}

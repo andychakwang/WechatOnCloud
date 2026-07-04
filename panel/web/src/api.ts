@@ -135,6 +135,7 @@ export interface AutomationBridgeStatus {
   endpoint: string;
   knowledgeEndpoint: string;
   eventEndpoint: string;
+  replyEndpoint: string;
   authHeaders: string[];
 }
 
@@ -151,6 +152,10 @@ export interface WecomBridgeEvent {
   createdAt: string;
   updatedAt: string;
   lastPlannedAt?: string;
+  replyDraft?: string;
+  replyApproved: boolean;
+  replyApprovedAt?: string;
+  replyDeliveredAt?: string;
 }
 
 export interface AutomationSettings {
@@ -308,7 +313,15 @@ export const api = {
     req<{ events: WecomBridgeEvent[] }>(
       `/api/admin/automation/bridge-events?limit=${encodeURIComponent(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`,
     ),
-  patchWecomBridgeEvent: (eventId: string, payload: { status: WecomBridgeEvent['status'] }) =>
+  patchWecomBridgeEvent: (
+    eventId: string,
+    payload: {
+      status?: WecomBridgeEvent['status'];
+      replyDraft?: string;
+      replyApproved?: boolean;
+      markDelivered?: boolean;
+    },
+  ) =>
     req<{ event: WecomBridgeEvent }>(`/api/admin/automation/bridge-events/${eventId}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),

@@ -60,6 +60,10 @@ export interface WecomBridgeEvent {
   createdAt: string;
   updatedAt: string;
   lastPlannedAt?: string;
+  replyDraft?: string;
+  replyApproved: boolean;
+  replyApprovedAt?: string;
+  replyDeliveredAt?: string;
 }
 
 export interface WecomBridgeEventIngestResult {
@@ -297,6 +301,10 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
           createdAt: existing.createdAt,
           updatedAt: now,
           lastPlannedAt: existing.lastPlannedAt,
+          replyDraft: existing.replyDraft,
+          replyApproved: existing.replyApproved,
+          replyApprovedAt: existing.replyApprovedAt,
+          replyDeliveredAt: existing.replyDeliveredAt,
         };
         data.bridgeEvents[existingIndex] = saved;
         result.updated += 1;
@@ -329,10 +337,28 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
 export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): WecomBridgeEvent {
   const event = data.bridgeEvents.find((item) => item.id === eventId);
   if (!event) throw new Error('Bridge 消息事件不存在');
-  const status = normalizeBridgeEventStatus(raw?.status);
-  if (!status) throw new Error('Bridge 消息事件状态不合法');
+  const status = raw?.status === undefined ? null : normalizeBridgeEventStatus(raw?.status);
+  if (raw?.status !== undefined && !status) throw new Error('Bridge 消息事件状态不合法');
   const now = new Date().toISOString();
-  event.status = status;
+  if (status) event.status = status;
+  if (typeof raw?.replyDraft === 'string') {
+    event.replyDraft = str(raw.replyDraft, 1000).trim() || undefined;
+    if (!event.replyDraft) {
+      event.replyApproved = false;
+      event.replyApprovedAt = undefined;
+      event.replyDeliveredAt = undefined;
+    }
+  }
+  if (typeof raw?.replyApproved === 'boolean') {
+    if (raw.replyApproved && !event.replyDraft?.trim()) throw new Error('批准前需要先保存回复草稿');
+    event.replyApproved = raw.replyApproved;
+    event.replyApprovedAt = raw.replyApproved ? now : undefined;
+    if (!raw.replyApproved) event.replyDeliveredAt = undefined;
+  }
+  if (raw?.markDelivered === true) {
+    if (!event.replyApproved) throw new Error('未批准的回复不能标记交付');
+    event.replyDeliveredAt = now;
+  }
   event.updatedAt = now;
   if (status === 'planned') event.lastPlannedAt = now;
   persist();
@@ -340,9 +366,22 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     action: 'bridge_event_updated',
     actor: actor.username,
     conversationName: event.conversationName || event.senderName,
-    message: `更新企微消息事件「${event.conversationName || event.senderName}」：${status}`,
+    message: `更新企微消息事件「${event.conversationName || event.senderName}」：${event.status}${event.replyApproved ? '，回复已批准' : ''}`,
   });
   return cloneBridgeEvent(event);
+}
+
+export function listApprovedWecomBridgeReplies(limit = 50): WecomBridgeEvent[] {
+  const n = clampInt(limit, 1, 200, 50);
+  return data.bridgeEvents
+    .filter((event) => event.replyApproved && !!event.replyDraft?.trim() && !event.replyDeliveredAt && event.status !== 'archived')
+    .slice(-n)
+    .reverse()
+    .map(cloneBridgeEvent);
+}
+
+export function markWecomBridgeReplyDelivered(actor: User, eventId: string): WecomBridgeEvent {
+  return patchWecomBridgeEvent(actor, eventId, { markDelivered: true });
 }
 
 export function importAutomationKnowledge(actor: User, raw: any): AutomationKnowledgeImportResult {
@@ -1239,6 +1278,10 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
     lastPlannedAt: typeof raw?.lastPlannedAt === 'string' && raw.lastPlannedAt ? raw.lastPlannedAt : undefined,
+    replyDraft: str(raw?.replyDraft, 1000).trim() || undefined,
+    replyApproved: typeof raw?.replyApproved === 'boolean' ? raw.replyApproved : false,
+    replyApprovedAt: typeof raw?.replyApprovedAt === 'string' && raw.replyApprovedAt ? raw.replyApprovedAt : undefined,
+    replyDeliveredAt: typeof raw?.replyDeliveredAt === 'string' && raw.replyDeliveredAt ? raw.replyDeliveredAt : undefined,
   };
 }
 

@@ -85,7 +85,9 @@ import {
   updateAutomationConfig,
   ingestWecomBridgeEvents,
   importAutomationKnowledge,
+  listApprovedWecomBridgeReplies,
   listWecomBridgeEvents,
+  markWecomBridgeReplyDelivered,
   patchAutomationKnowledge,
   patchWecomBridgeEvent,
   deleteAutomationKnowledge,
@@ -115,6 +117,7 @@ const STATIC_DIR = process.env.STATIC_DIR || join(__dirname, '../../web/dist');
 const COOKIE = 'woc_sess';
 const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
 const AUTOMATION_BRIDGE_EVENT_ENDPOINT = '/api/automation/bridge/wecom/events';
+const AUTOMATION_BRIDGE_REPLY_ENDPOINT = '/api/automation/bridge/wecom/replies';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
@@ -193,6 +196,7 @@ function automationBridgeStatus() {
     endpoint: AUTOMATION_BRIDGE_ENDPOINT,
     knowledgeEndpoint: AUTOMATION_BRIDGE_ENDPOINT,
     eventEndpoint: AUTOMATION_BRIDGE_EVENT_ENDPOINT,
+    replyEndpoint: AUTOMATION_BRIDGE_REPLY_ENDPOINT,
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
   };
 }
@@ -363,6 +367,23 @@ app.post(AUTOMATION_BRIDGE_EVENT_ENDPOINT, async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 写入消息事件失败' });
+  }
+});
+
+app.get(AUTOMATION_BRIDGE_REPLY_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  const query = req.query as any;
+  return { replies: listApprovedWecomBridgeReplies(Number(query?.limit || 50)) };
+});
+
+app.patch(`${AUTOMATION_BRIDGE_REPLY_ENDPOINT}/:eventId`, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const event = markWecomBridgeReplyDelivered(AUTOMATION_BRIDGE_USER, (req.params as any).eventId);
+    appendPanelLog('INFO', `Bridge 标记企微回复已交付：「${event.conversationName || event.senderName}」`);
+    return { event };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 更新回复状态失败' });
   }
 });
 

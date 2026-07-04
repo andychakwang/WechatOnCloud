@@ -54,12 +54,20 @@ request_bridge_json() {
   local expect="${4:-200}"
   local status
 
-  status="$(curl -sS -o "$body_file" -w '%{http_code}' \
-    -X "$method" \
-    -H 'content-type: application/json' \
-    -H "Authorization: Bearer $AUTOMATION_BRIDGE_TOKEN" \
-    --data "$payload" \
-    "$PANEL_URL$path")"
+  if [[ -n "$payload" ]]; then
+    status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+      -X "$method" \
+      -H 'content-type: application/json' \
+      -H "Authorization: Bearer $AUTOMATION_BRIDGE_TOKEN" \
+      --data "$payload" \
+      "$PANEL_URL$path")"
+  else
+    status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+      -X "$method" \
+      -H 'content-type: application/json' \
+      -H "Authorization: Bearer $AUTOMATION_BRIDGE_TOKEN" \
+      "$PANEL_URL$path")"
+  fi
 
   if [[ "$status" != "$expect" ]]; then
     echo "ERROR: $method $path expected HTTP $expect, got $status" >&2
@@ -224,6 +232,12 @@ PY
   bridge_event_id="$(json_get result.events[0].id)"
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"planned"}'
   json_assert_eq event.status planned
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"replyDraft":"这是经过人工确认的 Bridge smoke 回复草稿。","replyApproved":true}'
+  json_assert_path event.replyApproved
+  request_bridge_json GET /api/automation/bridge/wecom/replies ''
+  json_assert_path replies[0].id
+  request_bridge_json PATCH "/api/automation/bridge/wecom/replies/$bridge_event_id" '{}'
+  json_assert_path event.replyDeliveredAt
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
 fi
