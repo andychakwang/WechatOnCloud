@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
+const CLIENT_VERSION = 'automation-lab-r17-heartbeat';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -15,6 +16,7 @@ Environment:
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
   push-events <file|-> [--source name]
+  heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   pull-replies [--limit 50]
   claim-reply <eventId> [--worker-id name]
   mark-delivered <eventId>
@@ -24,6 +26,7 @@ Commands:
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
+  node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
   node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --mark-delivered --report-failure
 `;
@@ -198,6 +201,23 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeEventPayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/events', payload));
+    return;
+  }
+
+  if (command === 'heartbeat') {
+    const source = String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE);
+    const mode = String(options.mode || process.env.WECOM_RUNNER_MODE || process.env.WECOM_HANDLER_MODE || 'manual');
+    printJson(
+      await requestJson(options, 'POST', '/api/automation/bridge/wecom/heartbeat', {
+        source,
+        workerId: workerId(options),
+        mode,
+        host: hostname(),
+        pid: process.pid,
+        version: CLIENT_VERSION,
+        note: String(options.note || ''),
+      }),
+    );
     return;
   }
 

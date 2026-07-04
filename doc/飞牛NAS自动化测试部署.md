@@ -139,7 +139,7 @@ PANEL_PASSWORD='测试面板密码' \
 
 它会验证登录、版本接口、自动化配置、接入资料导入、模拟决策、群发受控队列、朋友圈草稿和审计日志；创建出的测试队列会被取消，测试朋友圈草稿会被归档。
 
-如果本地同时设置了 `AUTOMATION_BRIDGE_TOKEN`，smoke 会额外验证 Bridge 资料推送、消息事件推送、Mac handler dry-run、Bridge runner dry-run，并通过 `scripts/wecom-bridge-client.mjs` 验证批准回复拉取、领取、失败回写和已交付回写接口。
+如果本地同时设置了 `AUTOMATION_BRIDGE_TOKEN`，smoke 会额外验证 Bridge 资料推送、消息事件推送、worker 心跳、Mac handler dry-run、Bridge runner dry-run，并通过 `scripts/wecom-bridge-client.mjs` 验证批准回复拉取、领取、失败回写和已交付回写接口。
 
 ## 回滚与清理
 

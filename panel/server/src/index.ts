@@ -85,8 +85,10 @@ import {
   updateAutomationConfig,
   ingestWecomBridgeEvents,
   importAutomationKnowledge,
+  listWecomBridgeWorkers,
   listApprovedWecomBridgeReplies,
   listWecomBridgeEvents,
+  recordWecomBridgeHeartbeat,
   patchWecomBridgeReplyDelivery,
   patchAutomationKnowledge,
   patchWecomBridgeEvent,
@@ -118,6 +120,7 @@ const COOKIE = 'woc_sess';
 const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
 const AUTOMATION_BRIDGE_EVENT_ENDPOINT = '/api/automation/bridge/wecom/events';
 const AUTOMATION_BRIDGE_REPLY_ENDPOINT = '/api/automation/bridge/wecom/replies';
+const AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT = '/api/automation/bridge/wecom/heartbeat';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
@@ -197,6 +200,8 @@ function automationBridgeStatus() {
     knowledgeEndpoint: AUTOMATION_BRIDGE_ENDPOINT,
     eventEndpoint: AUTOMATION_BRIDGE_EVENT_ENDPOINT,
     replyEndpoint: AUTOMATION_BRIDGE_REPLY_ENDPOINT,
+    heartbeatEndpoint: AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT,
+    workers: listWecomBridgeWorkers(20),
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
   };
 }
@@ -367,6 +372,20 @@ app.post(AUTOMATION_BRIDGE_EVENT_ENDPOINT, async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 写入消息事件失败' });
+  }
+});
+
+app.post(AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const pendingReplies = listApprovedWecomBridgeReplies(200).length;
+    const worker = recordWecomBridgeHeartbeat(AUTOMATION_BRIDGE_USER, {
+      ...(req.body as any),
+      pendingReplies,
+    });
+    return { worker, pendingReplies, serverTime: new Date().toISOString() };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 心跳写入失败' });
   }
 });
 

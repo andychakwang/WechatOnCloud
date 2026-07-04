@@ -71,6 +71,27 @@ export interface WecomBridgeEvent {
   replyDeliveredAt?: string;
 }
 
+export interface WecomBridgeWorker {
+  id: string;
+  workerId: string;
+  source: string;
+  mode: string;
+  host: string;
+  pid?: number;
+  version?: string;
+  note?: string;
+  pendingReplies: number;
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WecomBridgeWorkerStatus extends WecomBridgeWorker {
+  online: boolean;
+  staleSeconds: number;
+  offlineAfterSeconds: number;
+}
+
 export interface WecomBridgeEventIngestResult {
   events: WecomBridgeEvent[];
   imported: number;
@@ -192,6 +213,7 @@ export interface AutomationAuditEvent {
 
 interface AutomationData extends AutomationConfig {
   bridgeEvents: WecomBridgeEvent[];
+  bridgeWorkers: WecomBridgeWorker[];
   massSendJobs: MassSendJob[];
   momentDrafts: MomentDraft[];
   auditEvents: AutomationAuditEvent[];
@@ -201,6 +223,7 @@ const FILE = process.env.PANEL_AUTOMATION_DATA || '/data/automation.json';
 const MAX_AUDIT_EVENTS = 1000;
 const MAX_KNOWLEDGE_ITEMS = 500;
 const MAX_BRIDGE_EVENTS = 500;
+const MAX_BRIDGE_WORKERS = 100;
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   enabled: false,
@@ -220,6 +243,7 @@ const DEFAULT_DATA: AutomationData = {
   rules: [],
   knowledgeItems: [],
   bridgeEvents: [],
+  bridgeWorkers: [],
   massSendJobs: [],
   momentDrafts: [],
   auditEvents: [],
@@ -274,6 +298,63 @@ export function listWecomBridgeEvents(limit = 100, status?: string): WecomBridge
     .slice(-n)
     .reverse()
     .map(cloneBridgeEvent);
+}
+
+export function listWecomBridgeWorkers(limit = 50, offlineAfterSeconds = 180): WecomBridgeWorkerStatus[] {
+  const n = clampInt(limit, 1, MAX_BRIDGE_WORKERS, 50);
+  const offlineAfter = clampInt(offlineAfterSeconds, 30, 24 * 60 * 60, 180);
+  const now = Date.now();
+  return data.bridgeWorkers
+    .slice()
+    .sort((a, b) => Date.parse(b.lastSeenAt || b.updatedAt) - Date.parse(a.lastSeenAt || a.updatedAt))
+    .slice(0, n)
+    .map((worker) => publicBridgeWorker(worker, now, offlineAfter));
+}
+
+export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWorkerStatus {
+  const now = new Date().toISOString();
+  const source = str(raw?.source || raw?.sourceName || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge';
+  const workerId =
+    str(raw?.workerId ?? raw?.worker ?? raw?.clientId ?? raw?.hostname ?? raw?.host, 120).trim() ||
+    `${source}-${actor.username}`;
+  const host = str(raw?.host ?? raw?.hostname ?? '', 120).trim();
+  const pid = Number.isFinite(Number(raw?.pid)) ? Math.max(0, Math.trunc(Number(raw.pid))) : undefined;
+  const incoming: WecomBridgeWorker = {
+    id: `${source}:${workerId}`,
+    workerId,
+    source,
+    mode: str(raw?.mode || raw?.runnerMode || raw?.status || 'unknown', 60).trim() || 'unknown',
+    host,
+    pid,
+    version: str(raw?.version || raw?.clientVersion || '', 80).trim() || undefined,
+    note: str(raw?.note || raw?.message || '', 300).trim() || undefined,
+    pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
+    lastSeenAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const existingIndex = data.bridgeWorkers.findIndex(
+    (worker) => worker.source.toLowerCase() === source.toLowerCase() && worker.workerId === workerId,
+  );
+  if (existingIndex >= 0) {
+    const existing = data.bridgeWorkers[existingIndex];
+    data.bridgeWorkers[existingIndex] = {
+      ...incoming,
+      id: existing.id,
+      createdAt: existing.createdAt,
+    };
+  } else {
+    data.bridgeWorkers.push(incoming);
+  }
+  if (data.bridgeWorkers.length > MAX_BRIDGE_WORKERS) {
+    data.bridgeWorkers = data.bridgeWorkers
+      .slice()
+      .sort((a, b) => Date.parse(b.lastSeenAt || b.updatedAt) - Date.parse(a.lastSeenAt || a.updatedAt))
+      .slice(0, MAX_BRIDGE_WORKERS);
+  }
+  persist();
+  return publicBridgeWorker(existingIndex >= 0 ? data.bridgeWorkers[existingIndex] : incoming);
 }
 
 export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEventIngestResult {
@@ -1247,6 +1328,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const rulesRaw = Array.isArray(raw?.rules) ? raw.rules : [];
   const knowledgeRaw = Array.isArray(raw?.knowledgeItems) ? raw.knowledgeItems : [];
   const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
+  const bridgeWorkersRaw = Array.isArray(raw?.bridgeWorkers) ? raw.bridgeWorkers : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
   const momentDraftsRaw = Array.isArray(raw?.momentDrafts) ? raw.momentDrafts : [];
   return {
@@ -1256,6 +1338,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     rules: rulesRaw.slice(0, 200).map((r: any) => normalizeRule(r, preserveIds, now)),
     knowledgeItems: knowledgeRaw.slice(-MAX_KNOWLEDGE_ITEMS).map((item: any) => normalizeKnowledgeItem(item, preserveIds, now)),
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
+    bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
     auditEvents: Array.isArray(raw?.auditEvents) ? raw.auditEvents.slice(-MAX_AUDIT_EVENTS).map(normalizeAuditEvent).filter(Boolean) : [],
@@ -1347,6 +1430,27 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     replyFailedAt: typeof raw?.replyFailedAt === 'string' && raw.replyFailedAt ? raw.replyFailedAt : undefined,
     replyError: str(raw?.replyError, 1000).trim() || undefined,
     replyDeliveredAt: typeof raw?.replyDeliveredAt === 'string' && raw.replyDeliveredAt ? raw.replyDeliveredAt : undefined,
+  };
+}
+
+function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): WecomBridgeWorker {
+  const source = str(raw?.source || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge';
+  const workerId = str(raw?.workerId ?? raw?.worker ?? raw?.clientId ?? 'wecom-worker', 120).trim() || 'wecom-worker';
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  const updatedAt = typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now;
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : `${source}:${workerId}`,
+    workerId,
+    source,
+    mode: str(raw?.mode || 'unknown', 60).trim() || 'unknown',
+    host: str(raw?.host ?? raw?.hostname ?? '', 120).trim(),
+    pid: Number.isFinite(Number(raw?.pid)) ? Math.max(0, Math.trunc(Number(raw.pid))) : undefined,
+    version: str(raw?.version || '', 80).trim() || undefined,
+    note: str(raw?.note || '', 300).trim() || undefined,
+    pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
+    lastSeenAt: normalizeIsoDate(raw?.lastSeenAt, updatedAt),
+    createdAt,
+    updatedAt,
   };
 }
 
@@ -1651,6 +1755,17 @@ function cloneKnowledgeItem(item: AutomationKnowledgeItem): AutomationKnowledgeI
 
 function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
   return { ...event };
+}
+
+function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offlineAfterSeconds = 180): WecomBridgeWorkerStatus {
+  const lastSeenMs = Date.parse(worker.lastSeenAt || worker.updatedAt);
+  const staleSeconds = Number.isFinite(lastSeenMs) ? Math.max(0, Math.round((now - lastSeenMs) / 1000)) : offlineAfterSeconds + 1;
+  return {
+    ...worker,
+    online: staleSeconds <= offlineAfterSeconds,
+    staleSeconds,
+    offlineAfterSeconds,
+  };
 }
 
 function cloneMassSendJob(job: MassSendJob): MassSendJob {

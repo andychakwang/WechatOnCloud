@@ -232,6 +232,12 @@ PY
   request_json DELETE "/api/admin/automation/knowledge/$bridge_id"
   json_assert_path ok
 
+  say "Report WeCom Bridge worker heartbeat"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" heartbeat --worker-id smoke-worker --mode dry-run > "$body_file"
+  json_assert_eq worker.workerId smoke-worker
+  json_assert_path worker.lastSeenAt
+  json_assert_path pendingReplies
+
   say "Push WeCom inbound message through Bridge"
   bridge_event_payload="$(python3 - "$stamp" <<'PY'
 import json

@@ -77,6 +77,8 @@ if [[ -z "${AUTOMATION_BRIDGE_TOKEN:-}" && -z "${WECOM_BRIDGE_TOKEN:-}" ]]; then
   exit 2
 fi
 
+node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
+
 case "$MODE" in
   dry-run)
     exec node "$CLIENT" run-approved --limit "$LIMIT" --dry-run

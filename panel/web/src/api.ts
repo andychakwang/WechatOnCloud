@@ -126,6 +126,24 @@ export interface AutomationKnowledgeImportResult {
   errors: string[];
 }
 
+export interface WecomBridgeWorkerStatus {
+  id: string;
+  workerId: string;
+  source: string;
+  mode: string;
+  host: string;
+  pid?: number;
+  version?: string;
+  note?: string;
+  pendingReplies: number;
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+  online: boolean;
+  staleSeconds: number;
+  offlineAfterSeconds: number;
+}
+
 export interface AutomationBridgeStatus {
   enabled: boolean;
   configured: boolean;
@@ -136,6 +154,8 @@ export interface AutomationBridgeStatus {
   knowledgeEndpoint: string;
   eventEndpoint: string;
   replyEndpoint: string;
+  heartbeatEndpoint: string;
+  workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];
 }
 

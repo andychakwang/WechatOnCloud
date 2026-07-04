@@ -37,6 +37,14 @@ function fmtDate(ms: number): string {
   const p = (x: number) => String(x).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+function fmtStaleSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '未知';
+  if (seconds < 10) return '刚刚';
+  if (seconds < 60) return `${Math.round(seconds)} 秒前`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} 小时前`;
+  return `${Math.round(seconds / 86400)} 天前`;
+}
 
 const MenuIcon = (
   <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -844,11 +852,33 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <div className="muted small">
                   回复 <code>{location.origin + bridge.replyEndpoint}</code>
                 </div>
+                <div className="muted small">
+                  心跳 <code>{location.origin + bridge.heartbeatEndpoint}</code>
+                </div>
                 <div className="chip-row">
                   <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
                   <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
                   <span className="chip chip-static">Bearer / X-Automation-Token</span>
                 </div>
+                {bridge.workers.length > 0 && (
+                  <div className="auto-list compact">
+                    {bridge.workers.slice(0, 4).map((worker) => (
+                      <div className="auto-list-item" key={worker.id}>
+                        <div>
+                          <b>{worker.workerId}</b>
+                          <div className="muted small">
+                            {worker.source} · {worker.mode} · {worker.host || '未知主机'}
+                            {worker.pid ? ` · pid ${worker.pid}` : ''}
+                          </div>
+                          <div className="muted small">
+                            最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies}
+                          </div>
+                        </div>
+                        <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             <div className="auto-list">
