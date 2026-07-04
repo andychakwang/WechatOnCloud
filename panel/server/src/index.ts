@@ -87,7 +87,7 @@ import {
   importAutomationKnowledge,
   listApprovedWecomBridgeReplies,
   listWecomBridgeEvents,
-  markWecomBridgeReplyDelivered,
+  patchWecomBridgeReplyDelivery,
   patchAutomationKnowledge,
   patchWecomBridgeEvent,
   deleteAutomationKnowledge,
@@ -379,8 +379,9 @@ app.get(AUTOMATION_BRIDGE_REPLY_ENDPOINT, async (req, reply) => {
 app.patch(`${AUTOMATION_BRIDGE_REPLY_ENDPOINT}/:eventId`, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   try {
-    const event = markWecomBridgeReplyDelivered(AUTOMATION_BRIDGE_USER, (req.params as any).eventId);
-    appendPanelLog('INFO', `Bridge 标记企微回复已交付：「${event.conversationName || event.senderName}」`);
+    const event = patchWecomBridgeReplyDelivery(AUTOMATION_BRIDGE_USER, (req.params as any).eventId, req.body as any);
+    const state = event.replyDeliveredAt ? '已交付' : event.replyFailedAt ? '交付失败' : event.replyClaimedAt ? '已领取' : '已更新';
+    appendPanelLog('INFO', `Bridge 标记企微回复${state}：「${event.conversationName || event.senderName}」`);
     return { event };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 更新回复状态失败' });

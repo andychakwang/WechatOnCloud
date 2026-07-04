@@ -899,8 +899,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       {AUTO_STATUS_LABEL[event.status] || event.status} · {event.source} · {fmtDate(Date.parse(event.receivedAt || event.createdAt))}
                       {event.senderName ? ` · ${event.senderName}` : ''}
                       {event.replyApproved ? ' · 回复已批准' : ''}
+                      {event.replyClaimedAt && !event.replyDeliveredAt ? ` · Mac 已领取${event.replyClaimedBy ? `(${event.replyClaimedBy})` : ''}` : ''}
+                      {event.replyFailedAt ? ' · 发送失败' : ''}
                       {event.replyDeliveredAt ? ' · 已交付 Mac' : ''}
                     </div>
+                    {event.replyError && <div className="muted small auto-snippet">失败原因：{event.replyError}</div>}
                     <div className="muted small auto-snippet">{event.inboundText}</div>
                   </div>
                   <div className="auto-actions">

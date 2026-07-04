@@ -155,6 +155,10 @@ export interface WecomBridgeEvent {
   replyDraft?: string;
   replyApproved: boolean;
   replyApprovedAt?: string;
+  replyClaimedAt?: string;
+  replyClaimedBy?: string;
+  replyFailedAt?: string;
+  replyError?: string;
   replyDeliveredAt?: string;
 }
 

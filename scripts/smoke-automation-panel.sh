@@ -122,6 +122,21 @@ for part in path.split("."):
 PY
 }
 
+json_assert_no_reply_id() {
+  local event_id="$1"
+  python3 - "$body_file" "$event_id" <<'PY'
+import json
+import sys
+
+file, event_id = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+for reply in payload.get("replies", []):
+    if reply.get("id") == event_id:
+        raise SystemExit(f"reply {event_id} should not be listed")
+PY
+}
+
 json_assert_eq() {
   local path="$1"
   local expected="$2"
@@ -238,7 +253,15 @@ PY
   json_assert_path event.replyApproved
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_path replies[0].id
-  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-delivered "$bridge_event_id" > "$body_file"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-reply "$bridge_event_id" --worker-id smoke-worker > "$body_file"
+  json_assert_path event.replyClaimedAt
+  json_assert_eq event.replyClaimedBy smoke-worker
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
+  json_assert_no_reply_id "$bridge_event_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-failed "$bridge_event_id" --error "smoke handler failed once" > "$body_file"
+  json_assert_path event.replyFailedAt
+  json_assert_path event.replyError
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-delivered "$bridge_event_id" --worker-id smoke-worker > "$body_file"
   json_assert_path event.replyDeliveredAt
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived

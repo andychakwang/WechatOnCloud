@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
 
@@ -15,14 +16,16 @@ Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
   push-events <file|-> [--source name]
   pull-replies [--limit 50]
+  claim-reply <eventId> [--worker-id name]
   mark-delivered <eventId>
-  run-approved --handler "command" [--limit 10] [--mark-delivered]
+  mark-failed <eventId> [--error text]
+  run-approved --handler "command" [--limit 10] [--claim] [--mark-delivered] [--report-failure]
 
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
-  node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --mark-delivered
+  node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --mark-delivered --report-failure
 `;
 
 class BridgeError extends Error {
@@ -71,6 +74,10 @@ function intOpt(value, fallback, min, max) {
   const n = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
+}
+
+function workerId(options) {
+  return String(options['worker-id'] || options.worker || process.env.WECOM_BRIDGE_WORKER_ID || `${hostname()}-${process.pid}`).trim();
 }
 
 function config(options) {
@@ -203,14 +210,46 @@ async function main() {
   if (command === 'mark-delivered') {
     const eventId = positional[0] || options.id || options['event-id'];
     if (!eventId) throw new BridgeError('Missing eventId for mark-delivered.');
-    printJson(await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {}));
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
+        deliveryStatus: 'delivered',
+        workerId: workerId(options),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'claim-reply') {
+    const eventId = positional[0] || options.id || options['event-id'];
+    if (!eventId) throw new BridgeError('Missing eventId for claim-reply.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
+        deliveryStatus: 'claimed',
+        workerId: workerId(options),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'mark-failed') {
+    const eventId = positional[0] || options.id || options['event-id'];
+    if (!eventId) throw new BridgeError('Missing eventId for mark-failed.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
+        deliveryStatus: 'failed',
+        workerId: workerId(options),
+        error: String(options.error || options.message || 'Mac handler failed'),
+      }),
+    );
     return;
   }
 
   if (command === 'run-approved') {
     const handler = options.handler;
     const limit = intOpt(options.limit, 10, 1, 50);
+    const claim = boolOpt(options, 'claim', 'claim-first');
     const markDelivered = boolOpt(options, 'mark-delivered', 'ack', 'ack-delivered');
+    const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
     const dryRun = boolOpt(options, 'dry-run');
     if (!handler && !dryRun) throw new BridgeError('run-approved requires --handler or --dry-run.');
     const { replies = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`);
@@ -220,15 +259,33 @@ async function main() {
         handled.push({ id: reply.id, conversationName: reply.conversationName, dryRun: true });
         continue;
       }
-      const result = await runHandler(handler, reply);
+      let runnable = reply;
+      if (claim) {
+        const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
+          deliveryStatus: 'claimed',
+          workerId: workerId(options),
+        });
+        runnable = claimed.event || reply;
+      }
+      const result = await runHandler(handler, runnable);
       const ok = result.code === 0;
-      const item = { id: reply.id, conversationName: reply.conversationName, ok, exitCode: result.code, signal: result.signal };
+      const item = { id: reply.id, conversationName: reply.conversationName, ok, exitCode: result.code, signal: result.signal, claimed: claim };
       if (ok && markDelivered) {
-        item.delivered = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {});
+        item.delivered = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
+          deliveryStatus: 'delivered',
+          workerId: workerId(options),
+        });
+      }
+      if (!ok && reportFailure) {
+        item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
+          deliveryStatus: 'failed',
+          workerId: workerId(options),
+          error: `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
+        });
       }
       handled.push(item);
     }
-    printJson({ handled, total: replies.length, markedDelivered: markDelivered });
+    printJson({ handled, total: replies.length, claimed: claim, markedDelivered: markDelivered, reportedFailure: reportFailure });
     return;
   }
 
