@@ -47,6 +47,7 @@ export interface AutomationKnowledgeImportResult {
 
 export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
 type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
+type WecomBridgeMassDeliveryStatus = 'claimed' | 'failed' | 'sent' | 'delivered' | 'released';
 
 export interface WecomBridgeEvent {
   id: string;
@@ -82,6 +83,7 @@ export interface WecomBridgeWorker {
   version?: string;
   note?: string;
   pendingReplies: number;
+  pendingMassTasks: number;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
@@ -157,6 +159,9 @@ export interface MassSendItem {
   sentAt?: string;
   auditEventId?: string;
   error?: string;
+  bridgeClaimedAt?: string;
+  bridgeClaimedBy?: string;
+  bridgeClaimExpiresAt?: string;
 }
 
 export interface MassSendJobOptions {
@@ -179,6 +184,19 @@ export interface MassSendJob {
   createdBy: string;
   options: MassSendJobOptions;
   items: MassSendItem[];
+}
+
+export interface WecomBridgeMassSendTask {
+  id: string;
+  jobId: string;
+  itemId: string;
+  jobTitle: string;
+  recipientName: string;
+  message: string;
+  options: MassSendJobOptions;
+  claimedAt?: string;
+  claimedBy?: string;
+  claimExpiresAt?: string;
 }
 
 export type MomentDraftStatus = 'draft' | 'ready' | 'prepared' | 'published' | 'archived';
@@ -282,6 +300,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       rules: raw?.rules ?? data.rules,
       knowledgeItems: raw?.knowledgeItems ?? data.knowledgeItems,
       bridgeEvents: data.bridgeEvents,
+      bridgeWorkers: data.bridgeWorkers,
       massSendJobs: data.massSendJobs,
       momentDrafts: data.momentDrafts,
       auditEvents: data.auditEvents,
@@ -331,6 +350,7 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
     version: str(raw?.version || raw?.clientVersion || '', 80).trim() || undefined,
     note: str(raw?.note || raw?.message || '', 300).trim() || undefined,
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
+    pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
     lastSeenAt: now,
     createdAt: now,
     updatedAt: now,
@@ -751,6 +771,9 @@ export function patchMassSendItem(actor: User, jobId: string, itemId: string, ra
     item.sentAt = undefined;
     item.auditEventId = undefined;
   }
+  item.bridgeClaimedAt = undefined;
+  item.bridgeClaimedBy = undefined;
+  item.bridgeClaimExpiresAt = undefined;
   job.updatedAt = new Date().toISOString();
   refreshMassJobCompletion(job);
   persist();
@@ -761,6 +784,133 @@ export function patchMassSendItem(actor: User, jobId: string, itemId: string, ra
     message: `群发队列「${job.title}」目标「${item.recipientName}」标记为 ${status}${item.error ? `：${item.error}` : ''}`,
   });
   return cloneMassSendJob(job);
+}
+
+export function listApprovedWecomBridgeMassTasks(limit = 50): WecomBridgeMassSendTask[] {
+  const n = clampInt(limit, 1, 200, 50);
+  if (!data.settings.enabled || !data.settings.massSendEnabled) return [];
+  const now = new Date().toISOString();
+  const tasks: WecomBridgeMassSendTask[] = [];
+  for (const job of data.massSendJobs) {
+    if (tasks.length >= n) break;
+    if (!isMassJobBridgeRunnable(job)) continue;
+    const item = job.items.find((candidate) => candidate.status === 'pending');
+    if (!item) {
+      refreshMassJobCompletion(job);
+      continue;
+    }
+    if (item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, now)) continue;
+    try {
+      enforceRateLimits(item.recipientName);
+      enforceMassSendDelay(job);
+      const risk = assessRisk([job.message]);
+      if (risk.level !== 'normal') continue;
+    } catch {
+      continue;
+    }
+    tasks.push(massTaskFrom(job, item));
+  }
+  return tasks;
+}
+
+export function patchWecomBridgeMassTaskDelivery(
+  actor: User,
+  taskId: string,
+  raw: any,
+): { task?: WecomBridgeMassSendTask; job: MassSendJob; item: MassSendItem; event?: AutomationAuditEvent } {
+  ensureBridgeMassTaskEnabled();
+  const { jobId, itemId } = parseMassTaskId(taskId);
+  const job = data.massSendJobs.find((candidate) => candidate.id === jobId);
+  if (!job) throw new Error('群发队列不存在');
+  const item = job.items.find((candidate) => candidate.id === itemId);
+  if (!item) throw new Error('群发目标不存在');
+  const deliveryStatus = normalizeBridgeMassDeliveryStatus(raw?.deliveryStatus ?? raw?.status);
+  if (!deliveryStatus) throw new Error('Bridge 群发任务状态不合法');
+  if (!isMassJobBridgeRunnable(job) && deliveryStatus !== 'released') throw new Error('群发队列当前不可执行');
+  const now = new Date().toISOString();
+  const workerId = str(raw?.workerId ?? raw?.replyClaimedBy ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
+
+  if (deliveryStatus === 'claimed') {
+    if (item.status !== 'pending') throw new Error('只有待发送目标可以领取');
+    if (item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, now) && item.bridgeClaimedBy && item.bridgeClaimedBy !== workerId) {
+      throw new Error(`群发目标已由 ${item.bridgeClaimedBy} 领取，未超时前不能重复领取`);
+    }
+    try {
+      enforceRateLimits(item.recipientName);
+      enforceMassSendDelay(job);
+      const risk = assessRisk([job.message]);
+      if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
+      if (risk.level === 'review') throw new Error(`群发内容需要人工复核：${risk.reasons.join('；')}`);
+    } catch (e: any) {
+      throw new Error(e?.message || '群发任务暂不可领取');
+    }
+    item.bridgeClaimedAt = now;
+    item.bridgeClaimedBy = workerId;
+    item.bridgeClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
+    item.error = undefined;
+    job.status = job.status === 'queued' ? 'running' : job.status;
+    job.updatedAt = now;
+    persist();
+    return { task: massTaskFrom(job, item), job: cloneMassSendJob(job), item: { ...item } };
+  }
+
+  if (deliveryStatus === 'released') {
+    if (item.status === 'sent') throw new Error('已发送目标不能释放领取');
+    item.bridgeClaimedAt = undefined;
+    item.bridgeClaimedBy = undefined;
+    item.bridgeClaimExpiresAt = undefined;
+    if (item.status === 'pending') item.error = undefined;
+    job.updatedAt = now;
+    persist();
+    return { task: item.status === 'pending' ? massTaskFrom(job, item) : undefined, job: cloneMassSendJob(job), item: { ...item } };
+  }
+
+  if (deliveryStatus === 'failed') {
+    if (item.status === 'sent') throw new Error('已发送目标不能标记失败');
+    const msg = str(raw?.error ?? raw?.message ?? raw?.reason ?? 'Mac 端群发执行失败', 300).trim() || 'Mac 端群发执行失败';
+    item.status = 'failed';
+    item.error = msg;
+    item.bridgeClaimedAt = undefined;
+    item.bridgeClaimedBy = undefined;
+    item.bridgeClaimExpiresAt = undefined;
+    job.status = 'paused';
+    job.updatedAt = now;
+    const event = addAutomationAudit({
+      action: 'mass_item_failed',
+      actor: actor.username,
+      conversationName: item.recipientName,
+      message: `Bridge 群发队列「${job.title}」发送给「${item.recipientName}」失败：${msg}`,
+    });
+    item.auditEventId = event.id;
+    persist();
+    return { job: cloneMassSendJob(job), item: { ...item }, event };
+  }
+
+  if (deliveryStatus === 'sent' || deliveryStatus === 'delivered') {
+    if (item.status === 'sent') return { job: cloneMassSendJob(job), item: { ...item } };
+    if (item.status !== 'pending') throw new Error('只有待发送目标可以标记为已发送');
+    item.status = 'sent';
+    item.sentAt = now;
+    item.error = undefined;
+    item.bridgeClaimedAt = undefined;
+    item.bridgeClaimedBy = undefined;
+    item.bridgeClaimExpiresAt = undefined;
+    job.status = 'running';
+    job.updatedAt = now;
+    const event = addAutomationAudit({
+      action: 'mass_item_sent',
+      actor: actor.username,
+      conversationName: item.recipientName,
+      riskLevel: 'normal',
+      message: `Bridge 群发队列「${job.title}」发送给「${item.recipientName}」`,
+    });
+    item.auditEventId = event.id;
+    refreshMassJobCompletion(job);
+    persist();
+    return { job: cloneMassSendJob(job), item: { ...item }, event };
+  }
+
+  throw new Error('Bridge 群发任务状态不合法');
 }
 
 export function listMomentDrafts(limit = 100): MomentDraft[] {
@@ -1074,6 +1224,9 @@ export async function sendNextMassSendItem(
     persist();
     throw new Error('群发队列没有待发送目标');
   }
+  if (pending.bridgeClaimedAt && !isMassItemBridgeClaimExpired(pending)) {
+    throw new Error(`群发目标已由 ${pending.bridgeClaimedBy || 'Mac Bridge'} 领取，未超时前不能从 Web 重复发送`);
+  }
 
   enforceRateLimits(pending.recipientName);
   enforceMassSendDelay(job);
@@ -1105,6 +1258,9 @@ export async function sendNextMassSendItem(
     job.updatedAt = now;
     pending.status = 'failed';
     pending.error = msg;
+    pending.bridgeClaimedAt = undefined;
+    pending.bridgeClaimedBy = undefined;
+    pending.bridgeClaimExpiresAt = undefined;
     const event = addAutomationAudit({
       action: 'mass_item_failed',
       actor: actor.username,
@@ -1124,6 +1280,9 @@ export async function sendNextMassSendItem(
   pending.status = 'sent';
   pending.sentAt = now;
   pending.error = undefined;
+  pending.bridgeClaimedAt = undefined;
+  pending.bridgeClaimedBy = undefined;
+  pending.bridgeClaimExpiresAt = undefined;
   const event = addAutomationAudit({
     action: 'mass_item_sent',
     actor: actor.username,
@@ -1479,6 +1638,7 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     version: str(raw?.version || '', 80).trim() || undefined,
     note: str(raw?.note || '', 300).trim() || undefined,
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
+    pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
     lastSeenAt: normalizeIsoDate(raw?.lastSeenAt, updatedAt),
     createdAt,
     updatedAt,
@@ -1525,6 +1685,9 @@ function normalizeMassSendItem(raw: any, preserveIds: boolean, now: string): Mas
     sentAt: typeof raw?.sentAt === 'string' && raw.sentAt ? raw.sentAt : undefined,
     auditEventId: str(raw?.auditEventId, 80) || undefined,
     error: str(raw?.error, 300) || undefined,
+    bridgeClaimedAt: typeof raw?.bridgeClaimedAt === 'string' && raw.bridgeClaimedAt ? raw.bridgeClaimedAt : undefined,
+    bridgeClaimedBy: str(raw?.bridgeClaimedBy, 120).trim() || undefined,
+    bridgeClaimExpiresAt: typeof raw?.bridgeClaimExpiresAt === 'string' && raw.bridgeClaimExpiresAt ? raw.bridgeClaimExpiresAt : undefined,
   };
 }
 
@@ -1784,6 +1947,45 @@ function isBridgeReplyClaimExpired(event: WecomBridgeEvent, nowIso = new Date().
   return Number.isFinite(expiresMs) && Number.isFinite(nowMs) && expiresMs <= nowMs;
 }
 
+function ensureBridgeMassTaskEnabled() {
+  if (!data.settings.enabled) throw new Error('自动化总开关未开启');
+  if (!data.settings.massSendEnabled) throw new Error('群发队列开关未开启');
+}
+
+function isMassJobBridgeRunnable(job: MassSendJob): boolean {
+  return job.approved && (job.status === 'queued' || job.status === 'running') && !!job.message.trim();
+}
+
+function isMassItemBridgeClaimExpired(item: MassSendItem, nowIso = new Date().toISOString()): boolean {
+  if (!item.bridgeClaimedAt) return false;
+  const expiresAt = item.bridgeClaimExpiresAt || claimExpiresAt(item.bridgeClaimedAt, DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS);
+  const expiresMs = Date.parse(expiresAt);
+  const nowMs = Date.parse(nowIso);
+  return Number.isFinite(expiresMs) && Number.isFinite(nowMs) && expiresMs <= nowMs;
+}
+
+function massTaskFrom(job: MassSendJob, item: MassSendItem): WecomBridgeMassSendTask {
+  return {
+    id: `${job.id}:${item.id}`,
+    jobId: job.id,
+    itemId: item.id,
+    jobTitle: job.title,
+    recipientName: item.recipientName,
+    message: job.message,
+    options: { ...job.options },
+    claimedAt: item.bridgeClaimedAt,
+    claimedBy: item.bridgeClaimedBy,
+    claimExpiresAt: item.bridgeClaimExpiresAt,
+  };
+}
+
+function parseMassTaskId(taskId: string): { jobId: string; itemId: string } {
+  const raw = String(taskId || '');
+  const index = raw.indexOf(':');
+  if (index <= 0 || index >= raw.length - 1) throw new Error('群发任务 ID 不合法');
+  return { jobId: raw.slice(0, index), itemId: raw.slice(index + 1) };
+}
+
 function cloneRule(rule: AutomationRule): AutomationRule {
   return { ...rule, triggers: [...rule.triggers], responseSteps: rule.responseSteps.map((s) => ({ ...s })) };
 }
@@ -1847,6 +2049,11 @@ function normalizeBridgeEventStatus(value: unknown): WecomBridgeEventStatus | nu
 
 function normalizeBridgeReplyDeliveryStatus(value: unknown): WecomBridgeReplyDeliveryStatus | null {
   return value === 'claimed' || value === 'failed' || value === 'delivered' || value === 'released' ? value : null;
+}
+
+function normalizeBridgeMassDeliveryStatus(value: unknown): WecomBridgeMassDeliveryStatus | null {
+  if (value === 'claimed' || value === 'failed' || value === 'sent' || value === 'delivered' || value === 'released') return value;
+  return null;
 }
 
 function normalizeKnowledgeCategory(value: unknown): AutomationKnowledgeCategory | null {

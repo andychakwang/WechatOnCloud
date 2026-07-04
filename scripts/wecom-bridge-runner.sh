@@ -16,7 +16,9 @@ fi
 
 CLIENT="${WECOM_BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
+MASS_HANDLER="${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}"
 MODE="${WECOM_RUNNER_MODE:-dry-run}"
+TARGET="${WECOM_RUNNER_TARGET:-replies}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
 CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
 
@@ -33,10 +35,12 @@ Required environment/config:
 
 Optional:
   WECOM_RUNNER_MODE=dry-run|prepare|send   default: dry-run
+  WECOM_RUNNER_TARGET=replies|mass          default: replies
   WECOM_RUNNER_LIMIT=5
   WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
+  WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
   WECOM_ALLOW_SEND=1                       required for send
 
 Modes:
@@ -53,7 +57,7 @@ case "$cmd" in
     exit 0
     ;;
   print-config)
-    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMODE=%s\nLIMIT=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MODE" "$LIMIT"
+    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MODE" "$TARGET" "$LIMIT"
     exit 0
     ;;
   run-once)
@@ -66,6 +70,11 @@ esac
 
 if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
   echo "ERROR: WECOM_RUNNER_MODE must be dry-run, prepare, or send." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "replies" && "$TARGET" != "mass" ]]; then
+  echo "ERROR: WECOM_RUNNER_TARGET must be replies or mass." >&2
   exit 2
 fi
 
@@ -83,10 +92,21 @@ node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
 
 case "$MODE" in
   dry-run)
+    if [[ "$TARGET" == "mass" ]]; then
+      exec node "$CLIENT" run-mass --limit "$LIMIT" --dry-run
+    fi
     exec node "$CLIENT" run-approved --limit "$LIMIT" --dry-run
     ;;
   prepare)
     export WECOM_HANDLER_MODE="${WECOM_HANDLER_MODE:-prepare}"
+    if [[ "$TARGET" == "mass" ]]; then
+      exec node "$CLIENT" run-mass \
+        --limit "$LIMIT" \
+        --handler "$MASS_HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --report-failure
+    fi
     exec node "$CLIENT" run-approved \
       --limit "$LIMIT" \
       --handler "$HANDLER" \
@@ -99,6 +119,15 @@ case "$MODE" in
     if [[ "${WECOM_ALLOW_SEND:-}" != "1" ]]; then
       echo "ERROR: send mode requires WECOM_ALLOW_SEND=1." >&2
       exit 2
+    fi
+    if [[ "$TARGET" == "mass" ]]; then
+      exec node "$CLIENT" run-mass \
+        --limit "$LIMIT" \
+        --handler "$MASS_HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --mark-sent \
+        --report-failure
     fi
     exec node "$CLIENT" run-approved \
       --limit "$LIMIT" \

@@ -892,7 +892,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             {worker.pid ? ` · pid ${worker.pid}` : ''}
                           </div>
                           <div className="muted small">
-                            最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies}
+                            最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks}
                           </div>
                         </div>
                         <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>

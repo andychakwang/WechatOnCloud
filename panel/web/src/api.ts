@@ -136,6 +136,7 @@ export interface WecomBridgeWorkerStatus {
   version?: string;
   note?: string;
   pendingReplies: number;
+  pendingMassTasks: number;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
@@ -154,6 +155,7 @@ export interface AutomationBridgeStatus {
   knowledgeEndpoint: string;
   eventEndpoint: string;
   replyEndpoint: string;
+  massTaskEndpoint: string;
   heartbeatEndpoint: string;
   workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];

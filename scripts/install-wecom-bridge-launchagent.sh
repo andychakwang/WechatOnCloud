@@ -8,6 +8,7 @@ ENV_FILE="${WECOM_BRIDGE_ENV_FILE:-$HOME/.config/wechat-on-cloud/wecom-bridge.en
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 RUNNER="$ROOT/scripts/wecom-bridge-runner.sh"
 MODE="${WECOM_RUNNER_MODE:-dry-run}"
+TARGET="${WECOM_RUNNER_TARGET:-replies}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
 CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
 DRY_RUN=0
@@ -23,6 +24,11 @@ quote() {
 
 if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
   echo "ERROR: WECOM_RUNNER_MODE must be dry-run, prepare, or send." >&2
+  exit 2
+fi
+
+if [[ "$TARGET" != "replies" && "$TARGET" != "mass" ]]; then
+  echo "ERROR: WECOM_RUNNER_TARGET must be replies or mass." >&2
   exit 2
 fi
 
@@ -52,7 +58,9 @@ env_text() {
     [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && printf 'AUTOMATION_BRIDGE_TOKEN=%s\n' "$(quote "$AUTOMATION_BRIDGE_TOKEN")"
     [[ -n "${WECOM_BRIDGE_TOKEN:-}" ]] && printf 'WECOM_BRIDGE_TOKEN=%s\n' "$(quote "$WECOM_BRIDGE_TOKEN")"
     printf 'WECOM_RUNNER_MODE=%s\n' "$(quote "$MODE")"
+    printf 'WECOM_RUNNER_TARGET=%s\n' "$(quote "$TARGET")"
     printf 'WECOM_RUNNER_LIMIT=%s\n' "$(quote "$LIMIT")"
+    printf 'WECOM_MASS_HANDLER=%s\n' "$(quote "${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}")"
     printf 'WECOM_CLAIM_TTL_SECONDS=%s\n' "$(quote "$CLAIM_TTL_SECONDS")"
     printf 'WECOM_BRIDGE_WORKER_ID=%s\n' "$(quote "${WECOM_BRIDGE_WORKER_ID:-$(hostname)-launchagent}")"
     printf 'WECOM_APP_NAME=%s\n' "$(quote "${WECOM_APP_NAME:-企业微信}")"

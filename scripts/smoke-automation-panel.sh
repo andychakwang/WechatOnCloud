@@ -9,6 +9,7 @@ PANEL_URL="${PANEL_URL%/}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRIDGE_CLIENT="${BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 WECOM_REPLY_HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
+WECOM_MASS_HANDLER="${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}"
 WECOM_BRIDGE_RUNNER="${WECOM_BRIDGE_RUNNER:-$ROOT/scripts/wecom-bridge-runner.sh}"
 stamp="$(date +%Y%m%d%H%M%S)"
 cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
@@ -152,6 +153,37 @@ for reply in payload.get("replies", []):
     if reply.get("id") == event_id:
         raise SystemExit(0)
 raise SystemExit(f"reply {event_id} should be listed")
+PY
+}
+
+json_assert_no_task_id() {
+  local task_id="$1"
+  python3 - "$body_file" "$task_id" <<'PY'
+import json
+import sys
+
+file, task_id = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+for task in payload.get("tasks", []):
+    if task.get("id") == task_id:
+        raise SystemExit(f"task {task_id} should not be listed")
+PY
+}
+
+json_assert_task_id() {
+  local task_id="$1"
+  python3 - "$body_file" "$task_id" <<'PY'
+import json
+import sys
+
+file, task_id = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+for task in payload.get("tasks", []):
+    if task.get("id") == task_id:
+        raise SystemExit(0)
+raise SystemExit(f"task {task_id} should be listed")
 PY
 }
 
@@ -321,6 +353,117 @@ PY
   json_assert_path event.replyDeliveredAt
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
+
+  say "Check WeCom mass handler dry-run"
+  mass_handler_payload="$(python3 <<'PY'
+import json
+print(json.dumps({
+    "id": "smoke-job:smoke-item",
+    "jobId": "smoke-job",
+    "itemId": "smoke-item",
+    "jobTitle": "smoke mass handler",
+    "recipientName": "Smoke Test Contact",
+    "message": "这是一条 Bridge smoke 测试通知内容，仅用于测试联系人。",
+}, ensure_ascii=False))
+PY
+)"
+  WECOM_HANDLER_MODE=dry-run "$WECOM_MASS_HANDLER" <<<"$mass_handler_payload" > "$body_file"
+  json_assert_path ok
+
+  say "Enable automation mass-send for Bridge task smoke"
+  request_json GET /api/admin/automation/config
+  mass_config_payload="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config["settings"]
+settings["enabled"] = True
+settings["massSendEnabled"] = True
+settings["maximumAutomaticSendsPerHour"] = 200
+settings["perConversationCooldownMinutes"] = 0
+config["settings"] = settings
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$mass_config_payload"
+  json_assert_path config.settings.massSendEnabled
+
+  say "Claim, release, fail and sent WeCom mass Bridge tasks"
+  bridge_mass_title="smoke-bridge-mass-$stamp"
+  bridge_mass_payload="$(python3 - "$bridge_mass_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1]
+print(json.dumps({
+    "title": title,
+    "message": "这是一条 Bridge smoke 测试通知内容，仅用于测试联系人。",
+    "recipients": ["Smoke Bridge Contact A"],
+    "options": {
+        "perSendDelaySeconds": 0,
+        "requireOperatorConfirmRecipient": False,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/mass-jobs "$bridge_mass_payload"
+  json_assert_path job.id
+  bridge_mass_job_id="$(json_get job.id)"
+  request_json PATCH "/api/admin/automation/mass-jobs/$bridge_mass_job_id" '{"approved":true,"status":"queued"}'
+  json_assert_eq job.status queued
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=mass "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  json_assert_path handled[0].dryRun
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 20 > "$body_file"
+  json_assert_path tasks[0].id
+  bridge_mass_task_id="$(json_get tasks[0].id)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-mass-task "$bridge_mass_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_path task.claimedAt
+  json_assert_eq task.claimedBy smoke-worker
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 20 > "$body_file"
+  json_assert_no_task_id "$bridge_mass_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" release-mass-task "$bridge_mass_task_id" --worker-id smoke-worker --reason "smoke release mass task" > "$body_file"
+  json_assert_missing_or_empty task.claimedAt
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 20 > "$body_file"
+  json_assert_task_id "$bridge_mass_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-mass-task "$bridge_mass_task_id" --worker-id smoke-worker --claim-ttl-seconds 120 > "$body_file"
+  json_assert_path task.claimExpiresAt
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-mass-failed "$bridge_mass_task_id" --worker-id smoke-worker --error "smoke mass handler failed once" > "$body_file"
+  json_assert_eq item.status failed
+  json_assert_eq job.status paused
+
+  bridge_mass_sent_payload="$(python3 - "$bridge_mass_title" <<'PY'
+import json
+import sys
+
+title = sys.argv[1] + "-sent"
+print(json.dumps({
+    "title": title,
+    "message": "这是一条 Bridge smoke 测试通知内容，仅用于测试联系人。",
+    "recipients": ["Smoke Bridge Contact B"],
+    "options": {
+        "perSendDelaySeconds": 0,
+        "requireOperatorConfirmRecipient": False,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/mass-jobs "$bridge_mass_sent_payload"
+  json_assert_path job.id
+  bridge_mass_sent_job_id="$(json_get job.id)"
+  request_json PATCH "/api/admin/automation/mass-jobs/$bridge_mass_sent_job_id" '{"approved":true,"status":"queued"}'
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 20 > "$body_file"
+  json_assert_path tasks[0].id
+  bridge_mass_sent_task_id="$(json_get tasks[0].id)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-mass-task "$bridge_mass_sent_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_path task.claimedAt
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-mass-sent "$bridge_mass_sent_task_id" --worker-id smoke-worker > "$body_file"
+  json_assert_eq item.status sent
+  json_assert_eq job.status completed
 fi
 
 say "Simulate inbound message without sending"

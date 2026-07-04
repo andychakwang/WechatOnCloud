@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r18-claim-retry';
+const CLIENT_VERSION = 'automation-lab-r19-mass-bridge';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -23,6 +23,12 @@ Commands:
   mark-delivered <eventId>
   mark-failed <eventId> [--error text]
   run-approved --handler "command" [--limit 10] [--claim] [--mark-delivered] [--report-failure]
+  pull-mass-tasks [--limit 50]
+  claim-mass-task <taskId> [--worker-id name] [--claim-ttl-seconds 300]
+  release-mass-task <taskId> [--worker-id name] [--reason text]
+  mark-mass-sent <taskId> [--worker-id name]
+  mark-mass-failed <taskId> [--worker-id name] [--error text]
+  run-mass --handler "command" [--limit 10] [--claim] [--mark-sent] [--report-failure]
 
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
@@ -31,6 +37,8 @@ Examples:
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
   node scripts/wecom-bridge-client.mjs release-reply <eventId> --reason "window not ready"
   node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --claim-ttl-seconds 300 --mark-delivered --report-failure
+  node scripts/wecom-bridge-client.mjs pull-mass-tasks --limit 5
+  node scripts/wecom-bridge-client.mjs run-mass --handler "./scripts/wecom-mac-mass-handler.sh" --claim --mark-sent --report-failure
 `;
 
 class BridgeError extends Error {
@@ -185,6 +193,27 @@ async function runHandler(command, reply) {
   });
 }
 
+async function runMassHandler(command, task) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, {
+      shell: true,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      env: {
+        ...process.env,
+        WECOM_BRIDGE_MASS_TASK_ID: task.id || '',
+        WECOM_BRIDGE_MASS_JOB_ID: task.jobId || '',
+        WECOM_BRIDGE_MASS_ITEM_ID: task.itemId || '',
+        WECOM_BRIDGE_MASS_JOB_TITLE: task.jobTitle || '',
+        WECOM_BRIDGE_RECIPIENT_NAME: task.recipientName || '',
+        WECOM_BRIDGE_MASS_MESSAGE: task.message || '',
+      },
+    });
+    child.on('error', reject);
+    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal }));
+    child.stdin.end(`${JSON.stringify(task)}\n`);
+  });
+}
+
 async function main() {
   const { command, options, positional } = parseArgs(process.argv.slice(2));
   if (command === 'help' || command === '--help' || command === '-h') {
@@ -226,6 +255,12 @@ async function main() {
   if (command === 'pull-replies') {
     const limit = intOpt(options.limit, 50, 1, 200);
     printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`));
+    return;
+  }
+
+  if (command === 'pull-mass-tasks') {
+    const limit = intOpt(options.limit, 50, 1, 200);
+    printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`));
     return;
   }
 
@@ -280,6 +315,57 @@ async function main() {
     return;
   }
 
+  if (command === 'claim-mass-task') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for claim-mass-task.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'claimed',
+        workerId: workerId(options),
+        claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'release-mass-task') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for release-mass-task.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'released',
+        workerId: workerId(options),
+        reason: String(options.reason || options.message || 'released by Mac bridge client'),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'mark-mass-sent') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for mark-mass-sent.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'sent',
+        workerId: workerId(options),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'mark-mass-failed') {
+    const taskId = positional[0] || options.id || options['task-id'];
+    if (!taskId) throw new BridgeError('Missing taskId for mark-mass-failed.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
+        deliveryStatus: 'failed',
+        workerId: workerId(options),
+        error: String(options.error || options.message || 'Mac mass handler failed'),
+      }),
+    );
+    return;
+  }
+
   if (command === 'run-approved') {
     const handler = options.handler;
     const limit = intOpt(options.limit, 10, 1, 50);
@@ -323,6 +409,52 @@ async function main() {
       handled.push(item);
     }
     printJson({ handled, total: replies.length, claimed: claim, markedDelivered: markDelivered, reportedFailure: reportFailure });
+    return;
+  }
+
+  if (command === 'run-mass') {
+    const handler = options.handler;
+    const limit = intOpt(options.limit, 10, 1, 50);
+    const claim = boolOpt(options, 'claim', 'claim-first');
+    const markSent = boolOpt(options, 'mark-sent', 'ack', 'ack-sent', 'mark-delivered');
+    const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
+    const dryRun = boolOpt(options, 'dry-run');
+    if (!handler && !dryRun) throw new BridgeError('run-mass requires --handler or --dry-run.');
+    const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`);
+    const handled = [];
+    for (const task of tasks) {
+      if (dryRun) {
+        handled.push({ id: task.id, recipientName: task.recipientName, dryRun: true });
+        continue;
+      }
+      let runnable = task;
+      if (claim) {
+        const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'claimed',
+          workerId: workerId(options),
+          claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
+        });
+        runnable = claimed.task || task;
+      }
+      const result = await runMassHandler(handler, runnable);
+      const ok = result.code === 0;
+      const item = { id: task.id, recipientName: task.recipientName, ok, exitCode: result.code, signal: result.signal, claimed: claim };
+      if (ok && markSent) {
+        item.sent = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'sent',
+          workerId: workerId(options),
+        });
+      }
+      if (!ok && reportFailure) {
+        item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
+          deliveryStatus: 'failed',
+          workerId: workerId(options),
+          error: `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
+        });
+      }
+      handled.push(item);
+    }
+    printJson({ handled, total: tasks.length, claimed: claim, markedSent: markSent, reportedFailure: reportFailure });
     return;
   }
 
