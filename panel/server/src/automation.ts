@@ -46,7 +46,7 @@ export interface AutomationKnowledgeImportResult {
 }
 
 export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
-type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered';
+type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
 
 export interface WecomBridgeEvent {
   id: string;
@@ -66,6 +66,7 @@ export interface WecomBridgeEvent {
   replyApprovedAt?: string;
   replyClaimedAt?: string;
   replyClaimedBy?: string;
+  replyClaimExpiresAt?: string;
   replyFailedAt?: string;
   replyError?: string;
   replyDeliveredAt?: string;
@@ -224,6 +225,7 @@ const MAX_AUDIT_EVENTS = 1000;
 const MAX_KNOWLEDGE_ITEMS = 500;
 const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
+const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   enabled: false,
@@ -392,6 +394,7 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
           replyApprovedAt: existing.replyApprovedAt,
           replyClaimedAt: existing.replyClaimedAt,
           replyClaimedBy: existing.replyClaimedBy,
+          replyClaimExpiresAt: existing.replyClaimExpiresAt,
           replyFailedAt: existing.replyFailedAt,
           replyError: existing.replyError,
           replyDeliveredAt: existing.replyDeliveredAt,
@@ -437,6 +440,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     if ((event.replyDraft || '') !== previousDraft) {
       event.replyClaimedAt = undefined;
       event.replyClaimedBy = undefined;
+      event.replyClaimExpiresAt = undefined;
       event.replyFailedAt = undefined;
       event.replyError = undefined;
       event.replyDeliveredAt = undefined;
@@ -446,6 +450,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
       event.replyApprovedAt = undefined;
       event.replyClaimedAt = undefined;
       event.replyClaimedBy = undefined;
+      event.replyClaimExpiresAt = undefined;
       event.replyFailedAt = undefined;
       event.replyError = undefined;
       event.replyDeliveredAt = undefined;
@@ -458,6 +463,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     if (!raw.replyApproved) {
       event.replyClaimedAt = undefined;
       event.replyClaimedBy = undefined;
+      event.replyClaimExpiresAt = undefined;
       event.replyFailedAt = undefined;
       event.replyError = undefined;
       event.replyDeliveredAt = undefined;
@@ -468,8 +474,21 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
   if (raw?.markClaimed === true || deliveryStatus === 'claimed') {
     if (!event.replyApproved || !event.replyDraft?.trim()) throw new Error('未批准的回复不能领取');
     if (event.replyDeliveredAt) throw new Error('已交付的回复不能再次领取');
+    const workerId = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
+    if (event.replyClaimedAt && !isBridgeReplyClaimExpired(event, now) && event.replyClaimedBy && event.replyClaimedBy !== workerId) {
+      throw new Error(`回复已由 ${event.replyClaimedBy} 领取，未超时前不能重复领取`);
+    }
     event.replyClaimedAt = now;
-    event.replyClaimedBy = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
+    event.replyClaimedBy = workerId;
+    event.replyClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
+    event.replyFailedAt = undefined;
+    event.replyError = undefined;
+  }
+  if (raw?.markReleased === true || deliveryStatus === 'released') {
+    if (event.replyDeliveredAt) throw new Error('已交付的回复不能释放领取');
+    event.replyClaimedAt = undefined;
+    event.replyClaimedBy = undefined;
+    event.replyClaimExpiresAt = undefined;
     event.replyFailedAt = undefined;
     event.replyError = undefined;
   }
@@ -479,6 +498,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     event.replyError = str(raw?.replyError ?? raw?.error ?? raw?.message ?? 'Mac 端执行失败', 1000).trim() || 'Mac 端执行失败';
     event.replyClaimedAt = undefined;
     event.replyClaimedBy = undefined;
+    event.replyClaimExpiresAt = undefined;
     event.replyDeliveredAt = undefined;
   }
   if (raw?.markDelivered === true || deliveryStatus === 'delivered') {
@@ -487,6 +507,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
       event.replyClaimedAt = now;
       event.replyClaimedBy = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
     }
+    event.replyClaimExpiresAt = undefined;
     event.replyFailedAt = undefined;
     event.replyError = undefined;
     event.replyDeliveredAt = now;
@@ -505,10 +526,15 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
 
 export function listApprovedWecomBridgeReplies(limit = 50): WecomBridgeEvent[] {
   const n = clampInt(limit, 1, 200, 50);
+  const now = new Date().toISOString();
   return data.bridgeEvents
     .filter(
       (event) =>
-        event.replyApproved && !!event.replyDraft?.trim() && !event.replyClaimedAt && !event.replyDeliveredAt && event.status !== 'archived',
+        event.replyApproved &&
+        !!event.replyDraft?.trim() &&
+        (!event.replyClaimedAt || isBridgeReplyClaimExpired(event, now)) &&
+        !event.replyDeliveredAt &&
+        event.status !== 'archived',
     )
     .slice(-n)
     .reverse()
@@ -518,7 +544,11 @@ export function listApprovedWecomBridgeReplies(limit = 50): WecomBridgeEvent[] {
 export function patchWecomBridgeReplyDelivery(actor: User, eventId: string, raw: any): WecomBridgeEvent {
   const payload = raw && typeof raw === 'object' ? raw : {};
   const hasExplicitAction =
-    payload.deliveryStatus !== undefined || payload.markClaimed === true || payload.markFailed === true || payload.markDelivered === true;
+    payload.deliveryStatus !== undefined ||
+    payload.markClaimed === true ||
+    payload.markFailed === true ||
+    payload.markDelivered === true ||
+    payload.markReleased === true;
   return patchWecomBridgeEvent(actor, eventId, hasExplicitAction ? payload : { markDelivered: true });
 }
 
@@ -1427,6 +1457,7 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     replyApprovedAt: typeof raw?.replyApprovedAt === 'string' && raw.replyApprovedAt ? raw.replyApprovedAt : undefined,
     replyClaimedAt: typeof raw?.replyClaimedAt === 'string' && raw.replyClaimedAt ? raw.replyClaimedAt : undefined,
     replyClaimedBy: str(raw?.replyClaimedBy, 120).trim() || undefined,
+    replyClaimExpiresAt: typeof raw?.replyClaimExpiresAt === 'string' && raw.replyClaimExpiresAt ? raw.replyClaimExpiresAt : undefined,
     replyFailedAt: typeof raw?.replyFailedAt === 'string' && raw.replyFailedAt ? raw.replyFailedAt : undefined,
     replyError: str(raw?.replyError, 1000).trim() || undefined,
     replyDeliveredAt: typeof raw?.replyDeliveredAt === 'string' && raw.replyDeliveredAt ? raw.replyDeliveredAt : undefined,
@@ -1740,6 +1771,19 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+function claimExpiresAt(nowIso: string, rawTtlSeconds: unknown): string {
+  const ttl = clampInt(rawTtlSeconds, 30, 24 * 60 * 60, DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS);
+  return new Date(Date.parse(nowIso) + ttl * 1000).toISOString();
+}
+
+function isBridgeReplyClaimExpired(event: WecomBridgeEvent, nowIso = new Date().toISOString()): boolean {
+  if (!event.replyClaimedAt) return false;
+  const expiresAt = event.replyClaimExpiresAt || claimExpiresAt(event.replyClaimedAt, DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS);
+  const expiresMs = Date.parse(expiresAt);
+  const nowMs = Date.parse(nowIso);
+  return Number.isFinite(expiresMs) && Number.isFinite(nowMs) && expiresMs <= nowMs;
+}
+
 function cloneRule(rule: AutomationRule): AutomationRule {
   return { ...rule, triggers: [...rule.triggers], responseSteps: rule.responseSteps.map((s) => ({ ...s })) };
 }
@@ -1802,7 +1846,7 @@ function normalizeBridgeEventStatus(value: unknown): WecomBridgeEventStatus | nu
 }
 
 function normalizeBridgeReplyDeliveryStatus(value: unknown): WecomBridgeReplyDeliveryStatus | null {
-  return value === 'claimed' || value === 'failed' || value === 'delivered' ? value : null;
+  return value === 'claimed' || value === 'failed' || value === 'delivered' || value === 'released' ? value : null;
 }
 
 function normalizeKnowledgeCategory(value: unknown): AutomationKnowledgeCategory | null {

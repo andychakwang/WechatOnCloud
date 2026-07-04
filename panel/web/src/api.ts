@@ -177,6 +177,7 @@ export interface WecomBridgeEvent {
   replyApprovedAt?: string;
   replyClaimedAt?: string;
   replyClaimedBy?: string;
+  replyClaimExpiresAt?: string;
   replyFailedAt?: string;
   replyError?: string;
   replyDeliveredAt?: string;
@@ -344,6 +345,9 @@ export const api = {
       replyDraft?: string;
       replyApproved?: boolean;
       markDelivered?: boolean;
+      markReleased?: boolean;
+      deliveryStatus?: 'claimed' | 'failed' | 'delivered' | 'released';
+      reason?: string;
     },
   ) =>
     req<{ event: WecomBridgeEvent }>(`/api/admin/automation/bridge-events/${eventId}`, {

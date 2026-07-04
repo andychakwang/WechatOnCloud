@@ -9,6 +9,7 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 RUNNER="$ROOT/scripts/wecom-bridge-runner.sh"
 MODE="${WECOM_RUNNER_MODE:-dry-run}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
+CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
 DRY_RUN=0
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -52,6 +53,7 @@ env_text() {
     [[ -n "${WECOM_BRIDGE_TOKEN:-}" ]] && printf 'WECOM_BRIDGE_TOKEN=%s\n' "$(quote "$WECOM_BRIDGE_TOKEN")"
     printf 'WECOM_RUNNER_MODE=%s\n' "$(quote "$MODE")"
     printf 'WECOM_RUNNER_LIMIT=%s\n' "$(quote "$LIMIT")"
+    printf 'WECOM_CLAIM_TTL_SECONDS=%s\n' "$(quote "$CLAIM_TTL_SECONDS")"
     printf 'WECOM_BRIDGE_WORKER_ID=%s\n' "$(quote "${WECOM_BRIDGE_WORKER_ID:-$(hostname)-launchagent}")"
     printf 'WECOM_APP_NAME=%s\n' "$(quote "${WECOM_APP_NAME:-企业微信}")"
     printf 'WECOM_SEARCH_SHORTCUT=%s\n' "$(quote "${WECOM_SEARCH_SHORTCUT:-command+k}")"

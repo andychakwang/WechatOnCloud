@@ -399,7 +399,7 @@ app.patch(`${AUTOMATION_BRIDGE_REPLY_ENDPOINT}/:eventId`, async (req, reply) => 
   if (!requireAutomationBridge(req, reply)) return;
   try {
     const event = patchWecomBridgeReplyDelivery(AUTOMATION_BRIDGE_USER, (req.params as any).eventId, req.body as any);
-    const state = event.replyDeliveredAt ? '已交付' : event.replyFailedAt ? '交付失败' : event.replyClaimedAt ? '已领取' : '已更新';
+    const state = event.replyDeliveredAt ? '已交付' : event.replyFailedAt ? '交付失败' : event.replyClaimedAt ? '已领取' : '已释放领取';
     appendPanelLog('INFO', `Bridge 标记企微回复${state}：「${event.conversationName || event.senderName}」`);
     return { event };
   } catch (e: any) {

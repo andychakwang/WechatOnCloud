@@ -45,6 +45,11 @@ function fmtStaleSeconds(seconds: number): string {
   if (seconds < 86400) return `${Math.round(seconds / 3600)} 小时前`;
   return `${Math.round(seconds / 86400)} 天前`;
 }
+function isPastIso(value?: string): boolean {
+  if (!value) return false;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && ms <= Date.now();
+}
 
 const MenuIcon = (
   <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -418,6 +423,22 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       toast(approved ? '回复草稿已批准' : '已取消回复批准', 'ok');
     } catch (e: any) {
       toast(e.message || '更新批准状态失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const releaseBridgeReplyClaim = async (event: WecomBridgeEvent) => {
+    setBusy(`bridge-reply-${event.id}`);
+    try {
+      const { event: saved } = await api.patchWecomBridgeEvent(event.id, {
+        deliveryStatus: 'released',
+        reason: 'Web 管理员释放 Mac 领取状态',
+      });
+      setBridgeEvents((list) => list.map((x) => (x.id === saved.id ? saved : x)));
+      toast('已释放领取，Mac 端可重新拉取', 'ok');
+    } catch (e: any) {
+      toast(e.message || '释放领取失败', 'error');
     } finally {
       setBusy('');
     }
@@ -929,10 +950,20 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       {AUTO_STATUS_LABEL[event.status] || event.status} · {event.source} · {fmtDate(Date.parse(event.receivedAt || event.createdAt))}
                       {event.senderName ? ` · ${event.senderName}` : ''}
                       {event.replyApproved ? ' · 回复已批准' : ''}
-                      {event.replyClaimedAt && !event.replyDeliveredAt ? ` · Mac 已领取${event.replyClaimedBy ? `(${event.replyClaimedBy})` : ''}` : ''}
+                      {event.replyClaimedAt && !event.replyDeliveredAt
+                        ? isPastIso(event.replyClaimExpiresAt)
+                          ? ` · 领取超时${event.replyClaimedBy ? `(${event.replyClaimedBy})` : ''}`
+                          : ` · Mac 已领取${event.replyClaimedBy ? `(${event.replyClaimedBy})` : ''}`
+                        : ''}
                       {event.replyFailedAt ? ' · 发送失败' : ''}
                       {event.replyDeliveredAt ? ' · 已交付 Mac' : ''}
                     </div>
+                    {event.replyClaimedAt && !event.replyDeliveredAt && event.replyClaimExpiresAt && (
+                      <div className="muted small">
+                        领取有效期至 {fmtDate(Date.parse(event.replyClaimExpiresAt))}
+                        {isPastIso(event.replyClaimExpiresAt) ? '，可被重新拉取' : ''}
+                      </div>
+                    )}
                     {event.replyError && <div className="muted small auto-snippet">失败原因：{event.replyError}</div>}
                     <div className="muted small auto-snippet">{event.inboundText}</div>
                   </div>
@@ -961,6 +992,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       {event.replyApproved && (
                         <button className="btn-text danger" disabled={busy === `bridge-reply-${event.id}`} onClick={() => toggleBridgeReplyApproval(event, false)}>
                           取消批准
+                        </button>
+                      )}
+                      {event.replyClaimedAt && !event.replyDeliveredAt && (
+                        <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => releaseBridgeReplyClaim(event)}>
+                          释放领取
                         </button>
                       )}
                     </div>

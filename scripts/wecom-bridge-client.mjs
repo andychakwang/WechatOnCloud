@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r17-heartbeat';
+const CLIENT_VERSION = 'automation-lab-r18-claim-retry';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -18,7 +18,8 @@ Commands:
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   pull-replies [--limit 50]
-  claim-reply <eventId> [--worker-id name]
+  claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
+  release-reply <eventId> [--worker-id name] [--reason text]
   mark-delivered <eventId>
   mark-failed <eventId> [--error text]
   run-approved --handler "command" [--limit 10] [--claim] [--mark-delivered] [--report-failure]
@@ -28,7 +29,8 @@ Examples:
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
-  node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --mark-delivered --report-failure
+  node scripts/wecom-bridge-client.mjs release-reply <eventId> --reason "window not ready"
+  node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --claim-ttl-seconds 300 --mark-delivered --report-failure
 `;
 
 class BridgeError extends Error {
@@ -246,6 +248,20 @@ async function main() {
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
         deliveryStatus: 'claimed',
         workerId: workerId(options),
+        claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
+      }),
+    );
+    return;
+  }
+
+  if (command === 'release-reply') {
+    const eventId = positional[0] || options.id || options['event-id'];
+    if (!eventId) throw new BridgeError('Missing eventId for release-reply.');
+    printJson(
+      await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
+        deliveryStatus: 'released',
+        workerId: workerId(options),
+        reason: String(options.reason || options.message || 'released by Mac bridge client'),
       }),
     );
     return;
@@ -284,6 +300,7 @@ async function main() {
         const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'claimed',
           workerId: workerId(options),
+          claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
         });
         runnable = claimed.event || reply;
       }

@@ -18,6 +18,7 @@ CLIENT="${WECOM_BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
 MODE="${WECOM_RUNNER_MODE:-dry-run}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
+CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
 
 usage() {
   cat <<'EOF'
@@ -33,6 +34,7 @@ Required environment/config:
 Optional:
   WECOM_RUNNER_MODE=dry-run|prepare|send   default: dry-run
   WECOM_RUNNER_LIMIT=5
+  WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
   WECOM_ALLOW_SEND=1                       required for send
@@ -88,6 +90,7 @@ case "$MODE" in
     exec node "$CLIENT" run-approved \
       --limit "$LIMIT" \
       --handler "$HANDLER" \
+      --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
       --claim \
       --report-failure
     ;;
@@ -100,6 +103,7 @@ case "$MODE" in
     exec node "$CLIENT" run-approved \
       --limit "$LIMIT" \
       --handler "$HANDLER" \
+      --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
       --claim \
       --mark-delivered \
       --report-failure
