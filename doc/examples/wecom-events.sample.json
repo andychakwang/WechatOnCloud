@@ -1,0 +1,13 @@
+{
+  "source": "wecom-mac",
+  "events": [
+    {
+      "externalId": "msg-20260705-001",
+      "conversationName": "客户A",
+      "senderName": "客户A",
+      "inboundText": "你们这个服务适合什么样的人？",
+      "conversationContext": "客户来自企业微信自动化 Mac 版，最近咨询过私域运营和 AI 回复。",
+      "receivedAt": "2026-07-05T03:40:00.000Z"
+    }
+  ]
+}

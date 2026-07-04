@@ -1,0 +1,21 @@
+{
+  "source": "wecom-mac",
+  "category": "faq",
+  "mode": "upsert",
+  "approveImported": false,
+  "items": [
+    {
+      "title": "价格咨询边界",
+      "tags": ["价格", "咨询"],
+      "triggers": ["多少钱", "报价", "价格"],
+      "content": "价格问题先确认客户场景，不在 AI 回复里编造报价。"
+    },
+    {
+      "title": "测试客户分组",
+      "category": "target",
+      "tags": ["测试"],
+      "targetNames": ["文件传输助手", "测试群"],
+      "content": "仅用于群发队列和朋友圈灰度验证。"
+    }
+  ]
+}

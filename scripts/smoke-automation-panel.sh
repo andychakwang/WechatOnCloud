@@ -6,6 +6,8 @@ PANEL_USER="${PANEL_USER:-admin}"
 PANEL_PASSWORD="${PANEL_PASSWORD:-${PANEL_ADMIN_PASSWORD:-${WOC_TEST_PASSWORD:-wechat}}}"
 
 PANEL_URL="${PANEL_URL%/}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BRIDGE_CLIENT="${BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 stamp="$(date +%Y%m%d%H%M%S)"
 cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
 body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
@@ -234,9 +236,9 @@ PY
   json_assert_eq event.status planned
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"replyDraft":"这是经过人工确认的 Bridge smoke 回复草稿。","replyApproved":true}'
   json_assert_path event.replyApproved
-  request_bridge_json GET /api/automation/bridge/wecom/replies ''
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_path replies[0].id
-  request_bridge_json PATCH "/api/automation/bridge/wecom/replies/$bridge_event_id" '{}'
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-delivered "$bridge_event_id" > "$body_file"
   json_assert_path event.replyDeliveredAt
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
