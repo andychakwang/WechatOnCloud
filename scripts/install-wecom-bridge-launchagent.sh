@@ -27,8 +27,8 @@ if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
   exit 2
 fi
 
-if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" ]]; then
-  echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, or moments." >&2
+if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" && "$TARGET" != "all" ]]; then
+  echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, moments, or all." >&2
   exit 2
 fi
 

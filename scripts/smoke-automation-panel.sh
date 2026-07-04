@@ -549,6 +549,83 @@ PY
   json_assert_eq draft.status prepared
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-moment-published "$bridge_moment_prepare_task_id" --worker-id smoke-worker > "$body_file"
   json_assert_eq draft.status published
+
+  say "Check all-target WeCom Bridge runner dry-run"
+  all_event_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-all-msg-{stamp}",
+        "conversationName": "Smoke All Conversation",
+        "senderName": "Smoke All Sender",
+        "inboundText": "你好，我想了解自动化测试。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/events "$all_event_payload"
+  json_assert_path result.events[0].id
+  all_event_id="$(json_get result.events[0].id)"
+  request_json PATCH "/api/admin/automation/bridge-events/$all_event_id" '{"status":"planned","replyDraft":"这是 all-target smoke 回复草稿。","replyApproved":true}'
+  json_assert_path event.replyApproved
+
+  all_mass_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-all-mass-{stamp}",
+    "message": "这是一条 all-target Bridge smoke 测试通知内容。",
+    "recipients": ["Smoke All Contact"],
+    "options": {
+        "perSendDelaySeconds": 0,
+        "requireOperatorConfirmRecipient": False,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/mass-jobs "$all_mass_payload"
+  json_assert_path job.id
+  all_mass_job_id="$(json_get job.id)"
+  request_json PATCH "/api/admin/automation/mass-jobs/$all_mass_job_id" '{"approved":true,"status":"queued"}'
+  json_assert_eq job.status queued
+
+  all_moment_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-all-moment-{stamp}",
+    "text": "这是一条 all-target Bridge smoke 测试朋友圈草稿，不会发布。",
+    "imageNotes": "无需配图",
+    "materials": [],
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/moment-drafts "$all_moment_payload"
+  json_assert_path draft.id
+  all_moment_draft_id="$(json_get draft.id)"
+  request_json PATCH "/api/admin/automation/moment-drafts/$all_moment_draft_id" '{"approved":true,"status":"ready"}'
+  json_assert_eq draft.status ready
+
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  json_assert_path replies.handled[0].dryRun
+  json_assert_path mass.handled[0].dryRun
+  json_assert_path moments.handled[0].dryRun
+
+  request_json PATCH "/api/admin/automation/bridge-events/$all_event_id" '{"status":"archived"}'
+  json_assert_eq event.status archived
+  request_json PATCH "/api/admin/automation/mass-jobs/$all_mass_job_id" '{"status":"cancelled","approved":false}'
+  json_assert_eq job.status cancelled
+  request_json PATCH "/api/admin/automation/moment-drafts/$all_moment_draft_id" '{"status":"archived","approved":false}'
+  json_assert_eq draft.status archived
 fi
 
 say "Simulate inbound message without sending"

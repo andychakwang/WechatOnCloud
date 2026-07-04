@@ -6,19 +6,19 @@
 #
 # Example:
 #   WOC_IMAGE_PREFIX=ghcr.io/andychakwang \
-#   WOC_VERSION=andy-automation-usable-r20-2026-07-05 \
+#   WOC_VERSION=andy-automation-usable-r21-2026-07-05 \
 #   WOC_TEST_HTTP_PORT=36081 \
 #   PANEL_ALLOWED_HOSTS=nasbot.cloud \
 #   docker compose -f docker-compose.automation-test.yml up -d
 
 services:
   panel-automation-test:
-    image: ${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}/woc-panel:${WOC_VERSION:-andy-automation-usable-r20-2026-07-05}
+    image: ${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}/woc-panel:${WOC_VERSION:-andy-automation-usable-r21-2026-07-05}
     container_name: woc-panel-automation-test
 
     environment:
       - PORT=8080
-      - WOC_WECHAT_IMAGE=${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}/wechat-on-cloud:${WOC_VERSION:-andy-automation-usable-r20-2026-07-05}
+      - WOC_WECHAT_IMAGE=${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}/wechat-on-cloud:${WOC_VERSION:-andy-automation-usable-r21-2026-07-05}
       - PUID=${WOC_PUID:-1000}
       - PGID=${WOC_PGID:-1000}
       - TZ=${WOC_TZ:-Asia/Shanghai}

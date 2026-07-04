@@ -36,7 +36,8 @@ Required environment/config:
 
 Optional:
   WECOM_RUNNER_MODE=dry-run|prepare|send   default: dry-run
-  WECOM_RUNNER_TARGET=replies|mass|moments  default: replies
+  WECOM_RUNNER_TARGET=replies|mass|moments|all
+                                            default: replies
   WECOM_RUNNER_LIMIT=5
   WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
@@ -53,6 +54,8 @@ Modes:
 
 For WECOM_RUNNER_TARGET=moments, only dry-run and prepare are supported. prepare
 copies the approved draft to the clipboard by default and marks it prepared.
+For WECOM_RUNNER_TARGET=all, tasks run in order: replies, mass, moments. send
+mode skips moments because publishing still requires manual confirmation.
 EOF
 }
 
@@ -79,8 +82,8 @@ if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
   exit 2
 fi
 
-if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" ]]; then
-  echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, or moments." >&2
+if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" && "$TARGET" != "all" ]]; then
+  echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, moments, or all." >&2
   exit 2
 fi
 
@@ -101,8 +104,86 @@ fi
 
 node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
 
+run_all() {
+  local replies_file mass_file moments_file
+  replies_file="$(mktemp "${TMPDIR:-/tmp}/woc-runner-replies.XXXXXX.json")"
+  mass_file="$(mktemp "${TMPDIR:-/tmp}/woc-runner-mass.XXXXXX.json")"
+  moments_file="$(mktemp "${TMPDIR:-/tmp}/woc-runner-moments.XXXXXX.json")"
+  trap 'rm -f "$replies_file" "$mass_file" "$moments_file"' RETURN
+
+  case "$MODE" in
+    dry-run)
+      node "$CLIENT" run-approved --limit "$LIMIT" --dry-run > "$replies_file"
+      node "$CLIENT" run-mass --limit "$LIMIT" --dry-run > "$mass_file"
+      node "$CLIENT" run-moments --limit "$LIMIT" --dry-run > "$moments_file"
+      ;;
+    prepare)
+      node "$CLIENT" run-approved \
+        --limit "$LIMIT" \
+        --handler "$HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --report-failure > "$replies_file"
+      node "$CLIENT" run-mass \
+        --limit "$LIMIT" \
+        --handler "$MASS_HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --report-failure > "$mass_file"
+      node "$CLIENT" run-moments \
+        --limit "$LIMIT" \
+        --handler "$MOMENT_HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --mark-prepared \
+        --report-failure > "$moments_file"
+      ;;
+    send)
+      node "$CLIENT" run-approved \
+        --limit "$LIMIT" \
+        --handler "$HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --mark-delivered \
+        --report-failure > "$replies_file"
+      node "$CLIENT" run-mass \
+        --limit "$LIMIT" \
+        --handler "$MASS_HANDLER" \
+        --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
+        --claim \
+        --mark-sent \
+        --report-failure > "$mass_file"
+      printf '{"handled":[],"total":0,"skipped":true,"reason":"moments target requires manual publish confirmation"}\n' > "$moments_file"
+      ;;
+  esac
+
+  node - "$MODE" "$TARGET" "$replies_file" "$mass_file" "$moments_file" <<'NODE'
+const [mode, target, repliesFile, massFile, momentsFile] = process.argv.slice(2);
+const fs = require('node:fs');
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+const replies = readJson(repliesFile);
+const mass = readJson(massFile);
+const moments = readJson(momentsFile);
+const total =
+  Number(replies.total || 0) +
+  Number(mass.total || 0) +
+  Number(moments.total || 0);
+process.stdout.write(`${JSON.stringify({ mode, target, total, replies, mass, moments }, null, 2)}\n`);
+NODE
+}
+
 case "$MODE" in
   dry-run)
+    if [[ "$TARGET" == "all" ]]; then
+      run_all
+      exit 0
+    fi
     if [[ "$TARGET" == "mass" ]]; then
       exec node "$CLIENT" run-mass --limit "$LIMIT" --dry-run
     fi
@@ -113,6 +194,10 @@ case "$MODE" in
     ;;
   prepare)
     export WECOM_HANDLER_MODE="${WECOM_HANDLER_MODE:-prepare}"
+    if [[ "$TARGET" == "all" ]]; then
+      run_all
+      exit 0
+    fi
     if [[ "$TARGET" == "mass" ]]; then
       exec node "$CLIENT" run-mass \
         --limit "$LIMIT" \
@@ -142,6 +227,10 @@ case "$MODE" in
     if [[ "${WECOM_ALLOW_SEND:-}" != "1" ]]; then
       echo "ERROR: send mode requires WECOM_ALLOW_SEND=1." >&2
       exit 2
+    fi
+    if [[ "$TARGET" == "all" ]]; then
+      run_all
+      exit 0
     fi
     if [[ "$TARGET" == "mass" ]]; then
       exec node "$CLIENT" run-mass \
