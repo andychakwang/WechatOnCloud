@@ -17,6 +17,7 @@ cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
 body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
 material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
+rpa_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-package.XXXXXX.json")"
 verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
 handler_error_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-handler-error.XXXXXX.log")"
 fake_osascript_log_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX.log")"
@@ -25,7 +26,7 @@ reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
   rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
@@ -1491,6 +1492,33 @@ PY
   all_moment_draft_id="$(json_get draft.id)"
   request_json PATCH "/api/admin/automation/moment-drafts/$all_moment_draft_id" '{"approved":true,"status":"ready"}'
   json_assert_eq draft.status ready
+
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" export-rpa-package \
+    --target all \
+    --limit 20 \
+    --format json \
+    --output "$rpa_package_file" > "$body_file"
+  json_assert_eq exported.schema woc.wecom.rpa.package.v1
+  json_assert_eq exported.format json
+  python3 - "$rpa_package_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
+import json
+import sys
+
+package_file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
+with open(package_file, "r", encoding="utf-8") as fh:
+    package = json.load(fh)
+if package.get("schema") != "woc.wecom.rpa.package.v1":
+    raise SystemExit("unexpected RPA package schema")
+tasks = package.get("tasks", [])
+if not any(t.get("target") == "reply" and t.get("id") == event_id and t.get("operation") == "reply.prepare" for t in tasks):
+    raise SystemExit("reply RPA task missing")
+if not any(t.get("target") == "mass" and t.get("jobId") == mass_job_id and t.get("operation") == "mass.prepare" for t in tasks):
+    raise SystemExit("mass RPA task missing")
+if not any(t.get("target") == "moment" and t.get("draftId") == moment_draft_id and t.get("operation") == "moment.prepare" for t in tasks):
+    raise SystemExit("moment RPA task missing")
+if package.get("counts", {}).get("total", 0) < 3:
+    raise SystemExit("RPA package should contain at least three tasks")
+PY
 
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   json_assert_path replies.handled[0].dryRun

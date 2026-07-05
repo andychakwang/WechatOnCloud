@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
+import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r50-capability-gated-claims';
+const CLIENT_VERSION = 'automation-lab-r51-rpa-run-package';
+const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
+const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -21,6 +24,7 @@ Commands:
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
   push-events <file|-> [--source name]
+  export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
   runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
@@ -50,6 +54,7 @@ Examples:
   node scripts/wecom-bridge-client.mjs import-materials doc/examples/wecom-materials.sample.json
   node scripts/wecom-bridge-client.mjs material-map --kind image --output ~/.config/wechat-on-cloud/wecom-materials.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
+  node scripts/wecom-bridge-client.mjs export-rpa-package --target all --output-dir ~/.config/wechat-on-cloud/rpa-packages
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs runner-policy --worker-id mac-mini-01
   node scripts/wecom-bridge-client.mjs report-run --target all --mode dry-run --handled-replies 2
@@ -476,6 +481,183 @@ function materialMapPath(options) {
   return `/api/automation/bridge/wecom/material-map${query ? `?${query}` : ''}`;
 }
 
+function normalizeRpaExportTarget(value) {
+  const raw = String(value || 'all').trim().toLowerCase().replace(/_/g, '-');
+  if (!raw || raw === 'all') return 'all';
+  if (['reply', 'replies', 'ai-reply', 'ai-replies'].includes(raw)) return 'replies';
+  if (['mass', 'mass-task', 'mass-tasks', 'group-send', 'broadcast'].includes(raw)) return 'mass';
+  if (['moment', 'moments', 'moment-task', 'moment-tasks', 'moment-draft', 'moment-drafts'].includes(raw)) return 'moments';
+  throw new BridgeError(`Invalid export target: ${value}. Use replies, mass, moments, or all.`);
+}
+
+function rpaExportTargets(target) {
+  return target === 'all' ? ['replies', 'mass', 'moments'] : [target];
+}
+
+function taskTextLength(text) {
+  return [...String(text || '')].length;
+}
+
+function replyStepsForPackage(reply) {
+  if (Array.isArray(reply.replySteps) && reply.replySteps.length) return reply.replySteps.map((step) => ({ ...step }));
+  const text = String(reply.replyDraft || '').trim();
+  return text ? [{ type: 'text', text, sendEnter: true }] : [];
+}
+
+function buildRpaTask(target, task, meta, includeSource) {
+  const base = {
+    schema: RPA_TASK_SCHEMA,
+    packageId: meta.packageId,
+    exportedAt: meta.exportedAt,
+    source: meta.source,
+    workerId: meta.workerId,
+    target,
+  };
+
+  if (target === 'reply') {
+    const steps = replyStepsForPackage(task);
+    const text = String(task.replyDraft || steps.find((step) => step?.type === 'text')?.text || '').trim();
+    return {
+      ...base,
+      id: String(task.id || ''),
+      operation: 'reply.prepare',
+      expectedName: String(task.conversationName || task.senderName || '').trim(),
+      conversationName: String(task.conversationName || '').trim(),
+      senderName: String(task.senderName || '').trim(),
+      inboundText: String(task.inboundText || '').trim(),
+      text,
+      textChars: taskTextLength(text),
+      steps,
+      stepCount: steps.length,
+      imageStepCount: steps.filter((step) => step?.type === 'image').length,
+      requiresOperatorReview: true,
+      ...(includeSource ? { sourceTask: task } : {}),
+    };
+  }
+
+  if (target === 'mass') {
+    const text = String(task.message || '').trim();
+    return {
+      ...base,
+      id: String(task.id || ''),
+      operation: 'mass.prepare',
+      expectedName: String(task.recipientName || '').trim(),
+      recipientName: String(task.recipientName || '').trim(),
+      jobId: String(task.jobId || '').trim(),
+      itemId: String(task.itemId || '').trim(),
+      jobTitle: String(task.jobTitle || '').trim(),
+      text,
+      textChars: taskTextLength(text),
+      requiresOperatorReview: true,
+      ...(includeSource ? { sourceTask: task } : {}),
+    };
+  }
+
+  const text = String(task.text || '').trim();
+  const materials = Array.isArray(task.materials) ? task.materials.map(String).filter(Boolean) : [];
+  return {
+    ...base,
+    id: String(task.id || task.draftId || ''),
+    operation: 'moment.prepare',
+    expectedName: String(task.title || task.id || '').trim(),
+    draftId: String(task.draftId || task.id || '').trim(),
+    title: String(task.title || '').trim(),
+    text,
+    textChars: taskTextLength(text),
+    imageNotes: String(task.imageNotes || '').trim(),
+    materials,
+    materialCount: materials.length,
+    requiresOperatorReview: true,
+    ...(includeSource ? { sourceTask: task } : {}),
+  };
+}
+
+async function pullRpaExportTasks(options, target, limit) {
+  if (target === 'replies') {
+    const { replies = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`);
+    return replies.map((reply) => ({ target: 'reply', task: reply }));
+  }
+  if (target === 'mass') {
+    const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`);
+    return tasks.map((task) => ({ target: 'mass', task }));
+  }
+  const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`);
+  return tasks.map((task) => ({ target: 'moment', task }));
+}
+
+function serializeRpaPackage(pkg, format) {
+  if (format === 'json') return `${JSON.stringify(pkg, null, 2)}\n`;
+  return `${pkg.tasks.map((task) => JSON.stringify(task)).join('\n')}${pkg.tasks.length ? '\n' : ''}`;
+}
+
+async function writeRpaPackage(options, pkg, format) {
+  const output = String(options.output || options.file || '').trim();
+  const outputDir = String(options['output-dir'] || options.outputDir || '').trim();
+  const content = serializeRpaPackage(pkg, format);
+  if (outputDir) {
+    await mkdir(outputDir, { recursive: true });
+    const file = join(outputDir, `${pkg.packageId}.${format === 'json' ? 'json' : 'jsonl'}`);
+    await writeFile(file, content, 'utf8');
+    return file;
+  }
+  if (output && output !== '-') {
+    await writeFile(output, content, 'utf8');
+    return output;
+  }
+  process.stdout.write(content);
+  return '';
+}
+
+async function exportRpaPackage(options) {
+  const target = normalizeRpaExportTarget(options.target || options.queue || 'all');
+  const limit = intOpt(options.limit, 50, 1, 200);
+  const format = String(options.format || 'jsonl').trim().toLowerCase() === 'json' ? 'json' : 'jsonl';
+  const includeSource = boolOpt(options, 'include-source', 'includeSource', 'source-task');
+  const exportedAt = new Date().toISOString();
+  const source = String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE);
+  const pkgMeta = {
+    packageId: String(options['package-id'] || options.packageId || `woc-rpa-${exportedAt.replace(/[:.]/g, '-')}`),
+    exportedAt,
+    source,
+    workerId: workerId(options),
+  };
+
+  const pulled = [];
+  for (const itemTarget of rpaExportTargets(target)) {
+    pulled.push(...(await pullRpaExportTasks(options, itemTarget, limit)));
+  }
+
+  const tasks = pulled.map((item) => buildRpaTask(item.target, item.task, pkgMeta, includeSource));
+  const pkg = {
+    schema: RPA_PACKAGE_SCHEMA,
+    ...pkgMeta,
+    target,
+    limit,
+    format,
+    counts: {
+      total: tasks.length,
+      replies: tasks.filter((task) => task.target === 'reply').length,
+      mass: tasks.filter((task) => task.target === 'mass').length,
+      moments: tasks.filter((task) => task.target === 'moment').length,
+    },
+    tasks,
+  };
+
+  const outputPath = await writeRpaPackage(options, pkg, format);
+  if (outputPath) {
+    printJson({
+      exported: {
+        schema: pkg.schema,
+        packageId: pkg.packageId,
+        target,
+        format,
+        outputPath,
+        counts: pkg.counts,
+      },
+    });
+  }
+}
+
 async function runHandler(command, reply) {
   return new Promise((resolve, reject) => {
     let stdout = '';
@@ -594,6 +776,11 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeEventPayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/events', payload));
+    return;
+  }
+
+  if (command === 'export-rpa-package' || command === 'export-run-package') {
+    await exportRpaPackage(options);
     return;
   }
 
