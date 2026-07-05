@@ -355,6 +355,10 @@ export interface WecomBridgeReplyPlanBatchResult {
   errors: string[];
 }
 
+export interface WecomBridgeReplyListOptions {
+  requireSendable?: boolean;
+}
+
 export interface AutomationSettings {
   enabled: boolean;
   aiDraftEnabled: boolean;
@@ -1989,6 +1993,8 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     if (event.replyClaimedAt && !isBridgeReplyClaimExpired(event, now) && event.replyClaimedBy && event.replyClaimedBy !== workerId) {
       throw new Error(`回复已由 ${event.replyClaimedBy} 领取，未超时前不能重复领取`);
     }
+    const claimCapabilities = bridgeClaimCapabilities(raw, workerId);
+    if (claimCapabilities?.includes('send')) enforceBridgeReplySendGuards(event);
     requireBridgeWorkerCapabilities(raw, workerId, ['reply'], '领取回复');
     event.replyClaimedAt = now;
     event.replyClaimedBy = workerId;
@@ -2025,6 +2031,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
       event.replyClaimedAt = now;
       event.replyClaimedBy = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
     }
+    enforceBridgeReplySendGuards(event);
     requireBridgeWorkerCapabilities(raw, event.replyClaimedBy || actor.username, ['reply', 'send'], '交付回复');
     event.replyClaimExpiresAt = undefined;
     event.replyFailedAt = undefined;
@@ -2032,6 +2039,13 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     event.replyError = undefined;
     event.replyRetryCount = undefined;
     event.replyDeliveredAt = now;
+    addAutomationAudit({
+      action: 'bridge_reply_delivered',
+      actor: actor.username,
+      conversationName: bridgeReplyConversationName(event),
+      riskLevel: 'normal',
+      message: `Bridge 自动回复已交付给「${bridgeReplyConversationName(event) || event.id}」`,
+    });
   }
   event.updatedAt = now;
   if (status === 'planned') event.lastPlannedAt = now;
@@ -2045,9 +2059,10 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
   return cloneBridgeEvent(event);
 }
 
-export function listApprovedWecomBridgeReplies(limit = 50): WecomBridgeEvent[] {
+export function listApprovedWecomBridgeReplies(limit = 50, raw: WecomBridgeReplyListOptions = {}): WecomBridgeEvent[] {
   const n = clampInt(limit, 1, 200, 50);
   const now = new Date().toISOString();
+  const requireSendable = raw.requireSendable === true;
   return data.bridgeEvents
     .filter(
       (event) =>
@@ -2055,7 +2070,8 @@ export function listApprovedWecomBridgeReplies(limit = 50): WecomBridgeEvent[] {
         hasRunnableBridgeReply(event) &&
         (!event.replyClaimedAt || isBridgeReplyClaimExpired(event, now)) &&
         !event.replyDeliveredAt &&
-        event.status !== 'archived',
+        event.status !== 'archived' &&
+        (!requireSendable || canSendBridgeReplyNow(event)),
     )
     .slice(-n)
     .reverse()
@@ -4580,6 +4596,30 @@ function bridgeReplyTextFromSteps(steps: AutomationStep[]): string {
     .slice(0, 1000);
 }
 
+function bridgeReplyConversationName(event: WecomBridgeEvent): string | undefined {
+  return normalizeConversationName(event.conversationName || event.senderName);
+}
+
+function bridgeReplyTextForRisk(event: WecomBridgeEvent): string {
+  return (event.replyDraft || bridgeReplyTextFromSteps(bridgeReplySteps(event))).trim();
+}
+
+function canSendBridgeReplyNow(event: WecomBridgeEvent): boolean {
+  try {
+    enforceBridgeReplySendGuards(event);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function enforceBridgeReplySendGuards(event: WecomBridgeEvent) {
+  enforceRateLimits(bridgeReplyConversationName(event));
+  const risk = assessRisk([event.inboundText, bridgeReplyTextForRisk(event)]);
+  if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
+  if (risk.level === 'review') throw new Error(`Bridge 回复需要人工复核：${risk.reasons.join('；')}`);
+}
+
 function hasRunnableBridgeReply(event: WecomBridgeEvent): boolean {
   return bridgeReplySteps(event).some(
     (step) => (step.type === 'text' && !!step.text.trim()) || (step.type === 'image' && !!(step.imagePath?.trim() || step.imageKey?.trim())),
@@ -4921,7 +4961,7 @@ function ensureFeatureEnabled(feature: 'mass' | 'moments', confirm?: boolean) {
 
 function enforceRateLimits(conversationName?: string) {
   const now = Date.now();
-  const sends = data.auditEvents.filter((ev) => ['rule_sent', 'text_sent', 'mass_item_sent'].includes(ev.action));
+  const sends = data.auditEvents.filter((ev) => ['rule_sent', 'text_sent', 'bridge_reply_delivered', 'mass_item_sent'].includes(ev.action));
   const hourlyLimit = data.settings.maximumAutomaticSendsPerHour;
   if (hourlyLimit > 0) {
     const recent = sends.filter((ev) => now - Date.parse(ev.timestamp) < 60 * 60 * 1000);

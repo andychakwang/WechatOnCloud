@@ -780,7 +780,9 @@ app.get(AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT, async (req, reply) => {
 app.get(AUTOMATION_BRIDGE_REPLY_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   const query = req.query as any;
-  return { replies: listApprovedWecomBridgeReplies(Number(query?.limit || 50)) };
+  const mode = String(query?.mode || '').trim().toLowerCase();
+  const requireSendable = boolQuery(query?.requireSendable ?? query?.sendable ?? query?.requireAutoSend) || mode === 'send';
+  return { replies: listApprovedWecomBridgeReplies(Number(query?.limit || 50), { requireSendable }) };
 });
 
 app.patch(`${AUTOMATION_BRIDGE_REPLY_ENDPOINT}/:eventId`, async (req, reply) => {

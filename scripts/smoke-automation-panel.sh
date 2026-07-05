@@ -1253,6 +1253,34 @@ PY
   json_assert_reply_id "$bridge_event_id"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-delivered "$bridge_event_id" --worker-id smoke-worker > "$body_file"
   json_assert_path event.replyDeliveredAt
+  say "Enforce Bridge reply send cooldown"
+  bridge_cooldown_event_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-reply-cooldown-{stamp}",
+        "conversationName": "Smoke Test Conversation",
+        "senderName": "Smoke Sender",
+        "inboundText": "你好，我还有一个普通问题。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/events "$bridge_cooldown_event_payload"
+  json_assert_path result.events[0].id
+  bridge_cooldown_event_id="$(json_get result.events[0].id)"
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_cooldown_event_id" '{"replyDraft":"这是同会话冷却测试回复。","replyApproved":true}'
+  json_assert_path event.replyApproved
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 --mode send > "$body_file"
+  json_assert_no_reply_id "$bridge_cooldown_event_id"
+  request_bridge_json PATCH "/api/automation/bridge/wecom/replies/$bridge_cooldown_event_id" '{"deliveryStatus":"claimed","workerId":"smoke-send-worker","capabilities":["reply","send"],"claimTtlSeconds":120}' 400
+  json_assert_path error
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_cooldown_event_id" '{"status":"archived","replyApproved":false}'
+  json_assert_eq event.status archived
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
 

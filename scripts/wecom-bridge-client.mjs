@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r58-bridge-auto-reply-plan';
+const CLIENT_VERSION = 'automation-lab-r59-bridge-reply-send-guards';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const BOOLEAN_OPTIONS = new Set([
@@ -37,9 +37,11 @@ const BOOLEAN_OPTIONS = new Set([
   'reply-plan',
   'report-failure',
   'report-run',
+  'require-sendable',
   'require-handler-verification',
   'require-positive-verification',
   'require-verification',
+  'sendable',
 ]);
 
 const USAGE = `
@@ -63,7 +65,7 @@ Commands:
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
   runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
-  pull-replies [--limit 50]
+  pull-replies [--limit 50] [--mode send|prepare|dry-run] [--require-sendable]
   claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
   release-reply <eventId> [--worker-id name] [--reason text]
   mark-delivered <eventId> [--worker-id name]
@@ -534,6 +536,14 @@ function materialMapPath(options) {
   return `/api/automation/bridge/wecom/material-map${query ? `?${query}` : ''}`;
 }
 
+function replyListPath(limit, options = {}) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const mode = String(options.mode || '').trim().toLowerCase();
+  if (mode) params.set('mode', mode);
+  if (mode === 'send' || boolOpt(options, 'require-sendable', 'sendable', 'requireAutoSend')) params.set('requireSendable', '1');
+  return `/api/automation/bridge/wecom/replies?${params.toString()}`;
+}
+
 function normalizeRpaExportTarget(value) {
   const raw = String(value || 'all').trim().toLowerCase().replace(/_/g, '-');
   if (!raw || raw === 'all') return 'all';
@@ -627,7 +637,7 @@ function buildRpaTask(target, task, meta, includeSource) {
 
 async function pullRpaExportTasks(options, target, limit) {
   if (target === 'replies') {
-    const { replies = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`);
+    const { replies = [] } = await requestJson(options, 'GET', replyListPath(limit, options));
     return replies.map((reply) => ({ target: 'reply', task: reply }));
   }
   if (target === 'mass') {
@@ -1179,7 +1189,7 @@ async function main() {
 
   if (command === 'pull-replies') {
     const limit = intOpt(options.limit, 50, 1, 200);
-    printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`));
+    printJson(await requestJson(options, 'GET', replyListPath(limit, options)));
     return;
   }
 
@@ -1370,7 +1380,8 @@ async function main() {
     if (!handler && !dryRun) throw new BridgeError('run-approved requires --handler or --dry-run.');
     const startedMs = Date.now();
     const startedAt = new Date(startedMs).toISOString();
-    const { replies = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`);
+    const replyListOptions = markDelivered ? { ...options, mode: 'send', 'require-sendable': true } : options;
+    const { replies = [] } = await requestJson(options, 'GET', replyListPath(limit, replyListOptions));
     const handled = [];
     for (const reply of replies) {
       if (dryRun) {
