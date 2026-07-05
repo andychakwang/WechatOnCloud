@@ -980,6 +980,7 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
       failedReplies: handled.filter((item) => item.target === 'reply' && item.ok === false).length,
       failedMassTasks: handled.filter((item) => item.target === 'mass' && item.ok === false).length,
       failedMomentTasks: handled.filter((item) => item.target === 'moment' && item.ok === false).length,
+      packageHandoff: packageMeta?.handoff || null,
       items: handled,
       summary: runSummary(`rpa-package/${selectedTarget}`, handled, tasks.length),
     });

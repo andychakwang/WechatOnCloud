@@ -239,6 +239,24 @@ export type WecomBridgeRunnerEngine = 'bridge' | 'rpa-package';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
+export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
+
+export interface WecomRpaPackageHandoff {
+  generatedFrom: 'automation-rpa-package';
+  packageTarget: WecomRpaPackageTarget;
+  recommendedMode: WecomBridgeRunnerMode;
+  runnerEngine: WecomBridgeRunnerEngine;
+  runnerTarget: WecomBridgeRunnerTarget;
+  runnerMode: WecomBridgeRunnerMode;
+  allowSend: boolean;
+  requireTargetMatch: boolean;
+  requireHandlerVerification: boolean;
+  momentPasteMode: WecomBridgeMomentPasteMode;
+  preflightLevel: AutomationPreflightLevel;
+  preflightSummary: Record<AutomationPreflightLevel, number>;
+  blockedByPreflight: boolean;
+  notes: string[];
+}
 
 export interface WecomBridgeTargetVerification {
   required?: boolean;
@@ -288,12 +306,12 @@ export interface WecomBridgeRunReport {
   failedMomentTasks: number;
   error?: string;
   summary?: string;
+  packageHandoff?: WecomRpaPackageHandoff;
   items: WecomBridgeRunReportItem[];
   createdAt: string;
   updatedAt: string;
 }
 
-export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomRpaPackageFormat = 'json' | 'jsonl';
 export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
 
@@ -342,22 +360,7 @@ export interface WecomRpaPackage {
     mass: number;
     moments: number;
   };
-  handoff?: {
-    generatedFrom: 'automation-rpa-package';
-    packageTarget: WecomRpaPackageTarget;
-    recommendedMode: WecomBridgeRunnerMode;
-    runnerEngine: WecomBridgeRunnerEngine;
-    runnerTarget: WecomBridgeRunnerTarget;
-    runnerMode: WecomBridgeRunnerMode;
-    allowSend: boolean;
-    requireTargetMatch: boolean;
-    requireHandlerVerification: boolean;
-    momentPasteMode: WecomBridgeMomentPasteMode;
-    preflightLevel: AutomationPreflightLevel;
-    preflightSummary: Record<AutomationPreflightLevel, number>;
-    blockedByPreflight: boolean;
-    notes: string[];
-  };
+  handoff?: WecomRpaPackageHandoff;
   tasks: WecomRpaTask[];
 }
 

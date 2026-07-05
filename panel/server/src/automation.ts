@@ -218,6 +218,24 @@ export type WecomBridgeRunnerEngine = 'bridge' | 'rpa-package';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
+export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
+
+export interface WecomRpaPackageHandoff {
+  generatedFrom: 'automation-rpa-package';
+  packageTarget: WecomRpaPackageTarget;
+  recommendedMode: WecomBridgeRunnerMode;
+  runnerEngine: WecomBridgeRunnerEngine;
+  runnerTarget: WecomBridgeRunnerTarget;
+  runnerMode: WecomBridgeRunnerMode;
+  allowSend: boolean;
+  requireTargetMatch: boolean;
+  requireHandlerVerification: boolean;
+  momentPasteMode: WecomBridgeMomentPasteMode;
+  preflightLevel: AutomationPreflightLevel;
+  preflightSummary: Record<AutomationPreflightLevel, number>;
+  blockedByPreflight: boolean;
+  notes: string[];
+}
 
 export interface WecomBridgeTargetVerification {
   required?: boolean;
@@ -267,6 +285,7 @@ export interface WecomBridgeRunReport {
   failedMomentTasks: number;
   error?: string;
   summary?: string;
+  packageHandoff?: WecomRpaPackageHandoff;
   items: WecomBridgeRunReportItem[];
   createdAt: string;
   updatedAt: string;
@@ -646,7 +665,6 @@ export interface WecomBridgeMomentTask {
 }
 
 export type WecomRpaPackageFormat = 'json' | 'jsonl';
-export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
 
 export interface WecomRpaTask {
@@ -695,22 +713,7 @@ export interface WecomRpaPackage {
     mass: number;
     moments: number;
   };
-  handoff: {
-    generatedFrom: 'automation-rpa-package';
-    packageTarget: WecomRpaPackageTarget;
-    recommendedMode: WecomBridgeRunnerMode;
-    runnerEngine: WecomBridgeRunnerEngine;
-    runnerTarget: WecomBridgeRunnerTarget;
-    runnerMode: WecomBridgeRunnerMode;
-    allowSend: boolean;
-    requireTargetMatch: boolean;
-    requireHandlerVerification: boolean;
-    momentPasteMode: WecomBridgeMomentPasteMode;
-    preflightLevel: AutomationPreflightLevel;
-    preflightSummary: Record<AutomationPreflightLevel, number>;
-    blockedByPreflight: boolean;
-    notes: string[];
-  };
+  handoff: WecomRpaPackageHandoff;
   tasks: WecomRpaTask[];
 }
 
@@ -4552,9 +4555,51 @@ function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): 
     failedMomentTasks: clampInt(raw?.failedMomentTasks ?? raw?.momentsFailed, 0, 100000, 0),
     error: str(raw?.error ?? raw?.message ?? raw?.reason, 1000).trim() || undefined,
     summary: str(raw?.summary ?? raw?.note, 1000).trim() || undefined,
+    packageHandoff: normalizeRpaPackageHandoff(raw?.packageHandoff ?? raw?.rpaPackageHandoff ?? raw?.handoff),
     items: rawItems.slice(0, MAX_BRIDGE_RUN_REPORT_ITEMS).map(normalizeBridgeRunReportItem),
     createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+  };
+}
+
+function normalizeRpaPackageHandoff(raw: any): WecomRpaPackageHandoff | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  let packageTarget: WecomRpaPackageTarget = 'all';
+  try {
+    packageTarget = normalizeRpaPackageTarget(raw.packageTarget ?? raw.target ?? raw.runnerTarget ?? 'all');
+  } catch {
+    packageTarget = 'all';
+  }
+  const recommendedMode = normalizeBridgeRunnerMode(raw.recommendedMode ?? raw.mode) || 'dry-run';
+  const runnerMode = normalizeBridgeRunnerMode(raw.runnerMode ?? raw.policyMode ?? raw.mode) || recommendedMode;
+  const runnerEngine = normalizeBridgeRunnerEngine(raw.runnerEngine ?? raw.engine) || 'bridge';
+  const runnerTarget = normalizeBridgeRunnerTarget(raw.runnerTarget ?? raw.policyTarget ?? packageTarget) || 'all';
+  const momentPasteMode = normalizeMomentPasteMode(raw.momentPasteMode ?? raw.pasteMode) || 'clipboard-only';
+  const preflightLevel = normalizePreflightLevel(raw.preflightLevel ?? raw.level) || 'ok';
+  const rawSummary = raw.preflightSummary && typeof raw.preflightSummary === 'object' ? raw.preflightSummary : {};
+  const preflightSummary: Record<AutomationPreflightLevel, number> = {
+    ok: clampInt((rawSummary as any).ok, 0, 100000, 0),
+    warn: clampInt((rawSummary as any).warn, 0, 100000, 0),
+    block: clampInt((rawSummary as any).block, 0, 100000, 0),
+  };
+  const notes = Array.isArray(raw.notes)
+    ? raw.notes.map((note: any) => str(note, 240).trim()).filter(Boolean).slice(0, 5)
+    : [];
+  return {
+    generatedFrom: 'automation-rpa-package',
+    packageTarget,
+    recommendedMode,
+    runnerEngine,
+    runnerTarget,
+    runnerMode,
+    allowSend: raw.allowSend === true,
+    requireTargetMatch: truthyFlag(raw.requireTargetMatch),
+    requireHandlerVerification: truthyFlag(raw.requireHandlerVerification),
+    momentPasteMode,
+    preflightLevel,
+    preflightSummary,
+    blockedByPreflight: raw.blockedByPreflight === true || preflightSummary.block > 0 || preflightLevel === 'block',
+    notes,
   };
 }
 
@@ -5562,6 +5607,13 @@ function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
 function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunReport {
   return {
     ...report,
+    packageHandoff: report.packageHandoff
+      ? {
+          ...report.packageHandoff,
+          preflightSummary: { ...report.packageHandoff.preflightSummary },
+          notes: [...report.packageHandoff.notes],
+        }
+      : undefined,
     items: report.items.map((item) => ({
       ...item,
       verification: item.verification ? { ...item.verification } : undefined,
@@ -5802,6 +5854,12 @@ function normalizeBridgeRunStatus(value: unknown): WecomBridgeRunStatus {
   if (raw === 'started' || raw === 'running') return 'started';
   if (raw === 'failed' || raw === 'error') return 'failed';
   return 'completed';
+}
+
+function normalizePreflightLevel(value: unknown): AutomationPreflightLevel | null {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'ok' || raw === 'warn' || raw === 'block') return raw;
+  return null;
 }
 
 function normalizeBridgeRunnerMode(value: unknown): WecomBridgeRunnerMode | null {

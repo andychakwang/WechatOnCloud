@@ -2288,6 +2288,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
                       const reportAt = Date.parse(report.finishedAt || report.updatedAt);
                       const items = report.items || [];
+                      const handoff = report.packageHandoff;
                       const itemSummary = items
                         .slice(0, 3)
                         .map((item) => {
@@ -2307,6 +2308,16 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                               {report.workerId} · {Number.isFinite(reportAt) ? fmtDate(reportAt) : '时间未知'} · 处理 {handled} · 失败 {failed}
                               {report.durationMs !== undefined ? ` · ${Math.round(report.durationMs / 1000)}s` : ''}
                             </div>
+                            {handoff && (
+                              <div className="chip-row">
+                                <span className="chip chip-static">
+                                  RPA {BRIDGE_RUNNER_TARGET_LABEL[handoff.packageTarget]} · 建议 {BRIDGE_RUNNER_MODE_LABEL[handoff.recommendedMode]}
+                                </span>
+                                <span className={'chip chip-static' + (handoff.blockedByPreflight ? ' chip-bad' : '')}>
+                                  预检 {PREFLIGHT_LEVEL_LABEL[handoff.preflightLevel]}
+                                </span>
+                              </div>
+                            )}
                             {(report.summary || report.error) && <div className="muted small auto-snippet">{report.summary || report.error}</div>}
                             {items.length > 0 && (
                               <div className="muted small auto-snippet">
