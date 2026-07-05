@@ -191,6 +191,25 @@ raise SystemExit(f"task {task_id} should be listed")
 PY
 }
 
+json_assert_check_id() {
+  local check_id="$1"
+  local expected_level="${2:-}"
+  python3 - "$body_file" "$check_id" "$expected_level" <<'PY'
+import json
+import sys
+
+file, check_id, expected_level = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+for check in payload.get("report", {}).get("checks", []):
+    if check.get("id") == check_id:
+        if expected_level and check.get("level") != expected_level:
+            raise SystemExit(f"check {check_id} level should be {expected_level}, got {check.get('level')}")
+        raise SystemExit(0)
+raise SystemExit(f"check {check_id} should be listed")
+PY
+}
+
 json_assert_missing_or_empty() {
   local path="$1"
   python3 - "$body_file" "$path" <<'PY'
@@ -249,6 +268,11 @@ json_assert_path overview.bridge.pendingReplies
 json_assert_path overview.bridge.runnerPolicy.mode
 json_assert_path overview.mass.itemsPending
 json_assert_path overview.moments.draftsTotal
+request_json GET /api/admin/automation/preflight
+json_assert_path report.generatedAt
+json_assert_path report.level
+json_assert_path report.summary.block
+json_assert_path report.checks[0].id
 request_json GET /api/admin/automation/bridge
 json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.commands.writeEnv
@@ -266,6 +290,49 @@ if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && grep -qF "$AUTOMATION_BRIDGE_TOKEN
   echo "ERROR: Bridge runner guide leaked the real AUTOMATION_BRIDGE_TOKEN" >&2
   exit 1
 fi
+
+say "Check automation preflight missing material guard"
+request_json GET /api/admin/automation/config
+original_config="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+print(json.dumps(payload["config"], ensure_ascii=False))
+PY
+)"
+preflight_rule_name="smoke-preflight-rule-$stamp"
+preflight_missing_key="smoke-missing-material-$stamp"
+preflight_config_payload="$(python3 - "$body_file" "$preflight_rule_name" "$preflight_missing_key" <<'PY'
+import json
+import sys
+
+file, rule_name, missing_key = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config.get("settings", {})
+settings["enabled"] = True
+settings["automaticRuleRepliesEnabled"] = True
+config["settings"] = settings
+config.setdefault("rules", []).append({
+    "name": rule_name,
+    "enabled": True,
+    "approved": True,
+    "priority": 9,
+    "triggers": [f"preflight {missing_key}"],
+    "responseSteps": [{"type": "image", "imageKey": missing_key, "sendEnter": True}],
+})
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+request_json PUT /api/admin/automation/config "$preflight_config_payload"
+request_json GET /api/admin/automation/preflight
+json_assert_eq report.level block
+json_assert_check_id material_missing block
+request_json PUT /api/admin/automation/config "$original_config"
+json_assert_path config.settings
 
 say "Import and remove WeCom knowledge item"
 knowledge_title="smoke-knowledge-$stamp"

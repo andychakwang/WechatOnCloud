@@ -1201,6 +1201,62 @@ button {
   align-items: center;
   min-height: 28px;
 }
+.auto-preflight {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: var(--r-small);
+  background: rgba(255 255 255 / 0.54);
+  box-shadow: inset 0 1px 0 rgba(var(--shadow) / 0.08), var(--crease-press);
+}
+.auto-preflight-block {
+  background: rgba(var(--danger-rgb) / 0.08);
+}
+.auto-preflight-warn {
+  background: rgba(245 158 11 / 0.1);
+}
+.auto-preflight-ok {
+  background: rgba(var(--green-rgb) / 0.08);
+}
+.auto-preflight-head,
+.auto-preflight-item-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.auto-preflight-head b,
+.auto-preflight-item b {
+  font-size: 13px;
+}
+.auto-preflight-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.auto-preflight-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.auto-preflight-item {
+  min-width: 0;
+  padding-top: 8px;
+  box-shadow: inset 0 1px 0 rgba(var(--shadow) / 0.08);
+}
+.auto-preflight-item-main {
+  justify-content: flex-start;
+}
+.auto-preflight-item-main .tag {
+  flex: none;
+}
+.auto-preflight-refs {
+  margin: 8px 0 0 58px;
+}
+.auto-preflight-refs .chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 .auto-self-test {
   margin-top: 10px;
   padding: 10px;
@@ -1443,6 +1499,15 @@ button {
   }
   .auto-actions {
     justify-content: flex-start;
+  }
+  .auto-preflight-head {
+    flex-direction: column;
+  }
+  .auto-preflight-summary {
+    justify-content: flex-start;
+  }
+  .auto-preflight-refs {
+    margin-left: 0;
   }
 }
 

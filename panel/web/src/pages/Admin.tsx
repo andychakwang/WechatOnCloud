@@ -17,6 +17,7 @@ import {
   type AutomationMaterialAsset,
   type AutomationMaterialKind,
   type AutomationOverview,
+  type AutomationPreflightReport,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type MassSendJob,
@@ -206,6 +207,18 @@ const AUTOMATION_RISK_LABEL: Record<string, string> = {
   moment_failures: '朋友圈失败',
 };
 
+const PREFLIGHT_LEVEL_LABEL: Record<string, string> = {
+  ok: '正常',
+  warn: '提醒',
+  block: '阻断',
+};
+
+function preflightLevelClass(level: string): string {
+  if (level === 'block') return 'tag-off';
+  if (level === 'warn') return 'tag-warn';
+  return 'tag-on';
+}
+
 function linesOf(text: string): string[] {
   return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
 }
@@ -310,6 +323,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
   const [overview, setOverview] = useState<AutomationOverview | null>(null);
+  const [preflight, setPreflight] = useState<AutomationPreflightReport | null>(null);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
@@ -369,9 +383,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { overview }, { contacts }, { assets }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }, { policy }] = await Promise.all([
+      const [{ config }, { overview }, { report }, { contacts }, { assets }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }, { policy }] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
+        api.getAutomationPreflight(),
         api.listAutomationAudience(200),
         api.listAutomationMaterials(200),
         api.listMassSendJobs(),
@@ -384,6 +399,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
       setOverview(overview);
+      setPreflight(report);
       setAudienceContacts(contacts);
       setMaterialAssets(assets);
       setJobs(jobs);
@@ -1223,6 +1239,47 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {preflight && (
+          <div className={'auto-preflight auto-preflight-' + preflight.level}>
+            <div className="auto-preflight-head">
+              <div>
+                <b>自动化预检</b>
+                <div className="muted small">最近检查 {fmtStaleSeconds((Date.now() - Date.parse(preflight.generatedAt)) / 1000)}</div>
+              </div>
+              <div className="auto-preflight-summary">
+                <span className={'tag ' + preflightLevelClass(preflight.level)}>{PREFLIGHT_LEVEL_LABEL[preflight.level]}</span>
+                <span className="tag tag-off">阻断 {preflight.summary.block}</span>
+                <span className="tag tag-warn">提醒 {preflight.summary.warn}</span>
+                <span className="tag tag-on">正常 {preflight.summary.ok}</span>
+              </div>
+            </div>
+            <div className="auto-preflight-list">
+              {preflight.checks.map((check) => (
+                <div key={check.id} className="auto-preflight-item">
+                  <div className="auto-preflight-item-main">
+                    <span className={'tag ' + preflightLevelClass(check.level)}>{PREFLIGHT_LEVEL_LABEL[check.level]}</span>
+                    <div>
+                      <b>{check.title}</b>
+                      <div className="muted small">
+                        {check.message}
+                        {check.action ? ` ${check.action}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  {check.refs && check.refs.length > 0 && (
+                    <div className="chip-row auto-preflight-refs">
+                      {check.refs.slice(0, 6).map((ref) => (
+                        <span key={ref} className={'chip chip-static ' + (check.level === 'block' ? 'chip-bad' : '')}>
+                          {ref}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {selfTest && (

@@ -303,6 +303,25 @@ export interface AutomationOverview {
   riskFlags: string[];
 }
 
+export type AutomationPreflightLevel = 'ok' | 'warn' | 'block';
+
+export interface AutomationPreflightCheck {
+  id: string;
+  level: AutomationPreflightLevel;
+  title: string;
+  message: string;
+  count?: number;
+  action?: string;
+  refs?: string[];
+}
+
+export interface AutomationPreflightReport {
+  generatedAt: string;
+  level: AutomationPreflightLevel;
+  summary: Record<AutomationPreflightLevel, number>;
+  checks: AutomationPreflightCheck[];
+}
+
 export type RiskLevel = 'normal' | 'review' | 'block';
 
 export interface RiskAssessment {
@@ -685,6 +704,270 @@ export function getAutomationOverview(): AutomationOverview {
       lastAction: lastAudit?.action,
     },
     riskFlags,
+  };
+}
+
+export function getAutomationPreflightReport(): AutomationPreflightReport {
+  const nowIso = new Date().toISOString();
+  const overview = getAutomationOverview();
+  const checks: AutomationPreflightCheck[] = [];
+  const enabledApprovedRules = data.rules.filter((rule) => rule.enabled && rule.approved);
+  const runnableRuleCount = enabledApprovedRules.filter(hasRunnableSteps).length;
+  const pendingTotal = overview.bridge.pendingReplies + overview.bridge.pendingMassTasks + overview.bridge.pendingMomentTasks;
+  const runnableMassJobs = data.massSendJobs.filter(isMassJobBridgeRunnable);
+  const readyMomentDrafts = data.momentDrafts.filter((draft) => draft.approved && draft.status === 'ready' && !!draft.text.trim());
+  const add = (check: AutomationPreflightCheck) => checks.push(check);
+
+  if (data.settings.enabled) {
+    add({
+      id: 'automation_enabled',
+      level: 'ok',
+      title: '自动化总开关已开启',
+      message: 'AI 回复、群发和朋友圈队列可以按各自开关进入执行链路。',
+    });
+  } else {
+    add({
+      id: 'automation_off',
+      level: 'block',
+      title: '自动化总开关关闭',
+      message: 'Bridge 拉取、群发队列和朋友圈草稿都会被总开关拦截。',
+      action: '在自动化工作台开启总开关后再运行 Mac Runner。',
+    });
+  }
+
+  if (overview.bridge.workersOnline > 0) {
+    add({
+      id: 'bridge_worker_online',
+      level: 'ok',
+      title: 'Mac Bridge 在线',
+      message: `${overview.bridge.workersOnline} 个 Runner 最近上报了心跳。`,
+      count: overview.bridge.workersOnline,
+    });
+  } else if (pendingTotal > 0) {
+    add({
+      id: 'pending_without_worker',
+      level: 'block',
+      title: '有待办但没有在线 Mac Bridge',
+      message: `当前有 ${pendingTotal} 个出箱待办，没有在线 Runner 可以领取。`,
+      count: pendingTotal,
+      action: '启动 Mac 端 wecom-bridge-runner，并确认心跳回到面板。',
+    });
+  } else if (overview.bridge.workersTotal > 0) {
+    add({
+      id: 'bridge_workers_offline',
+      level: 'warn',
+      title: 'Mac Bridge 暂时离线',
+      message: '历史 Runner 已登记，但当前都不在线；有新队列时不会自动执行。',
+      action: '需要自动处理时启动 Mac Runner。',
+    });
+  } else {
+    add({
+      id: 'bridge_worker_not_registered',
+      level: 'warn',
+      title: '尚未登记 Mac Bridge',
+      message: '面板还没有收到过 Mac Runner 心跳，自动化只能先停留在云端队列。',
+      action: '按“企微 Bridge”区域的环境变量和命令启动 Runner。',
+    });
+  }
+
+  if (!data.settings.automaticRuleRepliesEnabled && runnableRuleCount > 0) {
+    add({
+      id: 'rule_replies_off',
+      level: 'warn',
+      title: '规则自动回复关闭',
+      message: `${runnableRuleCount} 条已审核规则不会自动生成可发送回复。`,
+      count: runnableRuleCount,
+      action: '如需关键词规则自动生效，开启“规则自动回复”。',
+    });
+  }
+
+  if (!data.settings.aiDraftEnabled && overview.bridge.events.active > 0) {
+    add({
+      id: 'ai_draft_off',
+      level: 'warn',
+      title: 'AI 草稿关闭',
+      message: '企微消息仍会进入 Bridge 收件箱，但不会自动生成 AI 草稿。',
+      count: overview.bridge.events.active,
+    });
+  }
+
+  if (!data.settings.massSendEnabled && runnableMassJobs.length > 0) {
+    const pending = runnableMassJobs.reduce((sum, job) => sum + job.items.filter((item) => item.status === 'pending').length, 0);
+    add({
+      id: 'mass_send_off',
+      level: 'block',
+      title: '群发队列开关关闭',
+      message: `${runnableMassJobs.length} 个已审核群发队列不会被 Bridge 拉取。`,
+      count: pending,
+      refs: runnableMassJobs.slice(0, 8).map((job) => job.title),
+      action: '确认队列内容后开启“群发队列”。',
+    });
+  }
+
+  if (!data.settings.momentsEnabled && readyMomentDrafts.length > 0) {
+    add({
+      id: 'moments_off',
+      level: 'block',
+      title: '朋友圈半自动开关关闭',
+      message: `${readyMomentDrafts.length} 个已就绪朋友圈草稿不会被 Bridge 拉取。`,
+      count: readyMomentDrafts.length,
+      refs: readyMomentDrafts.slice(0, 8).map((draft) => draft.title),
+      action: '确认草稿后开启“朋友圈半自动”。',
+    });
+  }
+
+  const missingTriggerRules = enabledApprovedRules.filter((rule) => rule.triggers.length === 0);
+  if (missingTriggerRules.length > 0) {
+    add({
+      id: 'rule_missing_triggers',
+      level: 'warn',
+      title: '规则缺少触发词',
+      message: `${missingTriggerRules.length} 条已审核规则不会命中任何消息。`,
+      count: missingTriggerRules.length,
+      refs: missingTriggerRules.slice(0, 8).map((rule) => rule.name),
+      action: '给这些规则补充触发词，或停用不再需要的规则。',
+    });
+  }
+
+  const missingStepRules = enabledApprovedRules.filter((rule) => !hasRunnableSteps(rule));
+  if (missingStepRules.length > 0) {
+    add({
+      id: 'rule_missing_steps',
+      level: 'block',
+      title: '规则缺少可执行回复',
+      message: `${missingStepRules.length} 条已审核规则没有文本、按键或图片步骤。`,
+      count: missingStepRules.length,
+      refs: missingStepRules.slice(0, 8).map((rule) => rule.name),
+      action: '补充回复步骤后再批准规则。',
+    });
+  }
+
+  const materialReferences = collectMaterialReferences();
+  const materialIssues = checkMaterialReferences(materialReferences);
+  for (const issue of materialIssues) add(issue);
+  if (materialReferences.length > 0 && materialIssues.length === 0) {
+    add({
+      id: 'material_references_ok',
+      level: 'ok',
+      title: '素材引用可用',
+      message: `${materialReferences.length} 个素材引用均已启用、审核并配置本机路径。`,
+      count: materialReferences.length,
+    });
+  }
+
+  const directImageRefs = collectDirectImagePathReferences();
+  if (directImageRefs.length > 0) {
+    add({
+      id: 'direct_image_paths',
+      level: 'warn',
+      title: '图片步骤使用直接路径',
+      message: `${directImageRefs.length} 个图片步骤使用了本机路径，NAS 无法确认 Mac 上文件是否存在。`,
+      count: directImageRefs.length,
+      refs: directImageRefs.slice(0, 8),
+      action: '建议导入素材资产并改用 imageKey，便于统一预检和迁移。',
+    });
+  }
+
+  const riskyMassJobs = runnableMassJobs
+    .map((job) => ({ job, risk: assessRisk([job.message]) }))
+    .filter((hit) => hit.risk.level !== 'normal');
+  if (riskyMassJobs.length > 0) {
+    add({
+      id: 'mass_content_risk',
+      level: 'block',
+      title: '群发内容触发风控',
+      message: `${riskyMassJobs.length} 个群发队列会被领取逻辑拦截。`,
+      count: riskyMassJobs.length,
+      refs: riskyMassJobs.slice(0, 8).map((hit) => `${hit.job.title}：${hit.risk.reasons.join('；')}`),
+      action: '调整群发内容，或拆到人工审核流程。',
+    });
+  }
+
+  const riskyMomentDrafts = readyMomentDrafts
+    .map((draft) => ({ draft, risk: assessRisk([draft.text, draft.imageNotes]) }))
+    .filter((hit) => hit.risk.level !== 'normal');
+  if (riskyMomentDrafts.length > 0) {
+    add({
+      id: 'moment_content_risk',
+      level: 'block',
+      title: '朋友圈内容触发风控',
+      message: `${riskyMomentDrafts.length} 个朋友圈草稿会被领取逻辑拦截。`,
+      count: riskyMomentDrafts.length,
+      refs: riskyMomentDrafts.slice(0, 8).map((hit) => `${hit.draft.title}：${hit.risk.reasons.join('；')}`),
+      action: '调整文案或图片说明后重新审核。',
+    });
+  }
+
+  if (overview.mass.itemsFailed > 0) {
+    add({
+      id: 'mass_failures',
+      level: 'warn',
+      title: '存在失败的群发目标',
+      message: `${overview.mass.itemsFailed} 个群发目标处于失败状态。`,
+      count: overview.mass.itemsFailed,
+      action: '查看失败原因，修正后重新置为待发或跳过。',
+    });
+  }
+
+  if (overview.moments.bridgeFailedDrafts > 0) {
+    add({
+      id: 'moment_failures',
+      level: 'warn',
+      title: '存在失败的朋友圈草稿',
+      message: `${overview.moments.bridgeFailedDrafts} 个朋友圈草稿曾被 Mac Runner 标记失败。`,
+      count: overview.moments.bridgeFailedDrafts,
+      action: '打开草稿检查错误信息，修正后重新审核。',
+    });
+  }
+
+  if (overview.bridge.runs.recentFailures > 0) {
+    add({
+      id: 'recent_runner_failures',
+      level: 'warn',
+      title: '近期 Runner 有失败记录',
+      message: `最近 50 次 Runner 上报中有 ${overview.bridge.runs.recentFailures} 次失败。`,
+      count: overview.bridge.runs.recentFailures,
+      action: '查看 Bridge 运行记录，确认 Mac 端窗口、权限和素材路径。',
+    });
+  }
+
+  const policy = data.runnerPolicy;
+  if (policy.mode === 'send' && !policy.allowSend) {
+    add({
+      id: 'runner_send_locked',
+      level: 'warn',
+      title: 'Runner 发送模式未放行',
+      message: '远程策略设置为 send，但 allowSend 未开启；Mac Runner 会降级到 prepare。',
+      action: '保持受控准备，或在确认风险后同时开启 allowSend 与 Mac 端 WECOM_ACCEPT_REMOTE_SEND。',
+    });
+  }
+  if (overview.bridge.pendingReplies > 0 && !runnerPolicyIncludes(policy.target, 'replies')) {
+    addRunnerTargetWarning('runner_target_excludes_replies', 'AI 回复', overview.bridge.pendingReplies, policy.target);
+  }
+  if (overview.bridge.pendingMassTasks > 0 && !runnerPolicyIncludes(policy.target, 'mass')) {
+    addRunnerTargetWarning('runner_target_excludes_mass', '群发队列', overview.bridge.pendingMassTasks, policy.target);
+  }
+  if (overview.bridge.pendingMomentTasks > 0 && !runnerPolicyIncludes(policy.target, 'moments')) {
+    addRunnerTargetWarning('runner_target_excludes_moments', '朋友圈', overview.bridge.pendingMomentTasks, policy.target);
+  }
+
+  function addRunnerTargetWarning(id: string, label: string, count: number, target: WecomBridgeRunnerTarget) {
+    add({
+      id,
+      level: 'warn',
+      title: `Runner 目标未包含${label}`,
+      message: `${label}有 ${count} 个待办，但远程 Runner 目标是 ${target}。`,
+      count,
+      action: '把 Runner 目标切到 all，或为该队列单独启动 Runner。',
+    });
+  }
+
+  const summary = preflightSummary(checks);
+  return {
+    generatedAt: nowIso,
+    level: summary.block > 0 ? 'block' : summary.warn > 0 ? 'warn' : 'ok',
+    summary,
+    checks,
   };
 }
 
@@ -3066,6 +3349,158 @@ function findMatchingRule(text: string): AutomationRule | null {
 
 function hasRunnableSteps(rule: AutomationRule): boolean {
   return rule.responseSteps.some((step) => step.type === 'text' || step.type === 'key' || step.type === 'image');
+}
+
+interface AutomationMaterialReference {
+  key: string;
+  source: string;
+  expectedKind?: AutomationMaterialKind;
+  requiresLocalPath: boolean;
+}
+
+function collectMaterialReferences(): AutomationMaterialReference[] {
+  const refs: AutomationMaterialReference[] = [];
+  const pushStepRefs = (steps: AutomationStep[], source: string) => {
+    for (const step of steps) {
+      if (step.type !== 'image' || !step.imageKey?.trim()) continue;
+      refs.push({
+        key: step.imageKey,
+        source,
+        expectedKind: 'image',
+        requiresLocalPath: true,
+      });
+    }
+  };
+
+  for (const rule of data.rules.filter((item) => item.enabled && item.approved)) {
+    pushStepRefs(rule.responseSteps, `规则「${rule.name}」`);
+  }
+  for (const event of data.bridgeEvents.filter((item) => item.status !== 'archived' && item.replyApproved && !item.replyDeliveredAt)) {
+    pushStepRefs(bridgeReplySteps(event), `Bridge 回复「${event.conversationName || event.senderName || event.id}」`);
+  }
+  for (const draft of data.momentDrafts.filter((item) => item.approved && item.status === 'ready')) {
+    for (const rawKey of draft.materials) {
+      const key = normalizeMaterialKey(rawKey);
+      if (!key) continue;
+      refs.push({
+        key,
+        source: `朋友圈「${draft.title}」`,
+        requiresLocalPath: true,
+      });
+    }
+  }
+  return refs;
+}
+
+function collectDirectImagePathReferences(): string[] {
+  const refs: string[] = [];
+  const pushStepRefs = (steps: AutomationStep[], source: string) => {
+    for (const step of steps) {
+      if (step.type === 'image' && step.imagePath?.trim() && !step.imageKey?.trim()) refs.push(`${source}: ${step.imagePath.trim()}`);
+    }
+  };
+  for (const rule of data.rules.filter((item) => item.enabled && item.approved)) {
+    pushStepRefs(rule.responseSteps, `规则「${rule.name}」`);
+  }
+  for (const event of data.bridgeEvents.filter((item) => item.status !== 'archived' && item.replyApproved && !item.replyDeliveredAt)) {
+    pushStepRefs(bridgeReplySteps(event), `Bridge 回复「${event.conversationName || event.senderName || event.id}」`);
+  }
+  return refs;
+}
+
+function checkMaterialReferences(refs: AutomationMaterialReference[]): AutomationPreflightCheck[] {
+  if (refs.length === 0) return [];
+  const missing: string[] = [];
+  const inactive: string[] = [];
+  const wrongKind: string[] = [];
+  const noLocalPath: string[] = [];
+
+  for (const ref of refs) {
+    const asset = findMaterialAssetByKey(ref.key);
+    const label = `${ref.source}: ${ref.key}`;
+    if (!asset) {
+      missing.push(label);
+      continue;
+    }
+    if (!asset.enabled || !asset.approved) {
+      inactive.push(`${label}（${asset.enabled ? '启用' : '停用'}，${asset.approved ? '已审核' : '未审核'}）`);
+      continue;
+    }
+    if (ref.expectedKind && asset.kind !== ref.expectedKind) {
+      wrongKind.push(`${label}（当前类型 ${asset.kind}）`);
+      continue;
+    }
+    if (ref.requiresLocalPath && !asset.localPath.trim()) {
+      noLocalPath.push(label);
+    }
+  }
+
+  const checks: AutomationPreflightCheck[] = [];
+  if (missing.length > 0) {
+    checks.push({
+      id: 'material_missing',
+      level: 'block',
+      title: '素材引用不存在',
+      message: `${missing.length} 个 imageKey/materialKey 找不到对应素材资产。`,
+      count: missing.length,
+      refs: missing.slice(0, 10),
+      action: '在“素材资产”中导入对应 key，或把回复步骤改为已有 key。',
+    });
+  }
+  if (inactive.length > 0) {
+    checks.push({
+      id: 'material_inactive',
+      level: 'block',
+      title: '素材未启用或未审核',
+      message: `${inactive.length} 个素材引用存在，但当前不能交给 Runner 使用。`,
+      count: inactive.length,
+      refs: inactive.slice(0, 10),
+      action: '启用并审核这些素材，或替换为已审核素材。',
+    });
+  }
+  if (wrongKind.length > 0) {
+    checks.push({
+      id: 'material_wrong_kind',
+      level: 'block',
+      title: '素材类型不匹配',
+      message: `${wrongKind.length} 个图片步骤引用的素材不是图片类型。`,
+      count: wrongKind.length,
+      refs: wrongKind.slice(0, 10),
+      action: '把素材类型改为图片，或换成图片素材 key。',
+    });
+  }
+  if (noLocalPath.length > 0) {
+    checks.push({
+      id: 'material_missing_local_path',
+      level: 'block',
+      title: '素材缺少 Mac 本机路径',
+      message: `${noLocalPath.length} 个素材已登记，但没有 localPath，Mac handler 无法映射为可发送文件。`,
+      count: noLocalPath.length,
+      refs: noLocalPath.slice(0, 10),
+      action: '补充 Mac 可访问的本机路径，或在 Runner 环境里提供等价素材映射。',
+    });
+  }
+  return checks;
+}
+
+function findMaterialAssetByKey(key: string): AutomationMaterialAsset | undefined {
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return data.materialAssets.find((asset) => asset.key.trim().toLowerCase() === normalized);
+}
+
+function runnerPolicyIncludes(target: WecomBridgeRunnerTarget, queue: WecomBridgeRunnerTarget): boolean {
+  return target === 'all' || target === queue;
+}
+
+function preflightSummary(checks: AutomationPreflightCheck[]): Record<AutomationPreflightLevel, number> {
+  return checks.reduce(
+    (summary, check) => {
+      summary[check.level] += 1;
+      return summary;
+    },
+    { ok: 0, warn: 0, block: 0 } as Record<AutomationPreflightLevel, number>,
+  );
 }
 
 function ruleText(rule: AutomationRule): string {

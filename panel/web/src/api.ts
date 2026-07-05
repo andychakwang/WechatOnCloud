@@ -412,6 +412,25 @@ export interface AutomationOverview {
   riskFlags: string[];
 }
 
+export type AutomationPreflightLevel = 'ok' | 'warn' | 'block';
+
+export interface AutomationPreflightCheck {
+  id: string;
+  level: AutomationPreflightLevel;
+  title: string;
+  message: string;
+  count?: number;
+  action?: string;
+  refs?: string[];
+}
+
+export interface AutomationPreflightReport {
+  generatedAt: string;
+  level: AutomationPreflightLevel;
+  summary: Record<AutomationPreflightLevel, number>;
+  checks: AutomationPreflightCheck[];
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -589,6 +608,7 @@ export const api = {
   // 自动化实验版（规则、AI 草稿、确认发送）
   getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
   getAutomationOverview: () => req<{ overview: AutomationOverview }>('/api/admin/automation/overview'),
+  getAutomationPreflight: () => req<{ report: AutomationPreflightReport }>('/api/admin/automation/preflight'),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
   exportAutomationBundle: (options: { includeBridgeEvents?: boolean; includeOperational?: boolean; includeAudit?: boolean } = {}) =>

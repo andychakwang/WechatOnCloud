@@ -83,6 +83,7 @@ import {
   initAutomationStore,
   getAutomationConfig,
   getAutomationOverview,
+  getAutomationPreflightReport,
   updateAutomationConfig,
   exportAutomationBundle,
   importAutomationBundle,
@@ -396,6 +397,11 @@ app.get('/api/admin/automation/config', async (req, reply) => {
 app.get('/api/admin/automation/overview', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { overview: getAutomationOverview() };
+});
+
+app.get('/api/admin/automation/preflight', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { report: getAutomationPreflightReport() };
 });
 
 app.put('/api/admin/automation/config', async (req, reply) => {
