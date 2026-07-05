@@ -212,6 +212,7 @@ const fs = require('node:fs');
 const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const policy = payload.policy || {};
 const parts = [
+  `engine=${policy.runnerEngine || 'bridge'}`,
   `mode=${policy.mode || 'unknown'}`,
   `target=${policy.target || 'unknown'}`,
   `limit=${policy.limit ?? 'unknown'}`,
@@ -410,11 +411,17 @@ fi
 
 if [[ "${WECOM_USE_REMOTE_POLICY:-}" == "1" || "${WECOM_USE_REMOTE_POLICY:-}" == "true" ]]; then
   policy_file="$(mktemp "${TMPDIR:-/tmp}/woc-runner-policy.XXXXXX.json")"
-  if node "$CLIENT" runner-policy --worker-id "${WECOM_BRIDGE_WORKER_ID:-}" > "$policy_file"; then
+  policy_args=(runner-policy)
+  if [[ -n "${WECOM_BRIDGE_WORKER_ID:-}" ]]; then
+    policy_args+=(--worker-id "$WECOM_BRIDGE_WORKER_ID")
+  fi
+  if node "$CLIENT" "${policy_args[@]}" > "$policy_file"; then
     remote_allow_send=""
     while IFS='=' read -r key value; do
       case "$key" in
         MODE) MODE="$value" ;;
+        RUNNER_ENGINE) RUNNER_ENGINE="$value" ;;
+        USE_RPA_PACKAGE) USE_RPA_PACKAGE="$value" ;;
         TARGET) TARGET="$value" ;;
         LIMIT) LIMIT="$value" ;;
         CLAIM_TTL_SECONDS) CLAIM_TTL_SECONDS="$value" ;;
@@ -429,6 +436,8 @@ const fs = require('node:fs');
 const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const policy = payload.policy || {};
 const out = {
+  RUNNER_ENGINE: policy.runnerEngine,
+  USE_RPA_PACKAGE: policy.runnerEngine === 'rpa-package' ? '1' : '0',
   MODE: policy.mode,
   TARGET: policy.target,
   LIMIT: policy.limit,

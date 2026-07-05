@@ -213,6 +213,7 @@ export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'doc
 export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
+export type WecomBridgeRunnerEngine = 'bridge' | 'rpa-package';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
@@ -305,6 +306,7 @@ export interface AutomationBridgeRecoveryResult {
 }
 
 export interface WecomBridgeRunnerPolicy {
+  runnerEngine: WecomBridgeRunnerEngine;
   mode: WecomBridgeRunnerMode;
   target: WecomBridgeRunnerTarget;
   limit: number;
@@ -724,6 +726,7 @@ const BRIDGE_WORKER_CAPABILITIES: WecomBridgeWorkerCapability[] = [
 ];
 
 const DEFAULT_RUNNER_POLICY: WecomBridgeRunnerPolicy = {
+  runnerEngine: 'bridge',
   mode: 'dry-run',
   target: 'all',
   limit: 5,
@@ -1569,7 +1572,7 @@ export function updateWecomBridgeRunnerPolicy(actor: User, raw: any): WecomBridg
   addAutomationAudit({
     action: 'bridge_runner_policy_updated',
     actor: actor.username,
-    message: `更新 Mac Runner 策略：${data.runnerPolicy.target}/${data.runnerPolicy.mode}，limit=${data.runnerPolicy.limit}`,
+    message: `更新 Mac Runner 策略：${data.runnerPolicy.runnerEngine}/${data.runnerPolicy.target}/${data.runnerPolicy.mode}，limit=${data.runnerPolicy.limit}`,
   });
   return cloneRunnerPolicy(data.runnerPolicy);
 }
@@ -4138,10 +4141,13 @@ function truthyFlag(value: unknown): boolean {
 
 function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
   const base = raw && typeof raw === 'object' ? raw : {};
+  let runnerEngine = normalizeBridgeRunnerEngine(base.runnerEngine ?? base.engine ?? base.runnerModeEngine) || DEFAULT_RUNNER_POLICY.runnerEngine;
+  if (truthyFlag(base.useRpaPackage ?? base.rpaPackage ?? base.rpaPackageEngine)) runnerEngine = 'rpa-package';
   let mode = normalizeBridgeRunnerMode(base.mode ?? base.runnerMode) || DEFAULT_RUNNER_POLICY.mode;
   let target = normalizeBridgeRunnerTarget(base.target ?? base.runnerTarget) || DEFAULT_RUNNER_POLICY.target;
   if (mode === 'send' && target === 'moments') mode = 'prepare';
   return {
+    runnerEngine,
     mode,
     target,
     limit: clampInt(base.limit ?? base.runnerLimit, 1, 50, DEFAULT_RUNNER_POLICY.limit),
@@ -5192,6 +5198,13 @@ function normalizeBridgeRunnerMode(value: unknown): WecomBridgeRunnerMode | null
   if (raw === 'dry-run' || raw === 'dryrun' || raw === 'dry_run') return 'dry-run';
   if (raw === 'prepare') return 'prepare';
   if (raw === 'send') return 'send';
+  return null;
+}
+
+function normalizeBridgeRunnerEngine(value: unknown): WecomBridgeRunnerEngine | null {
+  const raw = String(value || '').toLowerCase().replace(/_/g, '-');
+  if (raw === 'bridge' || raw === 'direct' || raw === 'queue') return 'bridge';
+  if (raw === 'rpa-package' || raw === 'rpa' || raw === 'package' || raw === 'run-package' || raw === 'cloud-rpa-package') return 'rpa-package';
   return null;
 }
 

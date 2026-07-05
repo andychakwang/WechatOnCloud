@@ -34,6 +34,7 @@ import {
   type WecomBridgeMomentPasteMode,
   type WecomBridgeRunReport,
   type WecomBridgeWorkerCapability,
+  type WecomBridgeRunnerEngine,
   type WecomBridgeRunnerMode,
   type WecomBridgeRunnerPolicy,
   type WecomBridgeRunnerTarget,
@@ -222,6 +223,11 @@ const BRIDGE_RUNNER_MODE_LABEL: Record<WecomBridgeRunnerMode, string> = {
   'dry-run': '只预览',
   prepare: '领取并准备',
   send: '受控发送',
+};
+
+const BRIDGE_RUNNER_ENGINE_LABEL: Record<WecomBridgeRunnerEngine, string> = {
+  bridge: 'Bridge 队列',
+  'rpa-package': 'RPA 运行包',
 };
 
 const BRIDGE_RUNNER_TARGET_LABEL: Record<WecomBridgeRunnerTarget, string> = {
@@ -1658,6 +1664,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <b>云端 Runner 策略</b>
                         <div className="muted small">
                           {BRIDGE_RUNNER_TARGET_LABEL[runnerPolicy.target]} · {BRIDGE_RUNNER_MODE_LABEL[runnerPolicy.mode]} · 每轮 {runnerPolicy.limit}
+                          {' · '}
+                          {BRIDGE_RUNNER_ENGINE_LABEL[runnerPolicy.runnerEngine || 'bridge']}
                           {runnerPolicy.requireTargetMatch ? ' · 目标硬校验' : ''}
                           {runnerPolicy.requireHandlerVerification ? ' · 交付校验' : ''}
                         </div>
@@ -1669,6 +1677,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       </div>
                     </div>
                     <div className="auto-grid three compact">
+                      <label>
+                        <span className="field-label">执行引擎</span>
+                        <select
+                          className="input"
+                          value={runnerPolicy.runnerEngine || 'bridge'}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, runnerEngine: e.target.value as WecomBridgeRunnerEngine })}
+                        >
+                          <option value="bridge">Bridge 队列</option>
+                          <option value="rpa-package">RPA 运行包</option>
+                        </select>
+                      </label>
                       <label>
                         <span className="field-label">模式</span>
                         <select

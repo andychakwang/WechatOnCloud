@@ -332,6 +332,11 @@ if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_USE_RPA_PACKAGE="* ]];
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_RUNNER_ENGINE="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_RUNNER_ENGINE" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
 json_assert_path bridge.runnerGuide.commands.dryRunRpaPackageAll
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_BRIDGE_CAPABILITIES="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing WECOM_BRIDGE_CAPABILITIES" >&2
@@ -824,13 +829,17 @@ PY
   say "Update and fetch WeCom Bridge runner policy"
   request_json GET /api/admin/automation/runner-policy
   json_assert_path policy.mode
-  runner_policy_payload='{"mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false,"requireTargetMatch":true,"requireHandlerVerification":true}'
+  runner_policy_payload='{"runnerEngine":"bridge","mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false,"requireTargetMatch":true,"requireHandlerVerification":true}'
   request_json PUT /api/admin/automation/runner-policy "$runner_policy_payload"
+  json_assert_eq policy.runnerEngine bridge
   json_assert_eq policy.target replies
   json_assert_eq policy.limit 3
   json_assert_eq policy.requireTargetMatch True
   json_assert_eq policy.requireHandlerVerification True
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" runner-policy --worker-id smoke-worker > "$body_file"
+  json_assert_eq policy.runnerEngine bridge
+  json_assert_eq env.WECOM_RUNNER_ENGINE bridge
+  json_assert_eq env.WECOM_USE_RPA_PACKAGE 0
   json_assert_eq policy.target replies
   json_assert_eq env.WECOM_RUNNER_TARGET replies
   json_assert_eq env.WECOM_REQUIRE_TARGET_MATCH 1
@@ -1648,6 +1657,33 @@ if not any(item.get("target") == "moment" and item.get("draftId") == moment_draf
     raise SystemExit("RPA package runner env mode missing moment")
 if not payload.get("savedPackagePath"):
     raise SystemExit("RPA package runner env mode should save a package copy")
+PY
+
+  request_json PUT /api/admin/automation/runner-policy '{"runnerEngine":"rpa-package","mode":"dry-run","target":"all","limit":20,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false,"requireTargetMatch":true,"requireHandlerVerification":false}'
+  json_assert_eq policy.runnerEngine rpa-package
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" runner-policy --worker-id smoke-worker > "$body_file"
+  json_assert_eq env.WECOM_RUNNER_ENGINE rpa-package
+  json_assert_eq env.WECOM_USE_RPA_PACKAGE 1
+  json_assert_eq env.WECOM_RUNNER_TARGET all
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_USE_REMOTE_POLICY=1 WECOM_RPA_PACKAGE_SAVE_DIR="$(dirname "$rpa_cloud_package_file")" "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
+import json
+import sys
+
+file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if payload.get("target") != "all" or payload.get("mode") != "dry-run":
+    raise SystemExit("remote policy RPA package runner should use all/dry-run")
+handled = payload.get("handled", [])
+if not any(item.get("target") == "reply" and item.get("id") == event_id and item.get("ok") is True for item in handled):
+    raise SystemExit("remote policy RPA package runner missing reply")
+if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id and item.get("ok") is True for item in handled):
+    raise SystemExit("remote policy RPA package runner missing mass")
+if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id and item.get("ok") is True for item in handled):
+    raise SystemExit("remote policy RPA package runner missing moment")
+if not payload.get("savedPackagePath"):
+    raise SystemExit("remote policy RPA package runner should save a package copy")
 PY
 
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"

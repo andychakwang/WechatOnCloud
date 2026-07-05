@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r54-cloud-rpa-package-runner';
+const CLIENT_VERSION = 'automation-lab-r55-runner-engine-policy';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 
@@ -98,7 +98,7 @@ function parseArgs(argv) {
     }
     const key = arg.slice(2);
     const next = argv[i + 1];
-    if (next && !next.startsWith('--')) {
+    if (next !== undefined && !next.startsWith('--')) {
       options[key] = next;
       i += 1;
     } else {

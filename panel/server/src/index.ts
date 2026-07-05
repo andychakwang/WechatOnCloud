@@ -250,13 +250,14 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WOC_PANEL_URL=${shellSingle(panelUrl)}`,
     `AUTOMATION_BRIDGE_TOKEN=${shellSingle(tokenPlaceholder)}`,
     "WECOM_USE_REMOTE_POLICY='1'",
+    `WECOM_RUNNER_ENGINE=${shellSingle(policy.runnerEngine)}`,
     `WECOM_RUNNER_MODE=${shellSingle(policy.mode)}`,
     `WECOM_RUNNER_TARGET=${shellSingle(policy.target)}`,
     `WECOM_RUNNER_LIMIT=${shellSingle(String(policy.limit))}`,
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
-    "WECOM_USE_RPA_PACKAGE='0'",
+    `WECOM_USE_RPA_PACKAGE=${shellSingle(policy.runnerEngine === 'rpa-package' ? '1' : '0')}`,
     'WECOM_RPA_PACKAGE_SAVE_DIR=$HOME/.config/wechat-on-cloud/rpa-packages',
     "WECOM_BRIDGE_CAPABILITIES='reply,mass,moment,prepare,material-map,target-match,handler-verification'",
     `WECOM_REQUIRE_TARGET_MATCH=${shellSingle(policy.requireTargetMatch ? '1' : '0')}`,
@@ -522,7 +523,7 @@ app.put('/api/admin/automation/runner-policy', async (req, reply) => {
   if (!admin) return;
   try {
     const policy = updateWecomBridgeRunnerPolicy(admin, req.body as any);
-    appendPanelLog('INFO', `更新 Mac Runner 策略 by ${admin.username}：${policy.target}/${policy.mode}，limit=${policy.limit}`);
+    appendPanelLog('INFO', `更新 Mac Runner 策略 by ${admin.username}：${policy.runnerEngine}/${policy.target}/${policy.mode}，limit=${policy.limit}`);
     return { policy };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '更新 Mac Runner 策略失败' });
@@ -720,11 +721,13 @@ app.get(AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT, async (req, reply) => {
     workerId: String(query?.workerId || ''),
     env: {
       WECOM_RUNNER_MODE: policy.mode,
+      WECOM_RUNNER_ENGINE: policy.runnerEngine,
       WECOM_RUNNER_TARGET: policy.target,
       WECOM_RUNNER_LIMIT: String(policy.limit),
       WECOM_CLAIM_TTL_SECONDS: String(policy.claimTtlSeconds),
       WECOM_BRIDGE_INTERVAL_SEC: String(policy.heartbeatIntervalSeconds),
       WECOM_MOMENT_PASTE_MODE: policy.momentPasteMode,
+      WECOM_USE_RPA_PACKAGE: policy.runnerEngine === 'rpa-package' ? '1' : '0',
       WECOM_ALLOW_SEND: policy.allowSend ? '1' : '',
       WECOM_REQUIRE_TARGET_MATCH: policy.requireTargetMatch ? '1' : '0',
       WECOM_REQUIRE_HANDLER_VERIFICATION: policy.requireHandlerVerification ? '1' : '0',
