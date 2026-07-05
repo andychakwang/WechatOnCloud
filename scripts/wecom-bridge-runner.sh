@@ -31,6 +31,10 @@ USE_RPA_PACKAGE="${WECOM_USE_RPA_PACKAGE:-}"
 RUNNER_ENGINE="${WECOM_RUNNER_ENGINE:-bridge}"
 RPA_PACKAGE_ACK="${WECOM_RPA_PACKAGE_ACK:-}"
 RPA_PACKAGE_SAVE_DIR="${WECOM_RPA_PACKAGE_SAVE_DIR:-}"
+MATERIAL_MAP_KIND="${WECOM_MATERIAL_MAP_KIND:-image}"
+MATERIAL_MAP_TAG="${WECOM_MATERIAL_MAP_TAG:-}"
+MATERIAL_MAP_SOURCE="${WECOM_MATERIAL_MAP_SOURCE:-}"
+MATERIAL_MAP_INCLUDE_SKIPPED="${WECOM_MATERIAL_MAP_INCLUDE_SKIPPED:-1}"
 
 usage() {
   cat <<'EOF'
@@ -57,6 +61,10 @@ Optional:
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
   WECOM_MATERIAL_MAP_FILE=~/.config/wechat-on-cloud/wecom-materials.json
+  WECOM_MATERIAL_MAP_KIND=image|video|file|link|text|other|all
+  WECOM_MATERIAL_MAP_TAG=tag                  optional cloud material tag filter
+  WECOM_MATERIAL_MAP_SOURCE=source            optional cloud material source filter
+  WECOM_MATERIAL_MAP_INCLUDE_SKIPPED=1        include unmapped cloud assets in sync report
   WECOM_SYNC_MATERIAL_MAP=1                 set 0 to disable material-map refresh
   WECOM_REQUIRE_TARGET_MATCH=1              abort reply/mass before paste if target title mismatches
   WECOM_REQUIRE_HANDLER_VERIFICATION=1      require handler verification before marking delivered/sent/prepared
@@ -87,7 +95,7 @@ case "$cmd" in
     exit 0
     ;;
   print-config)
-    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nENGINE=%s\nUSE_RPA_PACKAGE=%s\nRPA_PACKAGE_SAVE_DIR=%s\nMATERIAL_MAP_FILE=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "$RUNNER_ENGINE" "$USE_RPA_PACKAGE" "$RPA_PACKAGE_SAVE_DIR" "${WECOM_MATERIAL_MAP_FILE:-}"
+    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nENGINE=%s\nUSE_RPA_PACKAGE=%s\nRPA_PACKAGE_SAVE_DIR=%s\nMATERIAL_MAP_FILE=%s\nMATERIAL_MAP_KIND=%s\nMATERIAL_MAP_TAG=%s\nMATERIAL_MAP_SOURCE=%s\nMATERIAL_MAP_INCLUDE_SKIPPED=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "$RUNNER_ENGINE" "$USE_RPA_PACKAGE" "$RPA_PACKAGE_SAVE_DIR" "${WECOM_MATERIAL_MAP_FILE:-}" "$MATERIAL_MAP_KIND" "$MATERIAL_MAP_TAG" "$MATERIAL_MAP_SOURCE" "$MATERIAL_MAP_INCLUDE_SKIPPED"
     exit 0
     ;;
   doctor)
@@ -238,7 +246,23 @@ doctor_material_map() {
     return
   fi
   if [[ -f "$WECOM_MATERIAL_MAP_FILE" ]]; then
-    doctor_ok "material map file exists: $WECOM_MATERIAL_MAP_FILE"
+    local summary
+    if summary="$(node - "$WECOM_MATERIAL_MAP_FILE" <<'NODE' 2>/dev/null
+const fs = require('node:fs');
+const file = process.argv[2];
+const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+const map = payload.materialMap || payload;
+const materials = Array.isArray(map.materials) ? map.materials : [];
+const skipped = Array.isArray(map.skipped) ? map.skipped : [];
+const mappedKeys = map.map && typeof map.map === 'object' ? Object.keys(map.map).length : materials.length;
+const kinds = [...new Set(materials.map((item) => item.kind).filter(Boolean))].join(',') || 'none';
+process.stdout.write(`mapped=${mappedKeys}, skipped=${skipped.length}, kinds=${kinds}`);
+NODE
+)"; then
+      doctor_ok "material map file exists: $WECOM_MATERIAL_MAP_FILE ($summary)"
+    else
+      doctor_warn "material map file exists but could not be parsed: $WECOM_MATERIAL_MAP_FILE"
+    fi
   else
     doctor_warn "material map file missing; runner can sync it before run-once: $WECOM_MATERIAL_MAP_FILE"
   fi
@@ -399,6 +423,53 @@ fi
 
 validate_runner_config || exit $?
 
+material_map_args() {
+  local args
+  args=(material-map)
+  if [[ -n "$MATERIAL_MAP_KIND" ]]; then
+    args+=(--kind "$MATERIAL_MAP_KIND")
+  fi
+  if [[ -n "$MATERIAL_MAP_TAG" ]]; then
+    args+=(--tag "$MATERIAL_MAP_TAG")
+  fi
+  if [[ -n "$MATERIAL_MAP_SOURCE" ]]; then
+    args+=(--source "$MATERIAL_MAP_SOURCE")
+  fi
+  if [[ -n "$MATERIAL_MAP_INCLUDE_SKIPPED" ]]; then
+    args+=(--include-skipped "$MATERIAL_MAP_INCLUDE_SKIPPED")
+  fi
+  printf '%s\0' "${args[@]}"
+}
+
+sync_material_map() {
+  if [[ -z "${WECOM_MATERIAL_MAP_FILE:-}" || "${WECOM_SYNC_MATERIAL_MAP:-1}" == "0" ]]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$WECOM_MATERIAL_MAP_FILE")"
+  local args=()
+  while IFS= read -r -d '' item; do
+    args+=("$item")
+  done < <(material_map_args)
+  if ! node "$CLIENT" "${args[@]}" --output "$WECOM_MATERIAL_MAP_FILE" >/dev/null; then
+    echo "WARN: failed to sync material map to $WECOM_MATERIAL_MAP_FILE; continuing with existing file if present." >&2
+    return 0
+  fi
+  local summary
+  if summary="$(node - "$WECOM_MATERIAL_MAP_FILE" <<'NODE' 2>/dev/null
+const fs = require('node:fs');
+const file = process.argv[2];
+const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+const map = payload.materialMap || payload;
+const materials = Array.isArray(map.materials) ? map.materials : [];
+const skipped = Array.isArray(map.skipped) ? map.skipped : [];
+const mappedKeys = map.map && typeof map.map === 'object' ? Object.keys(map.map).length : materials.length;
+process.stdout.write(`mapped=${mappedKeys}, skipped=${skipped.length}`);
+NODE
+)"; then
+    echo "INFO: synced material map to $WECOM_MATERIAL_MAP_FILE ($summary)." >&2
+  fi
+}
+
 if [[ -z "${WOC_PANEL_URL:-}" && -z "${PANEL_URL:-}" && -z "${WECHATONCLOUD_PANEL_URL:-}" ]]; then
   echo "ERROR: set WOC_PANEL_URL in env or $ENV_FILE." >&2
   exit 2
@@ -470,12 +541,7 @@ fi
 
 validate_runner_config || exit $?
 
-if [[ -n "${WECOM_MATERIAL_MAP_FILE:-}" && "${WECOM_SYNC_MATERIAL_MAP:-1}" != "0" ]]; then
-  mkdir -p "$(dirname "$WECOM_MATERIAL_MAP_FILE")"
-  if ! node "$CLIENT" material-map --kind image --output "$WECOM_MATERIAL_MAP_FILE" >/dev/null; then
-    echo "WARN: failed to sync material map to $WECOM_MATERIAL_MAP_FILE; continuing with existing file if present." >&2
-  fi
-fi
+sync_material_map
 
 if [[ -z "${WECOM_BRIDGE_CAPABILITIES:-}" ]]; then
   WECOM_BRIDGE_CAPABILITIES="reply,mass,moment,prepare,material-map"

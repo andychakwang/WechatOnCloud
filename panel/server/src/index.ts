@@ -264,6 +264,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
+    "WECOM_MATERIAL_MAP_KIND='image'",
+    "WECOM_MATERIAL_MAP_INCLUDE_SKIPPED='1'",
     `WECOM_USE_RPA_PACKAGE=${shellSingle(policy.runnerEngine === 'rpa-package' ? '1' : '0')}`,
     'WECOM_RPA_PACKAGE_SAVE_DIR=$HOME/.config/wechat-on-cloud/rpa-packages',
     "WECOM_BRIDGE_CAPABILITIES='reply,mass,moment,prepare,material-map,target-match,handler-verification'",
@@ -286,7 +288,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     envFile,
     commands: {
       writeEnv: `mkdir -p ~/.config/wechat-on-cloud\ncat > ${configPath} <<'EOF'\n${envFile}\nEOF\nchmod 600 ${configPath}`,
-      syncMaterialMap: `node scripts/wecom-bridge-client.mjs material-map --kind image --output ${materialMapCommandPath}`,
+      syncMaterialMap: `node scripts/wecom-bridge-client.mjs material-map --kind image --include-skipped 1 --output ${materialMapCommandPath}`,
       printConfig: 'scripts/wecom-bridge-runner.sh print-config',
       doctor: 'scripts/wecom-bridge-runner.sh doctor',
       doctorReport: 'WECOM_DOCTOR_REPORT=1 scripts/wecom-bridge-runner.sh doctor',

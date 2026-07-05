@@ -790,13 +790,21 @@ print(json.dumps({
     "kind": "image",
     "approveImported": True,
     "mode": "upsert",
-    "assets": [{
-        "key": f"smoke-bridge-poster-{stamp}",
-        "title": "Smoke Bridge Poster",
-        "localPath": path,
-        "tags": ["bridge"],
-        "description": "Bridge material smoke",
-    }],
+    "assets": [
+        {
+            "key": f"smoke-bridge-poster-{stamp}",
+            "title": "Smoke Bridge Poster",
+            "localPath": path,
+            "tags": ["bridge", "runner-sync"],
+            "description": "Bridge material smoke",
+        },
+        {
+            "key": f"smoke-bridge-missing-{stamp}",
+            "title": "Smoke Missing Poster",
+            "tags": ["bridge", "runner-sync"],
+            "description": "Bridge material smoke without local path",
+        },
+    ],
 }, ensure_ascii=False))
 PY
 )"
@@ -805,16 +813,34 @@ PY
   json_assert_eq result.assets[0].kind image
   bridge_material_key="$(json_get result.assets[0].key)"
   bridge_material_id="$(json_get result.assets[0].id)"
-  request_bridge_json GET "/api/automation/bridge/wecom/material-map?kind=image"
+  bridge_missing_material_key="$(json_get result.assets[1].key)"
+  bridge_missing_material_id="$(json_get result.assets[1].id)"
+  request_bridge_json GET "/api/automation/bridge/wecom/material-map?kind=image&tag=runner-sync&source=smoke-wecom-bridge&includeSkipped=1"
   json_assert_path materialMap.materials[0].key
   json_assert_path materialMap.map
-  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" material-map --kind image --output "$material_map_file" > "$body_file"
-  json_assert_path materialMap.materials[0].localPath
-  python3 - "$material_map_file" "$bridge_material_key" "$reply_image_file" <<'PY'
+  python3 - "$body_file" "$bridge_missing_material_key" <<'PY'
 import json
 import sys
 
-file, expected_key, expected_path = sys.argv[1], sys.argv[2], sys.argv[3]
+file, skipped_key = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+skipped = payload.get("materialMap", {}).get("skipped", [])
+if not any(item.get("key") == skipped_key and item.get("reason") == "missing_local_path" for item in skipped):
+    raise SystemExit(f"material map response missing skipped key {skipped_key}")
+PY
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" material-map \
+    --kind image \
+    --tag runner-sync \
+    --source smoke-wecom-bridge \
+    --include-skipped 1 \
+    --output "$material_map_file" > "$body_file"
+  json_assert_path materialMap.materials[0].localPath
+  python3 - "$material_map_file" "$bridge_material_key" "$reply_image_file" "$bridge_missing_material_key" <<'PY'
+import json
+import sys
+
+file, expected_key, expected_path, skipped_key = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(file, "r", encoding="utf-8") as fh:
     payload = json.load(fh)
 materials = payload.get("materials", [])
@@ -825,8 +851,38 @@ if matches[0].get("localPath") != expected_path or matches[0].get("path") != exp
     raise SystemExit(f"material map file path mismatch for {expected_key}")
 if payload.get("map", {}).get(expected_key) != expected_path:
     raise SystemExit(f"plain map missing key {expected_key}")
+skipped = payload.get("skipped", [])
+if not any(item.get("key") == skipped_key and item.get("reason") == "missing_local_path" for item in skipped):
+    raise SystemExit(f"material map file missing skipped key {skipped_key}")
+PY
+  rm -f "$material_map_file"
+  WOC_PANEL_URL="$PANEL_URL" \
+    AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" \
+    WECOM_BRIDGE_WORKER_ID=smoke-material-sync \
+    WECOM_MATERIAL_MAP_FILE="$material_map_file" \
+    WECOM_MATERIAL_MAP_KIND=image \
+    WECOM_MATERIAL_MAP_TAG=runner-sync \
+    WECOM_MATERIAL_MAP_SOURCE=smoke-wecom-bridge \
+    WECOM_MATERIAL_MAP_INCLUDE_SKIPPED=1 \
+    WECOM_RUNNER_MODE=dry-run \
+    WECOM_RUNNER_TARGET=replies \
+    WECOM_RUNNER_LIMIT=1 \
+    "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  python3 - "$material_map_file" "$bridge_material_key" "$bridge_missing_material_key" <<'PY'
+import json
+import sys
+
+file, mapped_key, skipped_key = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if mapped_key not in payload.get("map", {}):
+    raise SystemExit(f"runner material sync did not write mapped key {mapped_key}")
+if not any(item.get("key") == skipped_key for item in payload.get("skipped", [])):
+    raise SystemExit(f"runner material sync did not write skipped key {skipped_key}")
 PY
   request_json DELETE "/api/admin/automation/materials/$bridge_material_id"
+  json_assert_path ok
+  request_json DELETE "/api/admin/automation/materials/$bridge_missing_material_id"
   json_assert_path ok
 
   say "Report WeCom Bridge worker heartbeat"

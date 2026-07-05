@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
 const CLIENT_VERSION = 'automation-lab-r74-rpa-package-digest';
@@ -61,7 +61,7 @@ Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
-  material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
+  material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--include-skipped 0|1] [--output file]
   push-events <file|-> [--source name] [--plan-replies] [--approve-rule-replies] [--overwrite-reply-drafts]
   export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--ttl-minutes 720] [--format json|jsonl] [--output file|--output-dir dir] [--include-source] [--worker-id name]
   run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--allow-expired-rpa-package]
@@ -547,6 +547,13 @@ function materialMapPath(options) {
   for (const key of ['kind', 'tag', 'source']) {
     const value = String(options[key] || '').trim();
     if (value) params.set(key, value);
+  }
+  const includeSkipped = options['include-skipped'] ?? options.includeSkipped ?? process.env.WECOM_MATERIAL_MAP_INCLUDE_SKIPPED;
+  if (includeSkipped !== undefined && includeSkipped !== true) {
+    const raw = String(includeSkipped).trim().toLowerCase();
+    if (raw) params.set('includeSkipped', ['0', 'false', 'no', 'off'].includes(raw) ? '0' : '1');
+  } else if (includeSkipped === true) {
+    params.set('includeSkipped', '1');
   }
   const query = params.toString();
   return `/api/automation/bridge/wecom/material-map${query ? `?${query}` : ''}`;
@@ -1342,6 +1349,7 @@ async function main() {
     const result = await requestJson(options, 'GET', materialMapPath(options));
     const output = positional[0] || options.output || options.file;
     if (output && output !== '-') {
+      await mkdir(dirname(output), { recursive: true });
       await writeFile(output, `${JSON.stringify(result.materialMap || result, null, 2)}\n`, 'utf8');
     }
     printJson(result);
