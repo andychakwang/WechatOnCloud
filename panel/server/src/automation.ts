@@ -203,9 +203,26 @@ export interface WecomBridgeWorker {
   pendingReplies: number;
   pendingMassTasks: number;
   pendingMomentTasks: number;
+  materialMap?: WecomBridgeWorkerMaterialMapStatus;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WecomBridgeWorkerMaterialMapStatus {
+  file?: string;
+  exists: boolean;
+  ok: boolean;
+  generatedAt?: string;
+  updatedAt: string;
+  mapped: number;
+  materials: number;
+  skipped: number;
+  kinds: string[];
+  kind?: string;
+  tag?: string;
+  source?: string;
+  error?: string;
 }
 
 export interface WecomBridgeWorkerStatus extends WecomBridgeWorker {
@@ -1458,6 +1475,59 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
   const materialReferences = collectMaterialReferences();
   const materialIssues = checkMaterialReferences(materialReferences);
   for (const issue of materialIssues) add(issue);
+  if (materialReferences.length > 0) {
+    addWorkerCapabilityCheck('worker_capability_material_map', 'material-map', '素材映射', materialReferences.length);
+    const materialMapWorkers = activeOnlineBridgeWorkers.filter(
+      (worker) => worker.capabilities.length === 0 || worker.capabilities.includes('material-map'),
+    );
+    const reportedMaterialMapWorkers = materialMapWorkers.filter((worker) => !!worker.materialMap);
+    if (materialMapWorkers.length > 0 && reportedMaterialMapWorkers.length === 0) {
+      add({
+        id: 'worker_material_map_not_reported',
+        level: 'warn',
+        title: 'Runner 未上报素材映射文件状态',
+        message: `${materialReferences.length} 个素材引用需要 Mac 本机路径；在线 Runner 支持素材映射，但心跳未携带映射文件状态。`,
+        count: materialReferences.length,
+        action: '升级 Mac Bridge client 到 R78，并确认 WECOM_MATERIAL_MAP_FILE 已配置。',
+      });
+    } else if (reportedMaterialMapWorkers.length > 0) {
+      const missingFiles = reportedMaterialMapWorkers.filter((worker) => worker.materialMap && !worker.materialMap.exists);
+      const invalidFiles = reportedMaterialMapWorkers.filter((worker) => worker.materialMap && worker.materialMap.exists && !worker.materialMap.ok);
+      const skipped = reportedMaterialMapWorkers.reduce((sum, worker) => sum + (worker.materialMap?.skipped || 0), 0);
+      const mapped = reportedMaterialMapWorkers.reduce((sum, worker) => sum + (worker.materialMap?.mapped || 0), 0);
+      if (missingFiles.length > 0 || invalidFiles.length > 0) {
+        add({
+          id: 'worker_material_map_invalid',
+          level: 'warn',
+          title: 'Runner 本机素材映射不可用',
+          message: `${missingFiles.length} 个 Runner 缺少映射文件，${invalidFiles.length} 个 Runner 映射文件解析异常。`,
+          count: missingFiles.length + invalidFiles.length,
+          refs: reportedMaterialMapWorkers
+            .filter((worker) => !worker.materialMap?.ok)
+            .slice(0, 8)
+            .map((worker) => `${worker.workerId}: ${worker.materialMap?.error || worker.materialMap?.file || 'material map unavailable'}`),
+          action: '在 Mac 上执行素材映射同步命令，或检查 WECOM_MATERIAL_MAP_FILE 指向的 JSON 文件。',
+        });
+      } else if (skipped > 0) {
+        add({
+          id: 'worker_material_map_skipped',
+          level: 'warn',
+          title: 'Runner 素材映射仍有跳过项',
+          message: `在线 Runner 最近上报 ${mapped} 个本机映射，同时有 ${skipped} 个云端素材缺少本机路径。`,
+          count: skipped,
+          action: '给被跳过的素材补充 Mac 本机 localPath，或在任务中移除这些素材引用。',
+        });
+      } else {
+        add({
+          id: 'worker_material_map_ok',
+          level: 'ok',
+          title: 'Runner 本机素材映射已同步',
+          message: `在线 Runner 最近上报 ${mapped} 个本机素材映射。`,
+          count: mapped,
+        });
+      }
+    }
+  }
   if (materialReferences.length > 0 && materialIssues.length === 0) {
     add({
       id: 'material_references_ok',
@@ -2404,6 +2474,7 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
     pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
     pendingMomentTasks: clampInt(raw?.pendingMomentTasks, 0, 100000, 0),
+    materialMap: normalizeBridgeWorkerMaterialMap(raw?.materialMap ?? raw?.materialMapStatus, now),
     lastSeenAt: now,
     createdAt: now,
     updatedAt: now,
@@ -5150,9 +5221,35 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
     pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
     pendingMomentTasks: clampInt(raw?.pendingMomentTasks, 0, 100000, 0),
+    materialMap: normalizeBridgeWorkerMaterialMap(raw?.materialMap ?? raw?.materialMapStatus, updatedAt),
     lastSeenAt: normalizeIsoDate(raw?.lastSeenAt, updatedAt),
     createdAt,
     updatedAt,
+  };
+}
+
+function normalizeBridgeWorkerMaterialMap(raw: any, now: string): WecomBridgeWorkerMaterialMapStatus | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const error = str(raw?.error ?? raw?.message, 240).trim() || undefined;
+  const exists = raw?.exists === false || raw?.missing === true || raw?.notFound === true ? false : true;
+  const ok = raw?.ok === false || raw?.valid === false || !!error || !exists ? false : true;
+  const kinds: string[] = Array.isArray(raw?.kinds)
+    ? [...new Set<string>(raw.kinds.map((item: any) => str(item, 40).trim()).filter((item: string) => item.length > 0))].slice(0, 20)
+    : [];
+  return {
+    file: str(raw?.file ?? raw?.path, 300).trim() || undefined,
+    exists,
+    ok,
+    generatedAt: raw?.generatedAt ? normalizeIsoDate(raw.generatedAt, now) : undefined,
+    updatedAt: normalizeIsoDate(raw?.updatedAt, now),
+    mapped: clampInt(raw?.mapped ?? raw?.mapKeys ?? raw?.mapCount, 0, 100000, 0),
+    materials: clampInt(raw?.materials ?? raw?.materialCount ?? raw?.mapped ?? raw?.mapKeys, 0, 100000, 0),
+    skipped: clampInt(raw?.skipped ?? raw?.skippedCount, 0, 100000, 0),
+    kinds,
+    kind: str(raw?.kind, 40).trim() || undefined,
+    tag: str(raw?.tag, 80).trim() || undefined,
+    source: str(raw?.source, 120).trim() || undefined,
+    error,
   };
 }
 
@@ -6588,6 +6685,7 @@ function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offline
     ...worker,
     enabled: worker.enabled !== false,
     capabilities: [...worker.capabilities],
+    materialMap: worker.materialMap ? { ...worker.materialMap, kinds: [...worker.materialMap.kinds] } : undefined,
     online: staleSeconds <= offlineAfterSeconds,
     staleSeconds,
     offlineAfterSeconds,

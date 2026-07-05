@@ -71,6 +71,46 @@ function fmtStaleSeconds(seconds: number): string {
   if (seconds < 86400) return `${Math.round(seconds / 3600)} 小时前`;
   return `${Math.round(seconds / 86400)} 天前`;
 }
+function fileBasename(value?: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.split(/[\\/]/).filter(Boolean).pop() || raw;
+}
+function bridgeWorkerMaterialMapChip(worker: WecomBridgeWorkerStatus): { label: string; className: string; title: string } | null {
+  const status = worker.materialMap;
+  if (!status) {
+    if (!worker.capabilities.includes('material-map')) return null;
+    return {
+      label: '素材未上报',
+      className: 'chip chip-static chip-bad',
+      title: '该 Runner 声明支持素材映射，但心跳未携带 WECOM_MATERIAL_MAP_FILE 状态。',
+    };
+  }
+  const file = status.file ? `文件：${status.file}` : '';
+  const filters = [status.kind ? `kind=${status.kind}` : '', status.tag ? `tag=${status.tag}` : '', status.source ? `source=${status.source}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  const detail = [file, filters, status.error ? `错误：${status.error}` : ''].filter(Boolean).join('\n');
+  if (!status.exists) {
+    return {
+      label: `素材文件缺失${status.file ? ` ${fileBasename(status.file)}` : ''}`,
+      className: 'chip chip-static chip-bad',
+      title: detail || '素材映射文件不存在。',
+    };
+  }
+  if (!status.ok) {
+    return {
+      label: '素材映射异常',
+      className: 'chip chip-static chip-bad',
+      title: detail || '素材映射文件无法解析。',
+    };
+  }
+  return {
+    label: status.skipped > 0 ? `素材 ${status.mapped} / 跳过 ${status.skipped}` : `素材 ${status.mapped}`,
+    className: status.skipped > 0 ? 'chip chip-static chip-bad' : 'chip chip-static',
+    title: detail || '素材映射已同步。',
+  };
+}
 function isPastIso(value?: string): boolean {
   if (!value) return false;
   const ms = Date.parse(value);
@@ -2552,45 +2592,53 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 )}
                 {bridge.workers.length > 0 && (
                   <div className="auto-list compact">
-                    {bridge.workers.slice(0, 4).map((worker) => (
-                      <div className="auto-list-item" key={worker.id}>
-                        <div>
-                          <b>{worker.workerId}</b>
-                          <div className="muted small">
-                            {worker.source} · {worker.mode} · {worker.host || '未知主机'}
-                            {worker.pid ? ` · pid ${worker.pid}` : ''}
-                          </div>
-                          <div className="muted small">
-                            最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks} · 待朋友圈 {worker.pendingMomentTasks}
-                          </div>
-                          {!worker.enabled && (
+                    {bridge.workers.slice(0, 4).map((worker) => {
+                      const materialMapChip = bridgeWorkerMaterialMapChip(worker);
+                      return (
+                        <div className="auto-list-item" key={worker.id}>
+                          <div>
+                            <b>{worker.workerId}</b>
                             <div className="muted small">
-                              已暂停{worker.pausedBy ? ` · ${worker.pausedBy}` : ''}
-                              {worker.pauseReason ? ` · ${worker.pauseReason}` : ''}
+                              {worker.source} · {worker.mode} · {worker.host || '未知主机'}
+                              {worker.pid ? ` · pid ${worker.pid}` : ''}
                             </div>
-                          )}
-                          <div className="chip-row">
-                            {worker.capabilities.length > 0 ? (
-                              worker.capabilities.slice(0, 8).map((capability) => (
-                                <span key={capability} className="chip chip-static">
-                                  {BRIDGE_WORKER_CAPABILITY_LABEL[capability] || capability}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="chip chip-static">能力未知</span>
+                            <div className="muted small">
+                              最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks} · 待朋友圈 {worker.pendingMomentTasks}
+                            </div>
+                            {!worker.enabled && (
+                              <div className="muted small">
+                                已暂停{worker.pausedBy ? ` · ${worker.pausedBy}` : ''}
+                                {worker.pauseReason ? ` · ${worker.pauseReason}` : ''}
+                              </div>
                             )}
+                            <div className="chip-row">
+                              {materialMapChip && (
+                                <span className={materialMapChip.className} title={materialMapChip.title}>
+                                  {materialMapChip.label}
+                                </span>
+                              )}
+                              {worker.capabilities.length > 0 ? (
+                                worker.capabilities.slice(0, 8).map((capability) => (
+                                  <span key={capability} className="chip chip-static">
+                                    {BRIDGE_WORKER_CAPABILITY_LABEL[capability] || capability}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="chip chip-static">能力未知</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="chip-row auto-worker-actions">
+                            <span className={'tag ' + (!worker.enabled ? 'tag-warn' : worker.online ? 'tag-on' : 'tag-off')}>
+                              {!worker.enabled ? '已暂停' : worker.online ? '在线' : '离线'}
+                            </span>
+                            <button className="btn-text" disabled={busy === `bridge-worker-${worker.id}`} onClick={() => toggleBridgeWorker(worker, !worker.enabled)}>
+                              {worker.enabled ? '暂停' : '恢复'}
+                            </button>
                           </div>
                         </div>
-                        <div className="chip-row auto-worker-actions">
-                          <span className={'tag ' + (!worker.enabled ? 'tag-warn' : worker.online ? 'tag-on' : 'tag-off')}>
-                            {!worker.enabled ? '已暂停' : worker.online ? '在线' : '离线'}
-                          </span>
-                          <button className="btn-text" disabled={busy === `bridge-worker-${worker.id}`} onClick={() => toggleBridgeWorker(worker, !worker.enabled)}>
-                            {worker.enabled ? '暂停' : '恢复'}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 {bridgeRunSummary && (

@@ -880,6 +880,26 @@ if mapped_key not in payload.get("map", {}):
 if not any(item.get("key") == skipped_key for item in payload.get("skipped", [])):
     raise SystemExit(f"runner material sync did not write skipped key {skipped_key}")
 PY
+  request_json GET /api/admin/automation/bridge
+  python3 - "$body_file" "$bridge_material_key" "$bridge_missing_material_key" <<'PY'
+import json
+import sys
+
+file, mapped_key, skipped_key = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+workers = payload.get("bridge", {}).get("workers", [])
+worker = next((item for item in workers if item.get("workerId") == "smoke-material-sync"), None)
+if not worker:
+    raise SystemExit("runner material sync heartbeat did not register smoke-material-sync")
+status = worker.get("materialMap") or {}
+if not status.get("exists") or not status.get("ok"):
+    raise SystemExit(f"runner material sync status not ok: {status}")
+if status.get("mapped", 0) < 1 or status.get("skipped", 0) < 1:
+    raise SystemExit(f"runner material sync status missing mapped/skipped counts for {mapped_key}/{skipped_key}: {status}")
+if status.get("kind") != "image" or status.get("tag") != "runner-sync" or status.get("source") != "smoke-wecom-bridge":
+    raise SystemExit(f"runner material sync status missing filters: {status}")
+PY
   request_json DELETE "/api/admin/automation/materials/$bridge_material_id"
   json_assert_path ok
   request_json DELETE "/api/admin/automation/materials/$bridge_missing_material_id"

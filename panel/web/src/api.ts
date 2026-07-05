@@ -227,12 +227,29 @@ export interface WecomBridgeWorkerStatus {
   pendingReplies: number;
   pendingMassTasks: number;
   pendingMomentTasks: number;
+  materialMap?: WecomBridgeWorkerMaterialMapStatus;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
   online: boolean;
   staleSeconds: number;
   offlineAfterSeconds: number;
+}
+
+export interface WecomBridgeWorkerMaterialMapStatus {
+  file?: string;
+  exists: boolean;
+  ok: boolean;
+  generatedAt?: string;
+  updatedAt: string;
+  mapped: number;
+  materials: number;
+  skipped: number;
+  kinds: string[];
+  kind?: string;
+  tag?: string;
+  source?: string;
+  error?: string;
 }
 
 export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'doctor' | 'unknown';

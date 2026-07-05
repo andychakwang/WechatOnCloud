@@ -6,7 +6,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r74-rpa-package-digest';
+const CLIENT_VERSION = 'automation-lab-r78-material-map-heartbeat';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
@@ -557,6 +557,53 @@ function materialMapPath(options) {
   }
   const query = params.toString();
   return `/api/automation/bridge/wecom/material-map${query ? `?${query}` : ''}`;
+}
+
+async function materialMapSnapshotFromEnv() {
+  const file = String(process.env.WECOM_MATERIAL_MAP_FILE || '').trim();
+  if (!file) return undefined;
+  const base = {
+    file,
+    kind: String(process.env.WECOM_MATERIAL_MAP_KIND || '').trim() || undefined,
+    tag: String(process.env.WECOM_MATERIAL_MAP_TAG || '').trim() || undefined,
+    source: String(process.env.WECOM_MATERIAL_MAP_SOURCE || '').trim() || undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    const payload = JSON.parse(await readFile(file, 'utf8'));
+    const map = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.materialMap || payload : {};
+    const materials = Array.isArray(map.materials) ? map.materials : [];
+    const skipped = Array.isArray(map.skipped) ? map.skipped : [];
+    const mapped = map.map && typeof map.map === 'object' && !Array.isArray(map.map) ? Object.keys(map.map).length : materials.length;
+    const kinds = [
+      ...new Set(
+        materials
+          .map((item) => String(item?.kind || '').trim())
+          .filter(Boolean),
+      ),
+    ].slice(0, 20);
+    return {
+      ...base,
+      exists: true,
+      ok: true,
+      generatedAt: String(map.generatedAt || '').trim() || undefined,
+      mapped,
+      materials: materials.length,
+      skipped: skipped.length,
+      kinds,
+    };
+  } catch (error) {
+    return {
+      ...base,
+      exists: error?.code === 'ENOENT' ? false : true,
+      ok: false,
+      mapped: 0,
+      materials: 0,
+      skipped: 0,
+      kinds: [],
+      error: String(error?.message || error),
+    };
+  }
 }
 
 function replyListPath(limit, options = {}) {
@@ -1381,6 +1428,7 @@ async function main() {
   if (command === 'heartbeat') {
     const source = bridgeSource(options);
     const mode = runnerMode(options, 'manual');
+    const materialMap = await materialMapSnapshotFromEnv();
     printJson(
       await requestJson(options, 'POST', '/api/automation/bridge/wecom/heartbeat', {
         source,
@@ -1391,6 +1439,7 @@ async function main() {
         version: CLIENT_VERSION,
         note: String(options.note || ''),
         capabilities: workerCapabilities(options, mode),
+        ...(materialMap ? { materialMap } : {}),
       }),
     );
     return;
