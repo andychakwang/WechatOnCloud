@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r51-rpa-run-package';
+const CLIENT_VERSION = 'automation-lab-r52-rpa-package-runner';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 
@@ -25,6 +25,7 @@ Commands:
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
   push-events <file|-> [--source name]
   export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source]
+  run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
   runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
@@ -55,6 +56,7 @@ Examples:
   node scripts/wecom-bridge-client.mjs material-map --kind image --output ~/.config/wechat-on-cloud/wecom-materials.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs export-rpa-package --target all --output-dir ~/.config/wechat-on-cloud/rpa-packages
+  node scripts/wecom-bridge-client.mjs run-rpa-package ~/.config/wechat-on-cloud/rpa-packages/latest.jsonl --mode dry-run
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs runner-policy --worker-id mac-mini-01
   node scripts/wecom-bridge-client.mjs report-run --target all --mode dry-run --handled-replies 2
@@ -144,8 +146,12 @@ async function readStdin() {
   });
 }
 
+async function readTextInput(file) {
+  return file && file !== '-' ? await readFile(file, 'utf8') : await readStdin();
+}
+
 async function readJsonInput(file) {
-  const text = file && file !== '-' ? await readFile(file, 'utf8') : await readStdin();
+  const text = await readTextInput(file);
   if (!text.trim()) throw new BridgeError('Empty JSON input.');
   try {
     return JSON.parse(text);
@@ -658,7 +664,258 @@ async function exportRpaPackage(options) {
   }
 }
 
-async function runHandler(command, reply) {
+function normalizeRpaTaskTarget(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  if (['reply', 'replies', 'ai-reply', 'ai-replies'].includes(raw)) return 'reply';
+  if (['mass', 'mass-task', 'mass-tasks', 'group-send', 'broadcast'].includes(raw)) return 'mass';
+  if (['moment', 'moments', 'moment-task', 'moment-tasks', 'moment-draft', 'moment-drafts'].includes(raw)) return 'moment';
+  return '';
+}
+
+function normalizeRpaRunTarget(value) {
+  const raw = String(value || 'all').trim().toLowerCase().replace(/_/g, '-');
+  if (!raw || raw === 'all') return 'all';
+  const target = normalizeRpaTaskTarget(raw);
+  if (target) return target;
+  throw new BridgeError(`Invalid RPA run target: ${value}. Use replies, mass, moments, or all.`);
+}
+
+function rpaRunTargets(target) {
+  return target === 'all' ? ['reply', 'mass', 'moment'] : [target];
+}
+
+function parseRpaPackageText(text, label) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new BridgeError(`Empty RPA package input: ${label}.`);
+  if (raw.startsWith('{') || raw.startsWith('[')) {
+    const payload = parseJsonText(raw, label);
+    if (Array.isArray(payload)) return { package: {}, tasks: payload };
+    if (Array.isArray(payload?.tasks)) return { package: payload, tasks: payload.tasks };
+    if (isRecord(payload) && payload.schema === RPA_TASK_SCHEMA) return { package: {}, tasks: [payload] };
+    throw new BridgeError(`Invalid RPA package JSON in ${label}: expected package.tasks, a task array, or one ${RPA_TASK_SCHEMA} task.`);
+  }
+  const tasks = [];
+  for (const [index, line] of raw.split(/\r?\n/).entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const task = parseJsonText(trimmed, `${label}:line ${index + 1}`);
+    tasks.push(task);
+  }
+  return { package: {}, tasks };
+}
+
+async function readRpaPackageInput(file) {
+  return parseRpaPackageText(await readTextInput(file), file || 'stdin');
+}
+
+function bridgeTaskFromRpaTask(task) {
+  const target = normalizeRpaTaskTarget(task?.target);
+  if (!target) throw new BridgeError(`RPA task ${task?.id || '<unknown>'} is missing a supported target.`);
+  if (target === 'reply') {
+    const steps = Array.isArray(task.steps) ? task.steps.map((step) => ({ ...step })) : [];
+    const text = String(task.text || '').trim();
+    return {
+      target,
+      task: {
+        id: String(task.id || ''),
+        conversationName: String(task.conversationName || task.expectedName || '').trim(),
+        senderName: String(task.senderName || '').trim(),
+        inboundText: String(task.inboundText || '').trim(),
+        replyDraft: text,
+        replySteps: steps.length ? steps : replyStepsForPackage({ replyDraft: text }),
+      },
+    };
+  }
+  if (target === 'mass') {
+    return {
+      target,
+      task: {
+        id: String(task.id || ''),
+        jobId: String(task.jobId || '').trim(),
+        itemId: String(task.itemId || '').trim(),
+        jobTitle: String(task.jobTitle || '').trim(),
+        recipientName: String(task.recipientName || task.expectedName || '').trim(),
+        message: String(task.text || task.message || '').trim(),
+      },
+    };
+  }
+  return {
+    target,
+    task: {
+      id: String(task.id || task.draftId || ''),
+      draftId: String(task.draftId || task.id || '').trim(),
+      title: String(task.title || task.expectedName || '').trim(),
+      text: String(task.text || '').trim(),
+      imageNotes: String(task.imageNotes || '').trim(),
+      materials: Array.isArray(task.materials) ? task.materials.map(String).filter(Boolean) : [],
+    },
+  };
+}
+
+function rpaHandlerMode(target, mode) {
+  if (mode === 'dry-run') return 'dry-run';
+  if (target === 'moment') return 'prepare';
+  return mode === 'send' ? 'send' : 'prepare';
+}
+
+function rpaAction(target, mode, ok, hasHandler) {
+  if (!ok) return 'failed';
+  if (mode === 'dry-run') return 'dry-run';
+  if (!hasHandler) return 'skipped';
+  if (target === 'reply') return mode === 'send' ? 'delivered' : 'prepared';
+  if (target === 'mass') return mode === 'send' ? 'sent' : 'prepared';
+  return 'prepared';
+}
+
+function rpaHandlerForTarget(options, target) {
+  if (target === 'reply') {
+    return String(options['handler-reply'] || options.replyHandler || options.handler || process.env.WECOM_REPLY_HANDLER || './scripts/wecom-mac-reply-handler.sh');
+  }
+  if (target === 'mass') {
+    return String(options['handler-mass'] || options.massHandler || options.handler || process.env.WECOM_MASS_HANDLER || './scripts/wecom-mac-mass-handler.sh');
+  }
+  return String(options['handler-moment'] || options.momentHandler || options.handler || process.env.WECOM_MOMENT_HANDLER || './scripts/wecom-mac-moment-handler.sh');
+}
+
+async function ackRpaTask(options, target, task, mode, ok, error) {
+  if (ok) {
+    if (target === 'reply' && mode === 'send') {
+      return await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(task.id)}`, {
+        deliveryStatus: 'delivered',
+        ...workerPayload(options, 'send'),
+      });
+    }
+    if (target === 'mass' && mode === 'send') {
+      return await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
+        deliveryStatus: 'sent',
+        ...workerPayload(options, 'send'),
+      });
+    }
+    if (target === 'moment' && mode !== 'dry-run') {
+      return await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
+        deliveryStatus: 'prepared',
+        ...workerPayload(options, 'prepare'),
+      });
+    }
+    return undefined;
+  }
+
+  if (target === 'reply') {
+    return await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(task.id)}`, {
+      deliveryStatus: 'failed',
+      ...workerPayload(options),
+      error,
+    });
+  }
+  if (target === 'mass') {
+    return await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
+      deliveryStatus: 'failed',
+      ...workerPayload(options),
+      error,
+    });
+  }
+  return await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
+    deliveryStatus: 'failed',
+    ...workerPayload(options),
+    error,
+  });
+}
+
+async function runRpaPackage(options, positional) {
+  const mode = runnerMode(options, 'dry-run');
+  if (!['dry-run', 'prepare', 'send'].includes(mode)) throw new BridgeError('run-rpa-package --mode must be dry-run, prepare, or send.');
+  const selectedTarget = normalizeRpaRunTarget(options.target || options.queue || 'all');
+  const selectedTargets = new Set(rpaRunTargets(selectedTarget));
+  const limit = intOpt(options.limit, 200, 1, 2000);
+  const ack = boolOpt(options, 'ack', 'mark-success', 'mark-delivered');
+  const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
+  const runHandlers = !boolOpt(options, 'no-handler', 'list-only');
+  const startedMs = Date.now();
+  const startedAt = new Date(startedMs).toISOString();
+  const inputFile = positional[0] || options.file || '-';
+  const { package: packageMeta, tasks: rawTasks } = await readRpaPackageInput(inputFile);
+  const tasks = rawTasks
+    .map((task) => bridgeTaskFromRpaTask(task))
+    .filter((item) => selectedTargets.has(item.target))
+    .slice(0, limit);
+  const handled = [];
+
+  for (const { target, task } of tasks) {
+    const handler = rpaHandlerForTarget(options, target).trim();
+    const handlerMode = rpaHandlerMode(target, mode);
+    let result = { code: 0, signal: null, stdout: '', handlerResult: { ok: true, mode: 'dry-run' } };
+    let hasHandler = runHandlers && !!handler;
+    if (runHandlers) {
+      if (!handler) throw new BridgeError(`Missing handler for RPA ${target} task ${task.id || '<unknown>'}.`);
+      const extraEnv = { WECOM_HANDLER_MODE: handlerMode };
+      if (target === 'reply') result = await runHandler(handler, task, extraEnv);
+      else if (target === 'mass') result = await runMassHandler(handler, task, extraEnv);
+      else result = await runMomentHandler(handler, task, extraEnv);
+    }
+    const fallbackName = target === 'reply' ? task.conversationName : target === 'mass' ? task.recipientName : task.title;
+    const verification = handlerVerification(result, fallbackName);
+    const gate = result.code === 0 ? handlerVerificationGate(options, verification) : { ok: true };
+    const ok = result.code === 0 && gate.ok;
+    const item = {
+      target,
+      id: task.id,
+      action: rpaAction(target, mode, ok, hasHandler),
+      ok,
+      mode,
+      handlerMode,
+      exitCode: result.code,
+      signal: result.signal,
+    };
+    if (target === 'reply') item.conversationName = task.conversationName;
+    if (target === 'mass') {
+      item.jobId = task.jobId;
+      item.itemId = task.itemId;
+      item.recipientName = task.recipientName;
+    }
+    if (target === 'moment') {
+      item.draftId = task.draftId;
+      item.title = task.title;
+    }
+    if (verification) item.verification = verification;
+    if (!gate.ok) item.error = gate.error;
+    if (!ok && !item.error) item.error = `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`;
+    if ((ok && ack) || (!ok && reportFailure)) {
+      item.ack = await ackRpaTask(options, target, task, mode, ok, item.error || 'RPA package handler failed');
+    }
+    handled.push(item);
+  }
+
+  const output = {
+    packageId: packageMeta?.packageId || '',
+    mode,
+    target: selectedTarget,
+    total: tasks.length,
+    ack,
+    reportedFailure: reportFailure,
+    handled,
+  };
+  if (shouldReportRun(options)) {
+    output.runReport = await postRunReport(options, {
+      target: selectedTarget === 'reply' ? 'replies' : selectedTarget === 'moment' ? 'moments' : selectedTarget,
+      mode,
+      status: runStatusFromHandled(handled),
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedMs,
+      handledReplies: handled.filter((item) => item.target === 'reply').length,
+      handledMassTasks: handled.filter((item) => item.target === 'mass').length,
+      handledMomentTasks: handled.filter((item) => item.target === 'moment').length,
+      failedReplies: handled.filter((item) => item.target === 'reply' && item.ok === false).length,
+      failedMassTasks: handled.filter((item) => item.target === 'mass' && item.ok === false).length,
+      failedMomentTasks: handled.filter((item) => item.target === 'moment' && item.ok === false).length,
+      items: handled,
+      summary: runSummary(`rpa-package/${selectedTarget}`, handled, tasks.length),
+    });
+  }
+  printJson(output);
+}
+
+async function runHandler(command, reply, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     const child = spawn(command, {
@@ -666,6 +923,7 @@ async function runHandler(command, reply) {
       stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
+        ...extraEnv,
         WECOM_BRIDGE_REPLY_ID: reply.id || '',
         WECOM_BRIDGE_CONVERSATION_NAME: reply.conversationName || '',
         WECOM_BRIDGE_SENDER_NAME: reply.senderName || '',
@@ -684,7 +942,7 @@ async function runHandler(command, reply) {
   });
 }
 
-async function runMassHandler(command, task) {
+async function runMassHandler(command, task, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     const child = spawn(command, {
@@ -692,6 +950,7 @@ async function runMassHandler(command, task) {
       stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
+        ...extraEnv,
         WECOM_BRIDGE_MASS_TASK_ID: task.id || '',
         WECOM_BRIDGE_MASS_JOB_ID: task.jobId || '',
         WECOM_BRIDGE_MASS_ITEM_ID: task.itemId || '',
@@ -709,7 +968,7 @@ async function runMassHandler(command, task) {
   });
 }
 
-async function runMomentHandler(command, task) {
+async function runMomentHandler(command, task, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     const child = spawn(command, {
@@ -717,6 +976,7 @@ async function runMomentHandler(command, task) {
       stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
+        ...extraEnv,
         WECOM_BRIDGE_MOMENT_TASK_ID: task.id || '',
         WECOM_BRIDGE_MOMENT_DRAFT_ID: task.draftId || task.id || '',
         WECOM_BRIDGE_MOMENT_TITLE: task.title || '',
@@ -781,6 +1041,11 @@ async function main() {
 
   if (command === 'export-rpa-package' || command === 'export-run-package') {
     await exportRpaPackage(options);
+    return;
+  }
+
+  if (command === 'run-rpa-package' || command === 'run-run-package') {
+    await runRpaPackage(options, positional);
     return;
   }
 

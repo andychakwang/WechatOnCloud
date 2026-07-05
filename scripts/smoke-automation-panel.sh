@@ -1520,6 +1520,30 @@ if package.get("counts", {}).get("total", 0) < 3:
     raise SystemExit("RPA package should contain at least three tasks")
 PY
 
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" run-rpa-package "$rpa_package_file" \
+    --target all \
+    --mode dry-run \
+    --handler-reply "$WECOM_REPLY_HANDLER" \
+    --handler-mass "$WECOM_MASS_HANDLER" \
+    --handler-moment "$WECOM_MOMENT_HANDLER" > "$body_file"
+  python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
+import json
+import sys
+
+file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if payload.get("mode") != "dry-run":
+    raise SystemExit("RPA package runner should use dry-run mode")
+handled = payload.get("handled", [])
+if not any(item.get("target") == "reply" and item.get("id") == event_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
+    raise SystemExit("reply RPA package task was not handled")
+if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
+    raise SystemExit("mass RPA package task was not handled")
+if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
+    raise SystemExit("moment RPA package task was not handled")
+PY
+
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   json_assert_path replies.handled[0].dryRun
   json_assert_path mass.handled[0].dryRun
