@@ -1270,6 +1270,190 @@ PY
   request_json PUT /api/admin/automation/config "$mass_config_payload"
   json_assert_path config.settings.massSendEnabled
 
+  say "Apply WeCom Bridge run-report delivery callbacks"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" heartbeat --worker-id smoke-report-worker --mode send > "$body_file"
+  json_assert_eq worker.workerId smoke-report-worker
+  json_assert_array_contains worker.capabilities send
+
+  report_apply_event_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-report-apply-{stamp}",
+        "conversationName": "Smoke Report Apply Conversation",
+        "senderName": "Smoke Sender",
+        "inboundText": "请验证 run-report 回执反写。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/events "$report_apply_event_payload"
+  json_assert_path result.events[0].id
+  report_apply_event_id="$(json_get result.events[0].id)"
+  request_json PATCH "/api/admin/automation/bridge-events/$report_apply_event_id" '{"status":"planned","replyDraft":"report apply reply","replyApproved":true}'
+  json_assert_path event.replyApproved
+
+  report_apply_mass_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-report-apply-mass-{stamp}",
+    "message": "这是一条 run-report 回执反写 smoke 群发内容。",
+    "recipients": ["Smoke Report Apply Contact"],
+    "options": {
+        "perSendDelaySeconds": 0,
+        "requireOperatorConfirmRecipient": False,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/mass-jobs "$report_apply_mass_payload"
+  json_assert_path job.id
+  report_apply_mass_job_id="$(json_get job.id)"
+  report_apply_mass_item_id="$(json_get job.items[0].id)"
+  request_json PATCH "/api/admin/automation/mass-jobs/$report_apply_mass_job_id" '{"approved":true,"status":"queued"}'
+  json_assert_eq job.status queued
+
+  report_apply_moment_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-report-apply-moment-{stamp}",
+    "text": "这是一条 run-report 回执反写 smoke 朋友圈草稿。",
+    "imageNotes": "无需配图",
+    "materials": [],
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/moment-drafts "$report_apply_moment_payload"
+  json_assert_path draft.id
+  report_apply_moment_id="$(json_get draft.id)"
+  request_json PATCH "/api/admin/automation/moment-drafts/$report_apply_moment_id" '{"approved":true,"status":"ready"}'
+  json_assert_eq draft.status ready
+
+  report_apply_items_json="$(python3 - "$report_apply_event_id" "$report_apply_mass_job_id" "$report_apply_mass_item_id" "$report_apply_moment_id" <<'PY'
+import json
+import sys
+
+event_id, job_id, item_id, moment_id = sys.argv[1:5]
+print(json.dumps([
+    {
+        "id": event_id,
+        "target": "reply",
+        "conversationName": "Smoke Report Apply Conversation",
+        "action": "delivered",
+        "ok": True,
+        "verification": {"verified": True, "matchedName": "Smoke Report Apply Conversation", "inputReady": True},
+    },
+    {
+        "target": "mass",
+        "jobId": job_id,
+        "itemId": item_id,
+        "recipientName": "Smoke Report Apply Contact",
+        "action": "sent",
+        "ok": True,
+        "verification": {"verified": True, "matchedName": "Smoke Report Apply Contact", "inputReady": True},
+    },
+    {
+        "target": "moment",
+        "draftId": moment_id,
+        "title": "Smoke Report Apply Moment",
+        "action": "prepared",
+        "ok": True,
+        "verification": {"verified": True, "inputReady": True},
+    },
+], ensure_ascii=False))
+PY
+)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" report-run \
+    --worker-id smoke-report-worker \
+    --target all \
+    --mode send \
+    --handled-replies 1 \
+    --handled-mass-tasks 1 \
+    --handled-moment-tasks 1 \
+    --items-json "$report_apply_items_json" \
+    --summary "smoke report delivery apply" > "$body_file"
+  json_assert_path report.id
+  json_assert_eq report.items[0].action delivered
+  json_assert_eq report.items[1].id "$report_apply_mass_job_id:$report_apply_mass_item_id"
+  json_assert_eq report.items[2].id "$report_apply_moment_id"
+
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 50 > "$body_file"
+  json_assert_no_reply_id "$report_apply_event_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 50 > "$body_file"
+  json_assert_no_task_id "$report_apply_mass_job_id:$report_apply_mass_item_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 50 > "$body_file"
+  json_assert_no_task_id "$report_apply_moment_id"
+
+  request_json GET "/api/admin/automation/bridge-events?limit=50"
+  python3 - "$body_file" "$report_apply_event_id" <<'PY'
+import json
+import sys
+
+file, event_id = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+events = payload.get("events", [])
+matches = [event for event in events if event.get("id") == event_id]
+if not matches:
+    raise SystemExit(f"report-apply reply event missing: {event_id}")
+if not matches[0].get("replyDeliveredAt"):
+    raise SystemExit("report-apply reply was not marked delivered")
+if matches[0].get("replyFailedAt"):
+    raise SystemExit("report-apply reply should not be failed")
+PY
+  request_json GET "/api/admin/automation/mass-jobs?limit=50"
+  python3 - "$body_file" "$report_apply_mass_job_id" "$report_apply_mass_item_id" <<'PY'
+import json
+import sys
+
+file, job_id, item_id = sys.argv[1:4]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+jobs = payload.get("jobs", [])
+matches = [job for job in jobs if job.get("id") == job_id]
+if not matches:
+    raise SystemExit(f"report-apply mass job missing: {job_id}")
+job = matches[0]
+items = [item for item in job.get("items", []) if item.get("id") == item_id]
+if not items:
+    raise SystemExit(f"report-apply mass item missing: {item_id}")
+if job.get("status") != "completed" or items[0].get("status") != "sent" or not items[0].get("sentAt"):
+    raise SystemExit("report-apply mass item was not marked sent/completed")
+PY
+  request_json GET "/api/admin/automation/moment-drafts?limit=50"
+  python3 - "$body_file" "$report_apply_moment_id" <<'PY'
+import json
+import sys
+
+file, draft_id = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+drafts = payload.get("drafts", [])
+matches = [draft for draft in drafts if draft.get("id") == draft_id]
+if not matches:
+    raise SystemExit(f"report-apply moment draft missing: {draft_id}")
+draft = matches[0]
+if draft.get("status") != "prepared" or not draft.get("lastPreparedAt"):
+    raise SystemExit("report-apply moment draft was not marked prepared")
+PY
+  request_json PATCH "/api/admin/automation/bridge-events/$report_apply_event_id" '{"status":"archived"}'
+  json_assert_eq event.status archived
+  request_json PATCH "/api/admin/automation/mass-jobs/$report_apply_mass_job_id" '{"status":"cancelled","approved":false}'
+  json_assert_eq job.status cancelled
+  request_json PATCH "/api/admin/automation/moment-drafts/$report_apply_moment_id" '{"status":"archived","approved":false}'
+  json_assert_eq draft.status archived
+
   say "Claim, release, fail and sent WeCom mass Bridge tasks"
   bridge_mass_title="smoke-bridge-mass-$stamp"
   bridge_mass_payload="$(python3 - "$bridge_mass_title" <<'PY'

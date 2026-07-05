@@ -1652,6 +1652,7 @@ export function recordWecomBridgeRunReport(actor: User, raw: any): WecomBridgeRu
     data.bridgeRunReports = data.bridgeRunReports.slice(-MAX_BRIDGE_RUN_REPORTS);
   }
   persist();
+  const applied = applyBridgeRunReportItems(actor, report, raw);
 
   const handled = report.handledReplies + report.handledMassTasks + report.handledMomentTasks;
   const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
@@ -1659,10 +1660,92 @@ export function recordWecomBridgeRunReport(actor: User, raw: any): WecomBridgeRu
     addAutomationAudit({
       action: 'bridge_run_reported',
       actor: actor.username,
-      message: `Bridge worker「${report.workerId}」${report.target}/${report.mode} 运行${report.status === 'failed' ? '失败' : '完成'}：处理 ${handled}，失败 ${failed}`,
+      message: `Bridge worker「${report.workerId}」${report.target}/${report.mode} 运行${report.status === 'failed' ? '失败' : '完成'}：处理 ${handled}，失败 ${failed}${applied.changed > 0 ? `，同步回执 ${applied.changed}` : ''}${applied.errors.length ? `，回执异常 ${applied.errors.length}` : ''}`,
     });
   }
   return cloneBridgeRunReport(report);
+}
+
+function applyBridgeRunReportItems(
+  actor: User,
+  report: WecomBridgeRunReport,
+  raw: any,
+): { changed: number; errors: string[] } {
+  if (!report.items.length || report.status === 'started' || String(report.mode || '').trim().toLowerCase() === 'dry-run') {
+    return { changed: 0, errors: [] };
+  }
+  const errors: string[] = [];
+  let changed = 0;
+  const basePayload = {
+    source: report.source,
+    workerId: report.workerId,
+    capabilities: raw?.capabilities ?? raw?.capability ?? raw?.workerCapabilities,
+  };
+
+  for (const item of report.items) {
+    const deliveryStatus = bridgeRunReportItemDeliveryStatus(report, item);
+    if (!deliveryStatus) continue;
+    try {
+      const payload = {
+        ...basePayload,
+        deliveryStatus,
+        error: bridgeRunReportItemError(item),
+      };
+      if (item.target === 'reply') {
+        patchWecomBridgeReplyDelivery(actor, item.id, payload);
+        changed += 1;
+      } else if (item.target === 'mass') {
+        patchWecomBridgeMassTaskDelivery(actor, item.id, payload);
+        changed += 1;
+      } else if (item.target === 'moment') {
+        patchWecomBridgeMomentTaskDelivery(actor, item.id, payload);
+        changed += 1;
+      }
+    } catch (e: any) {
+      errors.push(`${item.target}:${item.id}:${e?.message || e}`);
+    }
+  }
+  return { changed, errors };
+}
+
+function bridgeRunReportItemDeliveryStatus(
+  report: WecomBridgeRunReport,
+  item: WecomBridgeRunReportItem,
+): WecomBridgeReplyDeliveryStatus | WecomBridgeMassDeliveryStatus | WecomBridgeMomentDeliveryStatus | null {
+  if (!item.id || item.dryRun) return null;
+  const mode = String(report.mode || '').trim().toLowerCase();
+  const action = String(item.action || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!action || action === 'dry-run' || action === 'handled' || action === 'skipped') return null;
+  if (item.ok === false || action === 'failed' || action === 'failure' || action === 'error') return 'failed';
+  if (action === 'claimed' || action === 'claim') return 'claimed';
+  if (action === 'released' || action === 'release') return 'released';
+
+  if (item.target === 'reply') {
+    if (action === 'delivered' || action === 'sent' || action === 'send') return 'delivered';
+    return null;
+  }
+
+  if (item.target === 'mass') {
+    if (action === 'sent' || action === 'delivered' || action === 'send') return 'sent';
+    return null;
+  }
+
+  if (item.target === 'moment') {
+    if (action === 'published' || action === 'sent' || action === 'send') return 'published';
+    if (action === 'prepared' || action === 'prepare' || (action === 'success' && mode !== 'send')) return 'prepared';
+    return null;
+  }
+
+  return null;
+}
+
+function bridgeRunReportItemError(item: WecomBridgeRunReportItem): string | undefined {
+  if (item.error) return item.error;
+  if (item.ok === false && Number.isFinite(Number(item.exitCode))) {
+    return `Runner item failed: exit=${item.exitCode}${item.signal ? ` signal=${item.signal}` : ''}`;
+  }
+  if (item.ok === false) return 'Runner item failed';
+  return undefined;
 }
 
 export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEventIngestResult {
@@ -4042,9 +4125,12 @@ function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): 
 
 function normalizeBridgeRunReportItem(raw: any): WecomBridgeRunReportItem {
   const base = raw && typeof raw === 'object' ? raw : {};
-  const id =
-    str(base.id ?? base.taskId ?? base.eventId ?? base.draftId ?? base.externalId, 160).trim() ||
-    randomUUID();
+  const massTaskId =
+    base.jobId !== undefined && base.itemId !== undefined
+      ? `${String(base.jobId || '').trim()}:${String(base.itemId || '').trim()}`
+      : '';
+  const rawId = base.id ?? base.taskId ?? base.eventId ?? (massTaskId || undefined) ?? base.draftId ?? base.externalId;
+  const id = str(rawId, 160).trim() || randomUUID();
   const target = normalizeBridgeRunReportItemTarget(base.target ?? base.kind ?? base.type);
   const name = str(base.name ?? base.conversationName ?? base.recipientName ?? base.title ?? base.label, 240).trim();
   const action = str(base.action ?? base.status ?? base.deliveryStatus, 80).trim();
