@@ -193,7 +193,65 @@ function requireAdmin(req: FastifyRequest, reply: FastifyReply): User | null {
   return u;
 }
 
-function automationBridgeStatus() {
+function firstHeaderValue(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw || '').split(',')[0]?.trim() || '';
+}
+
+function requestPublicOrigin(req?: FastifyRequest): string {
+  const host = firstHeaderValue(req?.headers['x-forwarded-host'] as any) || firstHeaderValue(req?.headers.host);
+  if (!host) return '';
+  const proto = firstHeaderValue(req?.headers['x-forwarded-proto'] as any) || 'http';
+  return `${proto}://${host}`;
+}
+
+function shellSingle(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function automationBridgeRunnerGuide(req?: FastifyRequest) {
+  const panelUrl = requestPublicOrigin(req) || 'http://nasbot.cloud:36081';
+  const configPath = '~/.config/wechat-on-cloud/wecom-bridge.env';
+  const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
+  const defaultWorkerId = 'mac-bridge-01';
+  const envFile = [
+    '# WechatOnCloud WeCom Bridge runner config',
+    '# chmod 600; contains the Bridge token.',
+    `WOC_PANEL_URL=${shellSingle(panelUrl)}`,
+    `AUTOMATION_BRIDGE_TOKEN=${shellSingle(tokenPlaceholder)}`,
+    "WECOM_RUNNER_MODE='dry-run'",
+    "WECOM_RUNNER_TARGET='all'",
+    "WECOM_RUNNER_LIMIT='5'",
+    "WECOM_CLAIM_TTL_SECONDS='300'",
+    "WECOM_MOMENT_PASTE_MODE='clipboard-only'",
+    `WECOM_BRIDGE_WORKER_ID=${shellSingle(defaultWorkerId)}`,
+  ].join('\n');
+  return {
+    panelUrl,
+    configPath,
+    tokenEnvName: 'AUTOMATION_BRIDGE_TOKEN',
+    tokenPlaceholder,
+    defaultWorkerId,
+    runnerScript: 'scripts/wecom-bridge-runner.sh',
+    installScript: 'scripts/install-wecom-bridge-launchagent.sh',
+    modes: ['dry-run', 'prepare', 'send'],
+    targets: ['replies', 'mass', 'moments', 'all'],
+    envFile,
+    commands: {
+      writeEnv: `mkdir -p ~/.config/wechat-on-cloud\ncat > ${configPath} <<'EOF'\n${envFile}\nEOF\nchmod 600 ${configPath}`,
+      printConfig: 'scripts/wecom-bridge-runner.sh print-config',
+      dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
+      prepareAll: 'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
+      sendAll: 'WECOM_RUNNER_MODE=send WECOM_RUNNER_TARGET=all WECOM_ALLOW_SEND=1 scripts/wecom-bridge-runner.sh run-once',
+      dryRunLaunchAgent:
+        "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh --dry-run",
+      installLaunchAgent:
+        "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh",
+    },
+  };
+}
+
+function automationBridgeStatus(req?: FastifyRequest) {
   const configured = AUTOMATION_BRIDGE_TOKEN.length > 0;
   const tokenLengthOk = AUTOMATION_BRIDGE_TOKEN.length >= AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH;
   return {
@@ -211,6 +269,7 @@ function automationBridgeStatus() {
     heartbeatEndpoint: AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT,
     workers: listWecomBridgeWorkers(20),
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
+    runnerGuide: automationBridgeRunnerGuide(req),
   };
 }
 
@@ -322,7 +381,7 @@ app.put('/api/admin/automation/config', async (req, reply) => {
 
 app.get('/api/admin/automation/bridge', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
-  return { bridge: automationBridgeStatus() };
+  return { bridge: automationBridgeStatus(req) };
 });
 
 app.get('/api/admin/automation/bridge-events', async (req, reply) => {

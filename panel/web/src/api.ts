@@ -146,6 +146,28 @@ export interface WecomBridgeWorkerStatus {
   offlineAfterSeconds: number;
 }
 
+export interface AutomationBridgeRunnerGuide {
+  panelUrl: string;
+  configPath: string;
+  tokenEnvName: string;
+  tokenPlaceholder: string;
+  defaultWorkerId: string;
+  runnerScript: string;
+  installScript: string;
+  modes: string[];
+  targets: string[];
+  envFile: string;
+  commands: {
+    writeEnv: string;
+    printConfig: string;
+    dryRunAll: string;
+    prepareAll: string;
+    sendAll: string;
+    dryRunLaunchAgent: string;
+    installLaunchAgent: string;
+  };
+}
+
 export interface AutomationBridgeStatus {
   enabled: boolean;
   configured: boolean;
@@ -161,6 +183,7 @@ export interface AutomationBridgeStatus {
   heartbeatEndpoint: string;
   workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];
+  runnerGuide?: AutomationBridgeRunnerGuide;
 }
 
 export interface WecomBridgeEvent {

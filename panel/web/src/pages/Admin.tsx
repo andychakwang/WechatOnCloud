@@ -262,6 +262,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const cfg = config ?? defaultAutomationConfig();
   const knowledgeItems = cfg.knowledgeItems ?? [];
   const approvedKnowledgeCount = knowledgeItems.filter((item) => item.enabled && item.approved).length;
+  const bridgeGuide = bridge?.runnerGuide;
+  const copyBridgeText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(`${label}已复制`, 'ok');
+    } catch {
+      toast('复制失败，请手动复制代码块', 'error');
+    }
+  };
   const setSetting = (patch: Partial<AutomationConfig['settings']>) =>
     setConfig((current) => {
       const base = current ?? defaultAutomationConfig();
@@ -881,6 +890,62 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
                   <span className="chip chip-static">Bearer / X-Automation-Token</span>
                 </div>
+                {bridgeGuide && (
+                  <div className="bridge-runner-guide">
+                    <div className="bridge-runner-head">
+                      <div>
+                        <b>Mac Runner 接入</b>
+                        <div className="muted small">
+                          面板 <code>{bridgeGuide.panelUrl}</code> · 配置 <code>{bridgeGuide.configPath}</code>
+                        </div>
+                      </div>
+                      <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.writeEnv, '配置模板')}>
+                        复制配置
+                      </button>
+                    </div>
+                    <pre className="auto-code-block">
+                      <code>{bridgeGuide.envFile}</code>
+                    </pre>
+                    <div className="bridge-command-list">
+                      <div className="bridge-command-row">
+                        <div>
+                          <b>全队列 dry-run</b>
+                          <code>{bridgeGuide.commands.dryRunAll}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.dryRunAll, 'dry-run 命令')}>
+                          复制
+                        </button>
+                      </div>
+                      <div className="bridge-command-row">
+                        <div>
+                          <b>领取并准备</b>
+                          <code>{bridgeGuide.commands.prepareAll}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.prepareAll, 'prepare 命令')}>
+                          复制
+                        </button>
+                      </div>
+                      <div className="bridge-command-row">
+                        <div>
+                          <b>安装定时任务</b>
+                          <code>{bridgeGuide.commands.dryRunLaunchAgent}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.dryRunLaunchAgent, 'LaunchAgent 预览命令')}>
+                          复制
+                        </button>
+                      </div>
+                      <div className="bridge-command-row">
+                        <div>
+                          <b>受控发送</b>
+                          <code>{bridgeGuide.commands.sendAll}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.sendAll, 'send 命令')}>
+                          复制
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {bridge.workers.length > 0 && (
                   <div className="auto-list compact">
                     {bridge.workers.slice(0, 4).map((worker) => (

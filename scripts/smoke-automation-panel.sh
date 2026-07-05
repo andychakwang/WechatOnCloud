@@ -237,6 +237,19 @@ request_json GET /api/version
 json_assert_path current
 request_json GET /api/admin/automation/config
 json_assert_path config.settings
+request_json GET /api/admin/automation/bridge
+json_assert_path bridge.runnerGuide.envFile
+json_assert_path bridge.runnerGuide.commands.writeEnv
+json_assert_path bridge.runnerGuide.commands.dryRunAll
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && grep -qF "$AUTOMATION_BRIDGE_TOKEN" "$body_file"; then
+  echo "ERROR: Bridge runner guide leaked the real AUTOMATION_BRIDGE_TOKEN" >&2
+  exit 1
+fi
 
 say "Import and remove WeCom knowledge item"
 knowledge_title="smoke-knowledge-$stamp"

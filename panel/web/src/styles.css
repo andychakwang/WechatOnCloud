@@ -1180,6 +1180,53 @@ button {
 .auto-bridge code {
   word-break: break-all;
 }
+.bridge-runner-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.bridge-runner-head,
+.bridge-command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+.bridge-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bridge-command-row {
+  padding: 8px 0;
+  border-top: 1px solid rgba(var(--shadow) / 0.08);
+}
+.bridge-command-row b {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 12.5px;
+}
+.bridge-command-row code {
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.auto-code-block {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 10px;
+  background: rgba(var(--shadow) / 0.08);
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.auto-code-block code {
+  font-size: 12px;
+  line-height: 1.5;
+}
 .auto-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
