@@ -122,6 +122,31 @@ export interface WecomBridgeWorkerStatus extends WecomBridgeWorker {
   offlineAfterSeconds: number;
 }
 
+export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'unknown';
+export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
+
+export interface WecomBridgeRunReport {
+  id: string;
+  source: string;
+  workerId: string;
+  mode: string;
+  target: WecomBridgeRunTarget;
+  status: WecomBridgeRunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  handledReplies: number;
+  handledMassTasks: number;
+  handledMomentTasks: number;
+  failedReplies: number;
+  failedMassTasks: number;
+  failedMomentTasks: number;
+  error?: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WecomBridgeEventIngestResult {
   events: WecomBridgeEvent[];
   imported: number;
@@ -185,6 +210,13 @@ export interface AutomationOverview {
     pendingReplies: number;
     pendingMassTasks: number;
     pendingMomentTasks: number;
+    runs: {
+      total: number;
+      recentFailures: number;
+      lastRunAt?: string;
+      lastRunStatus?: WecomBridgeRunStatus;
+      lastRunTarget?: WecomBridgeRunTarget;
+    };
   };
   mass: {
     jobsTotal: number;
@@ -350,6 +382,7 @@ interface AutomationData extends AutomationConfig {
   audienceContacts: AutomationAudienceContact[];
   bridgeEvents: WecomBridgeEvent[];
   bridgeWorkers: WecomBridgeWorker[];
+  bridgeRunReports: WecomBridgeRunReport[];
   massSendJobs: MassSendJob[];
   momentDrafts: MomentDraft[];
   auditEvents: AutomationAuditEvent[];
@@ -361,6 +394,7 @@ const MAX_KNOWLEDGE_ITEMS = 500;
 const MAX_AUDIENCE_CONTACTS = 2000;
 const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
+const MAX_BRIDGE_RUN_REPORTS = 300;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
 
 const DEFAULT_SETTINGS: AutomationSettings = {
@@ -383,6 +417,7 @@ const DEFAULT_DATA: AutomationData = {
   audienceContacts: [],
   bridgeEvents: [],
   bridgeWorkers: [],
+  bridgeRunReports: [],
   massSendJobs: [],
   momentDrafts: [],
   auditEvents: [],
@@ -416,6 +451,9 @@ export function getAutomationOverview(): AutomationOverview {
   const activeBridgeEvents = data.bridgeEvents.filter((event) => event.status !== 'archived');
   const massItems = data.massSendJobs.flatMap((job) => job.items);
   const lastAudit = data.auditEvents[data.auditEvents.length - 1];
+  const lastRun = data.bridgeRunReports
+    .slice()
+    .sort((a, b) => Date.parse(b.finishedAt || b.updatedAt) - Date.parse(a.finishedAt || a.updatedAt))[0];
   const pendingReplies = activeBridgeEvents.filter(
     (event) =>
       event.replyApproved &&
@@ -490,6 +528,13 @@ export function getAutomationOverview(): AutomationOverview {
       pendingReplies,
       pendingMassTasks,
       pendingMomentTasks,
+      runs: {
+        total: data.bridgeRunReports.length,
+        recentFailures: data.bridgeRunReports.slice(-50).filter((report) => report.status === 'failed').length,
+        lastRunAt: lastRun?.finishedAt || lastRun?.updatedAt,
+        lastRunStatus: lastRun?.status,
+        lastRunTarget: lastRun?.target,
+      },
     },
     mass: {
       jobsTotal: data.massSendJobs.length,
@@ -537,6 +582,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       audienceContacts: data.audienceContacts,
       bridgeEvents: data.bridgeEvents,
       bridgeWorkers: data.bridgeWorkers,
+      bridgeRunReports: data.bridgeRunReports,
       massSendJobs: data.massSendJobs,
       momentDrafts: data.momentDrafts,
       auditEvents: data.auditEvents,
@@ -566,6 +612,16 @@ export function listWecomBridgeWorkers(limit = 50, offlineAfterSeconds = 180): W
     .sort((a, b) => Date.parse(b.lastSeenAt || b.updatedAt) - Date.parse(a.lastSeenAt || a.updatedAt))
     .slice(0, n)
     .map((worker) => publicBridgeWorker(worker, now, offlineAfter));
+}
+
+export function listWecomBridgeRunReports(limit = 50, workerId = ''): WecomBridgeRunReport[] {
+  const n = clampInt(limit, 1, MAX_BRIDGE_RUN_REPORTS, 50);
+  const wantedWorkerId = str(workerId, 120).trim();
+  return data.bridgeRunReports
+    .filter((report) => !wantedWorkerId || report.workerId === wantedWorkerId)
+    .slice(-n)
+    .reverse()
+    .map(cloneBridgeRunReport);
 }
 
 export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWorkerStatus {
@@ -614,6 +670,27 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
   }
   persist();
   return publicBridgeWorker(existingIndex >= 0 ? data.bridgeWorkers[existingIndex] : incoming);
+}
+
+export function recordWecomBridgeRunReport(actor: User, raw: any): WecomBridgeRunReport {
+  const now = new Date().toISOString();
+  const report = normalizeBridgeRunReport(raw, false, now);
+  data.bridgeRunReports.push(report);
+  if (data.bridgeRunReports.length > MAX_BRIDGE_RUN_REPORTS) {
+    data.bridgeRunReports = data.bridgeRunReports.slice(-MAX_BRIDGE_RUN_REPORTS);
+  }
+  persist();
+
+  const handled = report.handledReplies + report.handledMassTasks + report.handledMomentTasks;
+  const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
+  if (report.status === 'failed' || handled > 0 || failed > 0) {
+    addAutomationAudit({
+      action: 'bridge_run_reported',
+      actor: actor.username,
+      message: `Bridge worker「${report.workerId}」${report.target}/${report.mode} 运行${report.status === 'failed' ? '失败' : '完成'}：处理 ${handled}，失败 ${failed}`,
+    });
+  }
+  return cloneBridgeRunReport(report);
 }
 
 export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEventIngestResult {
@@ -2047,6 +2124,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const audienceRaw = Array.isArray(raw?.audienceContacts) ? raw.audienceContacts : [];
   const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
   const bridgeWorkersRaw = Array.isArray(raw?.bridgeWorkers) ? raw.bridgeWorkers : [];
+  const bridgeRunReportsRaw = Array.isArray(raw?.bridgeRunReports) ? raw.bridgeRunReports : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
   const momentDraftsRaw = Array.isArray(raw?.momentDrafts) ? raw.momentDrafts : [];
   return {
@@ -2058,6 +2136,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     audienceContacts: audienceRaw.slice(-MAX_AUDIENCE_CONTACTS).map((contact: any) => normalizeAudienceContact(contact, preserveIds, now)),
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
+    bridgeRunReports: bridgeRunReportsRaw.slice(-MAX_BRIDGE_RUN_REPORTS).map((report: any) => normalizeBridgeRunReport(report, preserveIds, now)),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
     auditEvents: Array.isArray(raw?.auditEvents) ? raw.auditEvents.slice(-MAX_AUDIT_EVENTS).map(normalizeAuditEvent).filter(Boolean) : [],
@@ -2204,6 +2283,35 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     lastSeenAt: normalizeIsoDate(raw?.lastSeenAt, updatedAt),
     createdAt,
     updatedAt,
+  };
+}
+
+function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): WecomBridgeRunReport {
+  const source = str(raw?.source || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge';
+  const workerId =
+    str(raw?.workerId ?? raw?.worker ?? raw?.clientId ?? raw?.hostname ?? raw?.host, 120).trim() || `${source}-worker`;
+  const startedAt = normalizeIsoDate(raw?.startedAt ?? raw?.startTime ?? raw?.createdAt, now);
+  const finishedAt = raw?.finishedAt || raw?.endedAt || raw?.endTime ? normalizeIsoDate(raw?.finishedAt ?? raw?.endedAt ?? raw?.endTime, now) : undefined;
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    source,
+    workerId,
+    mode: str(raw?.mode ?? raw?.runnerMode ?? raw?.statusMode ?? 'unknown', 60).trim() || 'unknown',
+    target: normalizeBridgeRunTarget(raw?.target ?? raw?.runnerTarget),
+    status: normalizeBridgeRunStatus(raw?.status ?? raw?.runStatus),
+    startedAt,
+    finishedAt,
+    durationMs: Number.isFinite(Number(raw?.durationMs)) ? Math.max(0, Math.trunc(Number(raw.durationMs))) : undefined,
+    handledReplies: clampInt(raw?.handledReplies ?? raw?.repliesHandled, 0, 100000, 0),
+    handledMassTasks: clampInt(raw?.handledMassTasks ?? raw?.massHandled ?? raw?.handledMass, 0, 100000, 0),
+    handledMomentTasks: clampInt(raw?.handledMomentTasks ?? raw?.momentsHandled ?? raw?.handledMoments, 0, 100000, 0),
+    failedReplies: clampInt(raw?.failedReplies ?? raw?.repliesFailed, 0, 100000, 0),
+    failedMassTasks: clampInt(raw?.failedMassTasks ?? raw?.massFailed, 0, 100000, 0),
+    failedMomentTasks: clampInt(raw?.failedMomentTasks ?? raw?.momentsFailed, 0, 100000, 0),
+    error: str(raw?.error ?? raw?.message ?? raw?.reason, 1000).trim() || undefined,
+    summary: str(raw?.summary ?? raw?.note, 1000).trim() || undefined,
+    createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
   };
 }
 
@@ -2622,6 +2730,10 @@ function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
   return { ...event };
 }
 
+function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunReport {
+  return { ...report };
+}
+
 function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offlineAfterSeconds = 180): WecomBridgeWorkerStatus {
   const lastSeenMs = Date.parse(worker.lastSeenAt || worker.updatedAt);
   const staleSeconds = Number.isFinite(lastSeenMs) ? Math.max(0, Math.round((now - lastSeenMs) / 1000)) : offlineAfterSeconds + 1;
@@ -2676,6 +2788,22 @@ function normalizeAudienceContactType(value: unknown, name = ''): AutomationAudi
 
 function normalizeBridgeEventStatus(value: unknown): WecomBridgeEventStatus | null {
   return value === 'new' || value === 'planned' || value === 'archived' ? value : null;
+}
+
+function normalizeBridgeRunTarget(value: unknown): WecomBridgeRunTarget {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'replies' || raw === 'reply') return 'replies';
+  if (raw === 'mass' || raw === 'mass-tasks' || raw === 'mass_tasks') return 'mass';
+  if (raw === 'moments' || raw === 'moment') return 'moments';
+  if (raw === 'all') return 'all';
+  return 'unknown';
+}
+
+function normalizeBridgeRunStatus(value: unknown): WecomBridgeRunStatus {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'started' || raw === 'running') return 'started';
+  if (raw === 'failed' || raw === 'error') return 'failed';
+  return 'completed';
 }
 
 function normalizeBridgeReplyDeliveryStatus(value: unknown): WecomBridgeReplyDeliveryStatus | null {

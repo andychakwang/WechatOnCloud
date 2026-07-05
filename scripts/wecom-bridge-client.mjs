@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r21-all-runner';
+const CLIENT_VERSION = 'automation-lab-r25-run-report';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -18,31 +18,33 @@ Commands:
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
+  report-run [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--status completed|failed]
   pull-replies [--limit 50]
   claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
   release-reply <eventId> [--worker-id name] [--reason text]
   mark-delivered <eventId>
   mark-failed <eventId> [--error text]
-  run-approved --handler "command" [--limit 10] [--claim] [--mark-delivered] [--report-failure]
+  run-approved --handler "command" [--limit 10] [--claim] [--mark-delivered] [--report-failure] [--report-run]
   pull-mass-tasks [--limit 50]
   claim-mass-task <taskId> [--worker-id name] [--claim-ttl-seconds 300]
   release-mass-task <taskId> [--worker-id name] [--reason text]
   mark-mass-sent <taskId> [--worker-id name]
   mark-mass-failed <taskId> [--worker-id name] [--error text]
-  run-mass --handler "command" [--limit 10] [--claim] [--mark-sent] [--report-failure]
+  run-mass --handler "command" [--limit 10] [--claim] [--mark-sent] [--report-failure] [--report-run]
   pull-moment-tasks [--limit 50]
   claim-moment-task <taskId> [--worker-id name] [--claim-ttl-seconds 300]
   release-moment-task <taskId> [--worker-id name] [--reason text]
   mark-moment-prepared <taskId> [--worker-id name]
   mark-moment-published <taskId> [--worker-id name]
   mark-moment-failed <taskId> [--worker-id name] [--error text]
-  run-moments --handler "command" [--limit 10] [--claim] [--mark-prepared] [--report-failure]
+  run-moments --handler "command" [--limit 10] [--claim] [--mark-prepared] [--report-failure] [--report-run]
 
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
   node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
+  node scripts/wecom-bridge-client.mjs report-run --target all --mode dry-run --handled-replies 2
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
   node scripts/wecom-bridge-client.mjs release-reply <eventId> --reason "window not ready"
   node scripts/wecom-bridge-client.mjs run-approved --handler "./send-to-wecom.sh" --claim --claim-ttl-seconds 300 --mark-delivered --report-failure
@@ -193,6 +195,32 @@ function normalizeEventPayload(input, options) {
   return { source, events: [input] };
 }
 
+function shouldReportRun(options) {
+  return boolOpt(options, 'report-run') || ['1', 'true', 'yes'].includes(String(process.env.WECOM_REPORT_RUN || '').toLowerCase());
+}
+
+function runnerMode(options, fallback = 'manual') {
+  return String(options.mode || process.env.WECOM_RUNNER_MODE || process.env.WECOM_HANDLER_MODE || fallback);
+}
+
+function runStatusFromHandled(handled) {
+  return handled.some((item) => item.ok === false) ? 'failed' : 'completed';
+}
+
+function runSummary(target, handled, total) {
+  const failed = handled.filter((item) => item.ok === false).length;
+  return `${target} total=${total} handled=${handled.length} failed=${failed}`;
+}
+
+async function postRunReport(options, payload) {
+  return await requestJson(options, 'POST', '/api/automation/bridge/wecom/run-report', {
+    source: String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE),
+    workerId: workerId(options),
+    mode: runnerMode(options),
+    ...payload,
+  });
+}
+
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -288,7 +316,7 @@ async function main() {
 
   if (command === 'heartbeat') {
     const source = String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE);
-    const mode = String(options.mode || process.env.WECOM_RUNNER_MODE || process.env.WECOM_HANDLER_MODE || 'manual');
+    const mode = runnerMode(options, 'manual');
     printJson(
       await requestJson(options, 'POST', '/api/automation/bridge/wecom/heartbeat', {
         source,
@@ -300,6 +328,28 @@ async function main() {
         note: String(options.note || ''),
       }),
     );
+    return;
+  }
+
+  if (command === 'report-run') {
+    const startedAt = String(options['started-at'] || options.startedAt || new Date().toISOString());
+    const finishedAt = String(options['finished-at'] || options.finishedAt || new Date().toISOString());
+    const report = await postRunReport(options, {
+      target: String(options.target || process.env.WECOM_RUNNER_TARGET || 'unknown'),
+      status: String(options.status || 'completed'),
+      startedAt,
+      finishedAt,
+      durationMs: intOpt(options['duration-ms'] || options.durationMs, 0, 0, 24 * 60 * 60 * 1000),
+      handledReplies: intOpt(options['handled-replies'], 0, 0, 100000),
+      handledMassTasks: intOpt(options['handled-mass-tasks'], 0, 0, 100000),
+      handledMomentTasks: intOpt(options['handled-moment-tasks'], 0, 0, 100000),
+      failedReplies: intOpt(options['failed-replies'], 0, 0, 100000),
+      failedMassTasks: intOpt(options['failed-mass-tasks'], 0, 0, 100000),
+      failedMomentTasks: intOpt(options['failed-moment-tasks'], 0, 0, 100000),
+      error: String(options.error || ''),
+      summary: String(options.summary || ''),
+    });
+    printJson(report);
     return;
   }
 
@@ -494,6 +544,8 @@ async function main() {
     const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
     const dryRun = boolOpt(options, 'dry-run');
     if (!handler && !dryRun) throw new BridgeError('run-approved requires --handler or --dry-run.');
+    const startedMs = Date.now();
+    const startedAt = new Date(startedMs).toISOString();
     const { replies = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/replies?limit=${limit}`);
     const handled = [];
     for (const reply of replies) {
@@ -528,7 +580,21 @@ async function main() {
       }
       handled.push(item);
     }
-    printJson({ handled, total: replies.length, claimed: claim, markedDelivered: markDelivered, reportedFailure: reportFailure });
+    const output = { handled, total: replies.length, claimed: claim, markedDelivered: markDelivered, reportedFailure: reportFailure };
+    if (shouldReportRun(options)) {
+      output.runReport = await postRunReport(options, {
+        target: 'replies',
+        mode: dryRun ? 'dry-run' : runnerMode(options, markDelivered ? 'send' : claim ? 'prepare' : 'manual'),
+        status: runStatusFromHandled(handled),
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedMs,
+        handledReplies: handled.length,
+        failedReplies: handled.filter((item) => item.ok === false).length,
+        summary: runSummary('replies', handled, replies.length),
+      });
+    }
+    printJson(output);
     return;
   }
 
@@ -540,6 +606,8 @@ async function main() {
     const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
     const dryRun = boolOpt(options, 'dry-run');
     if (!handler && !dryRun) throw new BridgeError('run-mass requires --handler or --dry-run.');
+    const startedMs = Date.now();
+    const startedAt = new Date(startedMs).toISOString();
     const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`);
     const handled = [];
     for (const task of tasks) {
@@ -574,7 +642,21 @@ async function main() {
       }
       handled.push(item);
     }
-    printJson({ handled, total: tasks.length, claimed: claim, markedSent: markSent, reportedFailure: reportFailure });
+    const output = { handled, total: tasks.length, claimed: claim, markedSent: markSent, reportedFailure: reportFailure };
+    if (shouldReportRun(options)) {
+      output.runReport = await postRunReport(options, {
+        target: 'mass',
+        mode: dryRun ? 'dry-run' : runnerMode(options, markSent ? 'send' : claim ? 'prepare' : 'manual'),
+        status: runStatusFromHandled(handled),
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedMs,
+        handledMassTasks: handled.length,
+        failedMassTasks: handled.filter((item) => item.ok === false).length,
+        summary: runSummary('mass', handled, tasks.length),
+      });
+    }
+    printJson(output);
     return;
   }
 
@@ -588,6 +670,8 @@ async function main() {
     const dryRun = boolOpt(options, 'dry-run');
     if (!handler && !dryRun) throw new BridgeError('run-moments requires --handler or --dry-run.');
     if (markPrepared && markPublished) throw new BridgeError('run-moments cannot use --mark-prepared and --mark-published together.');
+    const startedMs = Date.now();
+    const startedAt = new Date(startedMs).toISOString();
     const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`);
     const handled = [];
     for (const task of tasks) {
@@ -628,14 +712,28 @@ async function main() {
       }
       handled.push(item);
     }
-    printJson({
+    const output = {
       handled,
       total: tasks.length,
       claimed: claim,
       markedPrepared: markPrepared,
       markedPublished: markPublished,
       reportedFailure: reportFailure,
-    });
+    };
+    if (shouldReportRun(options)) {
+      output.runReport = await postRunReport(options, {
+        target: 'moments',
+        mode: dryRun ? 'dry-run' : runnerMode(options, markPublished ? 'send' : markPrepared || claim ? 'prepare' : 'manual'),
+        status: runStatusFromHandled(handled),
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedMs,
+        handledMomentTasks: handled.length,
+        failedMomentTasks: handled.filter((item) => item.ok === false).length,
+        summary: runSummary('moments', handled, tasks.length),
+      });
+    }
+    printJson(output);
     return;
   }
 

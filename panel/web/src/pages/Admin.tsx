@@ -22,6 +22,7 @@ import {
   type AppType,
   type VersionInfo,
   type WecomBridgeEvent,
+  type WecomBridgeRunReport,
 } from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
 import { useUI, PasswordInput } from '../ui';
@@ -158,6 +159,14 @@ const AUDIENCE_TYPE_LABEL: Record<AutomationAudienceContactType, string> = {
   unknown: '未分类',
 };
 
+const BRIDGE_RUN_TARGET_LABEL: Record<string, string> = {
+  replies: 'AI 回复',
+  mass: '群发',
+  moments: '朋友圈',
+  all: '全队列',
+  unknown: '未知',
+};
+
 const AUTOMATION_RISK_LABEL: Record<string, string> = {
   automation_off: '总开关关闭',
   bridge_workers_offline: 'Mac 离线',
@@ -208,6 +217,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [overview, setOverview] = useState<AutomationOverview | null>(null);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
+  const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
@@ -254,7 +264,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { overview }, { contacts }, { jobs }, { drafts }, { events }, { events: bridgeEvents }] = await Promise.all([
+      const [{ config }, { overview }, { contacts }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
         api.listAutomationAudience(200),
@@ -262,6 +272,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.listMomentDrafts(),
         api.automationAudit(30),
         api.listWecomBridgeEvents(20),
+        api.listWecomBridgeRunReports(20),
       ]);
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
@@ -271,6 +282,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setDrafts(drafts);
       setAudit(events);
       setBridgeEvents(bridgeEvents.filter((event) => event.status !== 'archived'));
+      setBridgeRuns(reports);
       setBridgeReplyDrafts(
         Object.fromEntries(bridgeEvents.filter((event) => event.status !== 'archived').map((event) => [event.id, event.replyDraft || ''])),
       );
@@ -1048,6 +1060,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <div className="muted small">
                   心跳 <code>{location.origin + bridge.heartbeatEndpoint}</code>
                 </div>
+                <div className="muted small">
+                  运行报告 <code>{location.origin + bridge.runReportEndpoint}</code>
+                </div>
                 <div className="chip-row">
                   <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
                   <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
@@ -1126,6 +1141,32 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>
                       </div>
                     ))}
+                  </div>
+                )}
+                {bridgeRuns.length > 0 && (
+                  <div className="auto-list compact">
+                    {bridgeRuns.slice(0, 4).map((report) => {
+                      const handled = report.handledReplies + report.handledMassTasks + report.handledMomentTasks;
+                      const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
+                      const reportAt = Date.parse(report.finishedAt || report.updatedAt);
+                      return (
+                        <div className="auto-list-item" key={report.id}>
+                          <div>
+                            <b>
+                              {BRIDGE_RUN_TARGET_LABEL[report.target] || report.target} · {report.mode}
+                            </b>
+                            <div className="muted small">
+                              {report.workerId} · {Number.isFinite(reportAt) ? fmtDate(reportAt) : '时间未知'} · 处理 {handled} · 失败 {failed}
+                              {report.durationMs !== undefined ? ` · ${Math.round(report.durationMs / 1000)}s` : ''}
+                            </div>
+                            {(report.summary || report.error) && <div className="muted small auto-snippet">{report.summary || report.error}</div>}
+                          </div>
+                          <span className={'tag ' + (report.status === 'failed' ? 'tag-off' : report.status === 'started' ? '' : 'tag-on')}>
+                            {report.status === 'started' ? '运行中' : AUTO_STATUS_LABEL[report.status] || report.status}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

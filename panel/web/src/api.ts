@@ -171,6 +171,31 @@ export interface WecomBridgeWorkerStatus {
   offlineAfterSeconds: number;
 }
 
+export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'unknown';
+export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
+
+export interface WecomBridgeRunReport {
+  id: string;
+  source: string;
+  workerId: string;
+  mode: string;
+  target: WecomBridgeRunTarget;
+  status: WecomBridgeRunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  handledReplies: number;
+  handledMassTasks: number;
+  handledMomentTasks: number;
+  failedReplies: number;
+  failedMassTasks: number;
+  failedMomentTasks: number;
+  error?: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AutomationBridgeRunnerGuide {
   panelUrl: string;
   configPath: string;
@@ -207,6 +232,7 @@ export interface AutomationBridgeStatus {
   massTaskEndpoint: string;
   momentTaskEndpoint: string;
   heartbeatEndpoint: string;
+  runReportEndpoint: string;
   workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];
   runnerGuide?: AutomationBridgeRunnerGuide;
@@ -291,6 +317,13 @@ export interface AutomationOverview {
     pendingReplies: number;
     pendingMassTasks: number;
     pendingMomentTasks: number;
+    runs: {
+      total: number;
+      recentFailures: number;
+      lastRunAt?: string;
+      lastRunStatus?: WecomBridgeRunStatus;
+      lastRunTarget?: WecomBridgeRunTarget;
+    };
   };
   mass: {
     jobsTotal: number;
@@ -467,6 +500,10 @@ export const api = {
   listWecomBridgeEvents: (limit = 100, status?: WecomBridgeEvent['status']) =>
     req<{ events: WecomBridgeEvent[] }>(
       `/api/admin/automation/bridge-events?limit=${encodeURIComponent(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`,
+    ),
+  listWecomBridgeRunReports: (limit = 50, workerId = '') =>
+    req<{ reports: WecomBridgeRunReport[] }>(
+      `/api/admin/automation/bridge-runs?limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,
     ),
   patchWecomBridgeEvent: (
     eventId: string,

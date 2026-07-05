@@ -249,6 +249,7 @@ json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.commands.writeEnv
 json_assert_path bridge.runnerGuide.commands.dryRunAll
 json_assert_path bridge.audienceEndpoint
+json_assert_path bridge.runReportEndpoint
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -379,6 +380,19 @@ PY
   json_assert_path worker.lastSeenAt
   json_assert_path pendingReplies
 
+  say "Report WeCom Bridge runner result"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" report-run \
+    --worker-id smoke-worker \
+    --target all \
+    --mode dry-run \
+    --handled-replies 1 \
+    --handled-mass-tasks 1 \
+    --handled-moment-tasks 1 \
+    --summary "smoke run report" > "$body_file"
+  json_assert_path report.id
+  request_json GET /api/admin/automation/bridge-runs?limit=10
+  json_assert_path reports[0].id
+
   say "Push WeCom inbound message through Bridge"
   bridge_event_payload="$(python3 - "$stamp" <<'PY'
 import json
@@ -406,6 +420,7 @@ PY
   json_assert_path event.replyApproved
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   json_assert_path handled[0].dryRun
+  json_assert_path runReport.report.id
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_path replies[0].id
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-reply "$bridge_event_id" --worker-id smoke-worker > "$body_file"
@@ -692,6 +707,9 @@ PY
   json_assert_path replies.handled[0].dryRun
   json_assert_path mass.handled[0].dryRun
   json_assert_path moments.handled[0].dryRun
+  json_assert_path replies.runReport.report.id
+  json_assert_path mass.runReport.report.id
+  json_assert_path moments.runReport.report.id
 
   request_json PATCH "/api/admin/automation/bridge-events/$all_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived

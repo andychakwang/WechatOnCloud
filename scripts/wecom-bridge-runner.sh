@@ -113,9 +113,9 @@ run_all() {
 
   case "$MODE" in
     dry-run)
-      node "$CLIENT" run-approved --limit "$LIMIT" --dry-run > "$replies_file"
-      node "$CLIENT" run-mass --limit "$LIMIT" --dry-run > "$mass_file"
-      node "$CLIENT" run-moments --limit "$LIMIT" --dry-run > "$moments_file"
+      node "$CLIENT" run-approved --limit "$LIMIT" --dry-run --report-run > "$replies_file"
+      node "$CLIENT" run-mass --limit "$LIMIT" --dry-run --report-run > "$mass_file"
+      node "$CLIENT" run-moments --limit "$LIMIT" --dry-run --report-run > "$moments_file"
       ;;
     prepare)
       node "$CLIENT" run-approved \
@@ -123,12 +123,14 @@ run_all() {
         --handler "$HANDLER" \
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
+        --report-run \
         --report-failure > "$replies_file"
       node "$CLIENT" run-mass \
         --limit "$LIMIT" \
         --handler "$MASS_HANDLER" \
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
+        --report-run \
         --report-failure > "$mass_file"
       node "$CLIENT" run-moments \
         --limit "$LIMIT" \
@@ -136,6 +138,7 @@ run_all() {
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
         --mark-prepared \
+        --report-run \
         --report-failure > "$moments_file"
       ;;
     send)
@@ -145,6 +148,7 @@ run_all() {
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
         --mark-delivered \
+        --report-run \
         --report-failure > "$replies_file"
       node "$CLIENT" run-mass \
         --limit "$LIMIT" \
@@ -152,6 +156,7 @@ run_all() {
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
         --mark-sent \
+        --report-run \
         --report-failure > "$mass_file"
       printf '{"handled":[],"total":0,"skipped":true,"reason":"moments target requires manual publish confirmation"}\n' > "$moments_file"
       ;;
@@ -185,12 +190,12 @@ case "$MODE" in
       exit 0
     fi
     if [[ "$TARGET" == "mass" ]]; then
-      exec node "$CLIENT" run-mass --limit "$LIMIT" --dry-run
+      exec node "$CLIENT" run-mass --limit "$LIMIT" --dry-run --report-run
     fi
     if [[ "$TARGET" == "moments" ]]; then
-      exec node "$CLIENT" run-moments --limit "$LIMIT" --dry-run
+      exec node "$CLIENT" run-moments --limit "$LIMIT" --dry-run --report-run
     fi
-    exec node "$CLIENT" run-approved --limit "$LIMIT" --dry-run
+    exec node "$CLIENT" run-approved --limit "$LIMIT" --dry-run --report-run
     ;;
   prepare)
     export WECOM_HANDLER_MODE="${WECOM_HANDLER_MODE:-prepare}"
@@ -204,6 +209,7 @@ case "$MODE" in
         --handler "$MASS_HANDLER" \
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
+        --report-run \
         --report-failure
     fi
     if [[ "$TARGET" == "moments" ]]; then
@@ -213,6 +219,7 @@ case "$MODE" in
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
         --mark-prepared \
+        --report-run \
         --report-failure
     fi
     exec node "$CLIENT" run-approved \
@@ -220,6 +227,7 @@ case "$MODE" in
       --handler "$HANDLER" \
       --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
       --claim \
+      --report-run \
       --report-failure
     ;;
   send)
@@ -239,6 +247,7 @@ case "$MODE" in
         --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
         --claim \
         --mark-sent \
+        --report-run \
         --report-failure
     fi
     exec node "$CLIENT" run-approved \
@@ -247,6 +256,7 @@ case "$MODE" in
       --claim-ttl-seconds "$CLAIM_TTL_SECONDS" \
       --claim \
       --mark-delivered \
+      --report-run \
       --report-failure
     ;;
 esac

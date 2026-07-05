@@ -91,11 +91,13 @@ import {
   patchAutomationAudienceContact,
   deleteAutomationAudienceContact,
   listWecomBridgeWorkers,
+  listWecomBridgeRunReports,
   listApprovedWecomBridgeReplies,
   listApprovedWecomBridgeMassTasks,
   listApprovedWecomBridgeMomentTasks,
   listWecomBridgeEvents,
   recordWecomBridgeHeartbeat,
+  recordWecomBridgeRunReport,
   patchWecomBridgeReplyDelivery,
   patchWecomBridgeMassTaskDelivery,
   patchWecomBridgeMomentTaskDelivery,
@@ -133,6 +135,7 @@ const AUTOMATION_BRIDGE_REPLY_ENDPOINT = '/api/automation/bridge/wecom/replies';
 const AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT = '/api/automation/bridge/wecom/mass-tasks';
 const AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT = '/api/automation/bridge/wecom/moment-tasks';
 const AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT = '/api/automation/bridge/wecom/heartbeat';
+const AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT = '/api/automation/bridge/wecom/run-report';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
@@ -274,6 +277,7 @@ function automationBridgeStatus(req?: FastifyRequest) {
     massTaskEndpoint: AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT,
     momentTaskEndpoint: AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT,
     heartbeatEndpoint: AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT,
+    runReportEndpoint: AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT,
     workers: listWecomBridgeWorkers(20),
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
     runnerGuide: automationBridgeRunnerGuide(req),
@@ -402,6 +406,12 @@ app.get('/api/admin/automation/bridge-events', async (req, reply) => {
   return { events: listWecomBridgeEvents(Number(query?.limit || 100), query?.status) };
 });
 
+app.get('/api/admin/automation/bridge-runs', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return { reports: listWecomBridgeRunReports(Number(query?.limit || 50), String(query?.workerId || '')) };
+});
+
 app.patch('/api/admin/automation/bridge-events/:eventId', async (req, reply) => {
   const admin = requireAdmin(req, reply);
   if (!admin) return;
@@ -503,6 +513,23 @@ app.post(AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT, async (req, reply) => {
     return { worker, pendingReplies, pendingMassTasks, pendingMomentTasks, serverTime: new Date().toISOString() };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 心跳写入失败' });
+  }
+});
+
+app.post(AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const report = recordWecomBridgeRunReport(AUTOMATION_BRIDGE_USER, {
+      ...(req.body as any),
+      source: (req.body as any)?.source || 'wecom-mac-bridge',
+    });
+    appendPanelLog(
+      report.status === 'failed' ? 'WARN' : 'INFO',
+      `Bridge runner 上报 ${report.target}/${report.mode}：worker=${report.workerId}，状态=${report.status}`,
+    );
+    return { report };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 运行报告写入失败' });
   }
 });
 
