@@ -16,6 +16,15 @@
       "seconds": 3
     },
     {
+      "type": "image",
+      "imagePath": "/Users/andy/Pictures/wecom-demo-material.png",
+      "sendEnter": true
+    },
+    {
+      "type": "wait",
+      "seconds": 2
+    },
+    {
       "type": "text",
       "text": "建议先从 FAQ 和人工确认回复开始，不建议一上来全自动发送。",
       "sendEnter": true

@@ -32,6 +32,7 @@ fi
 
 parsed="$(REPLY_JSON="$reply_json" node <<'NODE'
 const payload = JSON.parse(process.env.REPLY_JSON || '{}');
+const fs = require('node:fs');
 const conversationName = String(payload.conversationName || payload.senderName || '').trim();
 const fallbackDraft = String(payload.replyDraft || '').trim();
 function clampInt(value, min, max, fallback) {
@@ -55,19 +56,33 @@ function normalizeStep(raw) {
     steps.push({ type: 'text', text, sendEnter: raw.sendEnter !== false });
     return steps;
   }
+  if (type === 'image' || raw.imagePath !== undefined || raw.path !== undefined || raw.filePath !== undefined) {
+    const imagePath = String(raw.imagePath ?? raw.path ?? raw.filePath ?? '').trim();
+    if (!imagePath) return [];
+    const steps = [];
+    if (delay > 0) steps.push({ type: 'wait', seconds: delay });
+    steps.push({
+      type: 'image',
+      imagePath,
+      sendEnter: raw.sendEnter !== false,
+      exists: fs.existsSync(imagePath),
+    });
+    return steps;
+  }
   return [];
 }
 const rawSteps = Array.isArray(payload.replySteps) ? payload.replySteps : [];
 const steps = rawSteps.flatMap(normalizeStep).slice(0, 30);
 if (!steps.length && fallbackDraft) steps.push({ type: 'text', text: fallbackDraft, sendEnter: true });
 const textSteps = steps.filter((step) => step.type === 'text' && step.text.trim());
+const imageSteps = steps.filter((step) => step.type === 'image' && step.imagePath.trim());
 const replyDraft = textSteps.map((step) => step.text.trim()).join('\n\n').slice(0, 4000);
 if (!conversationName) {
   console.error('ERROR: Bridge reply is missing conversationName/senderName.');
   process.exit(2);
 }
-if (!textSteps.length) {
-  console.error('ERROR: Bridge reply is missing executable text steps.');
+if (!textSteps.length && !imageSteps.length) {
+  console.error('ERROR: Bridge reply is missing executable text/image steps.');
   process.exit(2);
 }
 process.stdout.write(JSON.stringify({
@@ -78,6 +93,8 @@ process.stdout.write(JSON.stringify({
   replyChars: [...replyDraft].length,
   stepCount: steps.length,
   textStepCount: textSteps.length,
+  imageStepCount: imageSteps.length,
+  missingImagePaths: imageSteps.filter((step) => !step.exists).map((step) => step.imagePath),
   waitSeconds: steps.reduce((sum, step) => step.type === 'wait' ? sum + step.seconds : sum, 0),
   steps,
 }));
@@ -89,6 +106,7 @@ reply_draft="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.writ
 reply_chars="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.replyChars))' "$parsed")"
 step_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.stepCount))' "$parsed")"
 text_step_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.textStepCount))' "$parsed")"
+image_step_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.imageStepCount))' "$parsed")"
 
 if [[ "$MODE" == "dry-run" ]]; then
   node -e 'const p=JSON.parse(process.argv[1]); p.ok=true; p.mode="dry-run"; console.log(JSON.stringify(p, null, 2))' "$parsed"
@@ -182,18 +200,80 @@ end run
 APPLESCRIPT
 }
 
+paste_reply_image() {
+  local image_path="$1"
+  local send_enter="$2"
+  if [[ ! -f "$image_path" ]]; then
+    echo "ERROR: image file does not exist: $image_path" >&2
+    exit 4
+  fi
+  osascript -l JavaScript - "$image_path" <<'JXA'
+function run(argv) {
+  ObjC.import('AppKit');
+  const path = $.NSString.alloc.initWithUTF8String(argv[0]);
+  const image = $.NSImage.alloc.initWithContentsOfFile(path);
+  if (!image) throw new Error(`Unable to read image: ${argv[0]}`);
+  const pasteboard = $.NSPasteboard.generalPasteboard;
+  pasteboard.clearContents;
+  if (!pasteboard.writeObjects([image])) throw new Error(`Unable to write image to pasteboard: ${argv[0]}`);
+}
+JXA
+  osascript - "$APP_NAME" "$send_enter" <<'APPLESCRIPT'
+on run argv
+  set appName to item 1 of argv
+  set sendEnter to item 2 of argv
+
+  tell application "System Events"
+    if not (exists process appName) then error "WeCom app process not found: " & appName
+    tell process appName
+      set frontmost to true
+      delay 0.1
+      keystroke "v" using command down
+      delay 0.4
+      if sendEnter is "1" then
+        key code 36
+        delay 0.5
+      end if
+    end tell
+  end tell
+end run
+APPLESCRIPT
+}
+
 focus_conversation
 
 if [[ "$MODE" == "prepare" ]]; then
-  paste_reply_text "$reply_draft" 0
+  if [[ -n "$reply_draft" ]]; then
+    paste_reply_text "$reply_draft" 0
+  fi
+  while IFS=$'\t' read -r step_type _seconds _send_enter encoded_text; do
+    if [[ "$step_type" != "image" ]]; then
+      continue
+    fi
+    image_path="$(node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64").toString("utf8"))' "$encoded_text")"
+    paste_reply_image "$image_path" 0
+  done < <(node -e '
+const p = JSON.parse(process.argv[1]);
+for (const step of p.steps || []) {
+  if (step.type === "image") {
+    const imagePath = Buffer.from(String(step.imagePath || ""), "utf8").toString("base64");
+    console.log(["image", "0", "0", imagePath].join("\t"));
+  }
+}
+' "$parsed")
 else
   while IFS=$'\t' read -r step_type seconds send_enter encoded_text; do
     if [[ "$step_type" == "wait" ]]; then
       sleep "$seconds"
       continue
     fi
-    step_text="$(node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64").toString("utf8"))' "$encoded_text")"
-    paste_reply_text "$step_text" "$send_enter"
+    if [[ "$step_type" == "text" ]]; then
+      step_text="$(node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64").toString("utf8"))' "$encoded_text")"
+      paste_reply_text "$step_text" "$send_enter"
+    elif [[ "$step_type" == "image" ]]; then
+      image_path="$(node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64").toString("utf8"))' "$encoded_text")"
+      paste_reply_image "$image_path" "$send_enter"
+    fi
   done < <(node -e '
 const p = JSON.parse(process.argv[1]);
 for (const step of p.steps || []) {
@@ -202,10 +282,13 @@ for (const step of p.steps || []) {
   } else if (step.type === "text") {
     const text = Buffer.from(String(step.text || ""), "utf8").toString("base64");
     console.log(["text", "0", step.sendEnter === false ? "0" : "1", text].join("\t"));
+  } else if (step.type === "image") {
+    const imagePath = Buffer.from(String(step.imagePath || ""), "utf8").toString("base64");
+    console.log(["image", "0", step.sendEnter === false ? "0" : "1", imagePath].join("\t"));
   }
 }
 ' "$parsed")
 fi
 
-node -e 'console.log(JSON.stringify({ok:true, mode:process.argv[1], appName:process.argv[2], conversationName:process.argv[3], replyChars:Number(process.argv[4]), stepCount:Number(process.argv[5]), textStepCount:Number(process.argv[6])}, null, 2))' \
-  "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars" "$step_count" "$text_step_count"
+node -e 'console.log(JSON.stringify({ok:true, mode:process.argv[1], appName:process.argv[2], conversationName:process.argv[3], replyChars:Number(process.argv[4]), stepCount:Number(process.argv[5]), textStepCount:Number(process.argv[6]), imageStepCount:Number(process.argv[7])}, null, 2))' \
+  "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars" "$step_count" "$text_step_count" "$image_step_count"

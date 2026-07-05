@@ -15,9 +15,11 @@ WECOM_BRIDGE_RUNNER="${WECOM_BRIDGE_RUNNER:-$ROOT/scripts/wecom-bridge-runner.sh
 stamp="$(date +%Y%m%d%H%M%S)"
 cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
 body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
+reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
+: > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file"
 }
 trap cleanup EXIT
 
@@ -429,16 +431,37 @@ PY
   bridge_event_id="$(json_get result.events[0].id)"
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"planned"}'
   json_assert_eq event.status planned
-  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"replyDraft":"这是经过人工确认的 Bridge smoke 第一段回复。\n\n[wait 1]\n\n这是经过人工确认的 Bridge smoke 第二段回复。","replySteps":[{"type":"text","text":"这是经过人工确认的 Bridge smoke 第一段回复。","sendEnter":true},{"type":"wait","seconds":1},{"type":"text","text":"这是经过人工确认的 Bridge smoke 第二段回复。","sendEnter":true}],"replyApproved":true}'
+  bridge_reply_payload="$(python3 - "$reply_image_file" <<'PY'
+import json
+import sys
+
+image_path = sys.argv[1]
+print(json.dumps({
+    "replyDraft": "这是经过人工确认的 Bridge smoke 第一段回复。\n\n[wait 1]\n\n[image " + image_path + "]\n\n这是经过人工确认的 Bridge smoke 第二段回复。",
+    "replySteps": [
+        {"type": "text", "text": "这是经过人工确认的 Bridge smoke 第一段回复。", "sendEnter": True},
+        {"type": "wait", "seconds": 1},
+        {"type": "image", "imagePath": image_path, "sendEnter": True},
+        {"type": "wait", "seconds": 1},
+        {"type": "text", "text": "这是经过人工确认的 Bridge smoke 第二段回复。", "sendEnter": True},
+    ],
+    "replyApproved": True,
+}, ensure_ascii=False))
+PY
+)"
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" "$bridge_reply_payload"
   json_assert_path event.replyApproved
   json_assert_eq event.replySteps[1].seconds 1
+  json_assert_eq event.replySteps[2].imagePath "$reply_image_file"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_USE_REMOTE_POLICY=1 WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=mass "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   json_assert_path handled[0].dryRun
-  json_assert_eq handled[0].stepCount 3
+  json_assert_eq handled[0].stepCount 5
+  json_assert_eq handled[0].imageStepCount 1
   json_assert_path runReport.report.id
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_path replies[0].id
   json_assert_eq replies[0].replySteps[1].seconds 1
+  json_assert_eq replies[0].replySteps[2].imagePath "$reply_image_file"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-reply "$bridge_event_id" --worker-id smoke-worker > "$body_file"
   json_assert_path event.replyClaimedAt
   json_assert_eq event.replyClaimedBy smoke-worker
@@ -460,8 +483,10 @@ PY
   json_assert_eq event.status archived
 
   say "Check WeCom reply handler sequence dry-run"
-  reply_handler_payload="$(python3 <<'PY'
+  reply_handler_payload="$(python3 - "$reply_image_file" <<'PY'
 import json
+import sys
+image_path = sys.argv[1]
 print(json.dumps({
     "id": "smoke-reply-sequence",
     "conversationName": "Smoke Test Conversation",
@@ -469,14 +494,16 @@ print(json.dumps({
     "replySteps": [
         {"type": "text", "text": "第一段顺序回复。", "sendEnter": True},
         {"type": "wait", "seconds": 1},
+        {"type": "image", "imagePath": image_path, "sendEnter": True},
         {"type": "text", "text": "第二段顺序回复。", "sendEnter": True},
     ],
 }, ensure_ascii=False))
 PY
 )"
   WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" <<<"$reply_handler_payload" > "$body_file"
-  json_assert_eq stepCount 3
+  json_assert_eq stepCount 4
   json_assert_eq textStepCount 2
+  json_assert_eq imageStepCount 1
 
   say "Check WeCom mass handler dry-run"
   mass_handler_payload="$(python3 <<'PY'

@@ -214,6 +214,13 @@ function replyStepsFromDraft(draft: string): AutomationStep[] {
       steps.push({ type: 'wait', seconds });
       continue;
     }
+    const image = line.match(/^(?:\[\s*image\s+(.+?)\s*\]|图片\s*[:：]\s*(.+)|image\s*[:：]\s*(.+))$/i);
+    if (image) {
+      flushText();
+      const imagePath = (image[1] || image[2] || image[3] || '').trim();
+      if (imagePath) steps.push({ type: 'image', imagePath, sendEnter: true });
+      continue;
+    }
     if (!line) {
       flushText();
       continue;
@@ -227,9 +234,10 @@ function replyStepsFromDraft(draft: string): AutomationStep[] {
 function replyStepSummary(steps?: AutomationStep[]): string {
   const items = steps || [];
   const textCount = items.filter((step) => step.type === 'text').length;
+  const imageCount = items.filter((step) => step.type === 'image').length;
   const waitSeconds = items.reduce((sum, step) => (step.type === 'wait' ? sum + step.seconds : sum), 0);
   if (!items.length) return '单段回复';
-  return `${textCount} 段文本${waitSeconds ? ` · 等待 ${waitSeconds} 秒` : ''}`;
+  return `${textCount} 段文本${imageCount ? ` · ${imageCount} 张图片` : ''}${waitSeconds ? ` · 等待 ${waitSeconds} 秒` : ''}`;
 }
 
 function defaultAutomationConfig(): AutomationConfig {
@@ -584,7 +592,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     const draft = (bridgeReplyDrafts[event.id] || '').trim();
     if (!draft) return toast('请先填写回复草稿', 'error');
     const replySteps = asSequence ? replyStepsFromDraft(draft) : undefined;
-    if (asSequence && !replySteps?.some((step) => step.type === 'text')) return toast('顺序回复至少需要一段文本', 'error');
+    if (asSequence && !replySteps?.some((step) => step.type === 'text' || step.type === 'image')) return toast('顺序回复至少需要一段文本或一张图片', 'error');
     setBusy(`bridge-reply-${event.id}`);
     try {
       const { event: saved } = await api.patchWecomBridgeEvent(event.id, {
@@ -1491,7 +1499,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   <div className="auto-targets">
                     <textarea
                       className="input textarea"
-                      placeholder="人工确认后的回复草稿。空行分段；写 [wait 3] 可插入等待。批准后，企微 Mac 工具可以通过 Bridge 拉取。"
+                      placeholder="人工确认后的回复草稿。空行分段；写 [wait 3] 等待，写 [image /本机路径/a.png] 添加图片。批准后，企微 Mac 工具可以通过 Bridge 拉取。"
                       value={bridgeReplyDrafts[event.id] ?? event.replyDraft ?? ''}
                       onChange={(e) => setBridgeReplyDrafts((map) => ({ ...map, [event.id]: e.target.value }))}
                     />

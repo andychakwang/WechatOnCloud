@@ -5,6 +5,7 @@ import type { Instance, User } from './store.js';
 
 export type AutomationStep =
   | { type: 'text'; text: string; sendEnter?: boolean }
+  | { type: 'image'; imagePath: string; sendEnter?: boolean }
   | { type: 'key'; key: string }
   | { type: 'wait'; seconds: number };
 
@@ -2483,6 +2484,11 @@ function normalizeStep(raw: any): AutomationStep | null {
     if (!text) return null;
     return { type: 'text', text, sendEnter: raw.sendEnter !== false };
   }
+  if (raw.type === 'image') {
+    const imagePath = str(raw.imagePath ?? raw.path ?? raw.filePath, 1000).trim();
+    if (!imagePath) return null;
+    return { type: 'image', imagePath, sendEnter: raw.sendEnter !== false };
+  }
   if (raw.type === 'key') {
     const key = str(raw.key, 20).trim();
     if (!/^[A-Za-z_]{1,20}$/.test(key)) return null;
@@ -2519,6 +2525,13 @@ function normalizeBridgeReplyStep(raw: any): AutomationStep[] {
     steps.push({ type: 'text', text, sendEnter: raw.sendEnter !== false });
     return steps;
   }
+  if (type === 'image' || raw.imagePath !== undefined || raw.path !== undefined || raw.filePath !== undefined) {
+    const imagePath = str(raw.imagePath ?? raw.path ?? raw.filePath, 1000).trim();
+    if (!imagePath) return [];
+    if (delay > 0) steps.push({ type: 'wait', seconds: delay });
+    steps.push({ type: 'image', imagePath, sendEnter: raw.sendEnter !== false });
+    return steps;
+  }
   return [];
 }
 
@@ -2538,7 +2551,9 @@ function bridgeReplyTextFromSteps(steps: AutomationStep[]): string {
 }
 
 function hasRunnableBridgeReply(event: WecomBridgeEvent): boolean {
-  return bridgeReplySteps(event).some((step) => step.type === 'text' && !!step.text.trim());
+  return bridgeReplySteps(event).some(
+    (step) => (step.type === 'text' && !!step.text.trim()) || (step.type === 'image' && !!step.imagePath.trim()),
+  );
 }
 
 function resetBridgeReplyDeliveryState(event: WecomBridgeEvent) {
@@ -2582,7 +2597,7 @@ function findMatchingRule(text: string): AutomationRule | null {
 }
 
 function hasRunnableSteps(rule: AutomationRule): boolean {
-  return rule.responseSteps.some((step) => step.type === 'text' || step.type === 'key');
+  return rule.responseSteps.some((step) => step.type === 'text' || step.type === 'key' || step.type === 'image');
 }
 
 function ruleText(rule: AutomationRule): string {
@@ -2722,6 +2737,8 @@ async function executeSteps(steps: AutomationStep[], executor: AutomationExecuto
     } else if (step.type === 'text') {
       await executor.typeText(step.text);
       if (step.sendEnter !== false) await executor.key('Return');
+    } else if (step.type === 'image') {
+      throw new Error('实例内自动化暂不支持图片步骤，请通过 Mac Bridge 执行');
     }
   }
 }
