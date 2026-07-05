@@ -2041,6 +2041,8 @@ import sys
 package_file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
 with open(package_file, "r", encoding="utf-8") as fh:
     package = json.load(fh)
+def is_digest(value):
+    return isinstance(value, str) and len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 if package.get("schema") != "woc.wecom.rpa.package.v1":
     raise SystemExit("unexpected RPA package schema")
 tasks = package.get("tasks", [])
@@ -2054,6 +2056,14 @@ if expires_at <= exported_at:
 handoff = package.get("handoff", {})
 if handoff.get("packageExpiresAt") != expires_at or handoff.get("packageTtlMinutes") != ttl_minutes:
     raise SystemExit("RPA handoff should preserve package TTL and expiry")
+if handoff.get("packageId") != package.get("packageId"):
+    raise SystemExit("RPA handoff should preserve packageId")
+if not is_digest(package.get("packageDigest")) or not is_digest(package.get("taskDigest")):
+    raise SystemExit("RPA package missing digest metadata")
+if handoff.get("packageDigest") != package.get("packageDigest") or handoff.get("taskDigest") != package.get("taskDigest"):
+    raise SystemExit("RPA handoff should preserve package digests")
+if handoff.get("packageTaskCount") != len(tasks):
+    raise SystemExit("RPA handoff should preserve task count")
 if not any(t.get("target") == "reply" and t.get("id") == event_id and t.get("operation") == "reply.prepare" for t in tasks):
     raise SystemExit("reply RPA task missing")
 if not any(t.get("target") == "mass" and t.get("jobId") == mass_job_id and t.get("operation") == "mass.prepare" for t in tasks):
@@ -2064,6 +2074,8 @@ if package.get("counts", {}).get("total", 0) < 3:
     raise SystemExit("RPA package should contain at least three tasks")
 if any(t.get("expiresAt") != expires_at for t in tasks):
     raise SystemExit("RPA package task expiresAt should match package expiresAt")
+if any(t.get("taskDigest") != package.get("taskDigest") for t in tasks):
+    raise SystemExit("RPA package task digest should match package taskDigest")
 PY
 
   request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=json"
@@ -2075,13 +2087,19 @@ import sys
 file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
 with open(file, "r", encoding="utf-8") as fh:
     package = json.load(fh)["package"]
+def is_digest(value):
+    return isinstance(value, str) and len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 if package.get("counts", {}).get("total", 0) < 3:
     raise SystemExit("admin RPA package should contain at least three tasks")
 if not package.get("expiresAt") or not isinstance(package.get("ttlMinutes"), int):
     raise SystemExit("admin RPA package missing expiry metadata")
+if not is_digest(package.get("packageDigest")) or not is_digest(package.get("taskDigest")):
+    raise SystemExit("admin RPA package missing digest metadata")
 tasks = package.get("tasks", [])
 if any(t.get("expiresAt") != package.get("expiresAt") for t in tasks):
     raise SystemExit("admin RPA package tasks missing matching expiresAt")
+if any(t.get("taskDigest") != package.get("taskDigest") for t in tasks):
+    raise SystemExit("admin RPA package tasks missing matching taskDigest")
 if not any(t.get("target") == "reply" and t.get("id") == event_id for t in tasks):
     raise SystemExit("admin reply RPA task missing")
 if not any(t.get("target") == "mass" and t.get("jobId") == mass_job_id for t in tasks):
@@ -2126,6 +2144,8 @@ with open(file, "r", encoding="utf-8") as fh:
         line = line.strip()
         if line:
             tasks.append(json.loads(line))
+if any(not isinstance(t.get("taskDigest"), str) or len(t.get("taskDigest")) != 64 for t in tasks):
+    raise SystemExit("admin JSONL RPA task missing taskDigest")
 if not any(t.get("target") == "reply" and t.get("id") == event_id for t in tasks):
     raise SystemExit("admin JSONL reply RPA task missing")
 if any(not t.get("expiresAt") for t in tasks):
@@ -2192,6 +2212,13 @@ with open(file, "r", encoding="utf-8") as fh:
     payload = json.load(fh)
 if payload.get("mode") != "dry-run":
     raise SystemExit("RPA package runner should use dry-run mode")
+if not isinstance(payload.get("packageDigest"), str) or len(payload.get("packageDigest")) != 64:
+    raise SystemExit("RPA package runner missing packageDigest")
+if not isinstance(payload.get("taskDigest"), str) or len(payload.get("taskDigest")) != 64:
+    raise SystemExit("RPA package runner missing taskDigest")
+handoff = payload.get("runReport", {}).get("report", {}).get("packageHandoff", {})
+if handoff.get("packageDigest") != payload.get("packageDigest") or handoff.get("taskDigest") != payload.get("taskDigest"):
+    raise SystemExit("RPA package run report should preserve digests")
 handled = payload.get("handled", [])
 if not any(item.get("target") == "reply" and item.get("id") == event_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
     raise SystemExit("reply RPA package task was not handled")
@@ -2243,6 +2270,8 @@ if payload.get("savedPackagePath") != package_file:
     raise SystemExit("cloud RPA runner should save the pulled package")
 if payload.get("packageCounts", {}).get("total", 0) < 3:
     raise SystemExit("cloud RPA package should contain at least three tasks")
+if not isinstance(payload.get("taskDigest"), str) or len(payload.get("taskDigest")) != 64:
+    raise SystemExit("cloud RPA runner missing taskDigest")
 handled = payload.get("handled", [])
 if not any(item.get("target") == "reply" and item.get("id") == event_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
     raise SystemExit("cloud reply RPA package task was not handled")
@@ -2252,6 +2281,8 @@ if not any(item.get("target") == "moment" and item.get("draftId") == moment_draf
     raise SystemExit("cloud moment RPA package task was not handled")
 with open(package_file, "r", encoding="utf-8") as fh:
     tasks = [json.loads(line) for line in fh if line.strip()]
+if any(not isinstance(task.get("taskDigest"), str) or len(task.get("taskDigest")) != 64 for task in tasks):
+    raise SystemExit("saved cloud RPA package tasks missing taskDigest")
 if not any(task.get("target") == "reply" and task.get("id") == event_id for task in tasks):
     raise SystemExit("saved cloud RPA package missing reply task")
 if not any(task.get("target") == "mass" and task.get("jobId") == mass_job_id for task in tasks):

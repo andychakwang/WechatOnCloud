@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r73-rpa-package-ttl';
+const CLIENT_VERSION = 'automation-lab-r74-rpa-package-digest';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
@@ -617,6 +618,28 @@ function rpaPackageExpiresAt(value, exportedAt, ttlMinutes) {
   return normalizeIsoDate(value) || new Date(Date.parse(exportedAt) + ttlMinutes * 60 * 1000).toISOString();
 }
 
+function sha256Json(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function normalizeDigest(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(raw) ? raw : '';
+}
+
+function digestRpaTasks(tasks) {
+  return sha256Json((Array.isArray(tasks) ? tasks : []).map((task) => ({ ...task, taskDigest: undefined })));
+}
+
+function digestRpaPackage(pkg) {
+  if (!isRecord(pkg)) return '';
+  return sha256Json({
+    ...pkg,
+    packageDigest: undefined,
+    handoff: isRecord(pkg.handoff) ? { ...pkg.handoff, packageDigest: undefined } : pkg.handoff,
+  });
+}
+
 function localRunnerPolicy(options) {
   const mode = normalizeEnum(runnerMode(options, process.env.WECOM_RUNNER_MODE || 'dry-run'), ['dry-run', 'prepare', 'send'], 'dry-run');
   const target = normalizeEnum(process.env.WECOM_RUNNER_TARGET || options.target || options.queue || 'all', ['replies', 'mass', 'moments', 'all'], 'all');
@@ -816,13 +839,19 @@ async function buildCloudRpaPackage(options) {
     pulled.push(...(await pullRpaExportTasks(options, itemTarget, limit)));
   }
 
-  const tasks = pulled.map((item) => buildRpaTask(item.target, item.task, pkgMeta, includeSource));
+  const baseTasks = pulled.map((item) => buildRpaTask(item.target, item.task, pkgMeta, includeSource));
+  const taskDigest = digestRpaTasks(baseTasks);
+  const tasks = baseTasks.map((task) => ({ ...task, taskDigest }));
   const handoff = await resolveRpaPackageHandoff(options, target, tasks);
+  handoff.packageId = pkgMeta.packageId;
+  handoff.taskDigest = taskDigest;
+  handoff.packageTaskCount = tasks.length;
   handoff.packageTtlMinutes = ttlMinutes;
   handoff.packageExpiresAt = expiresAt;
   const pkg = {
     schema: RPA_PACKAGE_SCHEMA,
     ...pkgMeta,
+    taskDigest,
     ttlMinutes,
     target,
     limit,
@@ -836,6 +865,8 @@ async function buildCloudRpaPackage(options) {
     handoff,
     tasks,
   };
+  pkg.packageDigest = digestRpaPackage(pkg);
+  pkg.handoff.packageDigest = pkg.packageDigest;
 
   return { pkg, target, format };
 }
@@ -1077,6 +1108,31 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
   const packageHandoff = isRecord(packageMeta?.handoff)
     ? packageMeta.handoff
     : await resolveRpaPackageHandoff(options, packageTarget, rawTasks);
+  const taskDigest = normalizeDigest(packageMeta?.taskDigest || packageHandoff?.taskDigest) || digestRpaTasks(rawTasks);
+  let packageDigest = normalizeDigest(packageMeta?.packageDigest || packageMeta?.digest || packageMeta?.checksum || packageHandoff?.packageDigest);
+  if (!packageDigest && isRecord(packageMeta) && Array.isArray(packageMeta.tasks)) {
+    packageDigest = digestRpaPackage({
+      ...packageMeta,
+      taskDigest: packageMeta.taskDigest || taskDigest,
+      handoff: isRecord(packageHandoff)
+        ? {
+            ...packageHandoff,
+            packageId: packageHandoff.packageId || packageMeta.packageId || '',
+            taskDigest: packageHandoff.taskDigest || taskDigest,
+            packageTaskCount: packageHandoff.packageTaskCount || rawTasks.length,
+          }
+        : packageHandoff,
+      tasks: rawTasks.map((task) => ({ ...task, taskDigest: task.taskDigest || taskDigest })),
+    });
+  }
+  if (isRecord(packageHandoff)) {
+    packageHandoff.packageId = String(packageHandoff.packageId || packageMeta?.packageId || '').trim();
+    packageHandoff.taskDigest = normalizeDigest(packageHandoff.taskDigest) || taskDigest;
+    packageHandoff.packageTaskCount = Number.isFinite(Number(packageHandoff.packageTaskCount))
+      ? Number(packageHandoff.packageTaskCount)
+      : rawTasks.length;
+    if (packageDigest) packageHandoff.packageDigest = packageDigest;
+  }
 
   for (const { target, task } of tasks) {
     const handler = rpaHandlerForTarget(options, target).trim();
@@ -1126,6 +1182,8 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
   const output = {
     packageId: packageMeta?.packageId || '',
     packageSchema: packageMeta?.schema || '',
+    packageDigest,
+    taskDigest,
     packageExpiresAt: packageExpiryState.expiresAt || packageMeta?.expiresAt || '',
     packageExpired: packageExpiryState.expired,
     packageCounts: packageMeta?.counts || { total: rawTasks.length },

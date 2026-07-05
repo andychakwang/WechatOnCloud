@@ -247,7 +247,11 @@ export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
 
 export interface WecomRpaPackageHandoff {
   generatedFrom: 'automation-rpa-package';
+  packageId?: string;
   packageTarget: WecomRpaPackageTarget;
+  packageDigest?: string;
+  taskDigest?: string;
+  packageTaskCount?: number;
   packageTtlMinutes?: number;
   packageExpiresAt?: string;
   recommendedMode: WecomBridgeRunnerMode;
@@ -383,6 +387,7 @@ export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
 export interface WecomRpaTask {
   schema: 'woc.wecom.rpa.task.v1';
   packageId: string;
+  taskDigest?: string;
   exportedAt: string;
   expiresAt?: string;
   source: string;
@@ -415,6 +420,8 @@ export interface WecomRpaTask {
 export interface WecomRpaPackage {
   schema: 'woc.wecom.rpa.package.v1';
   packageId: string;
+  packageDigest?: string;
+  taskDigest?: string;
   exportedAt: string;
   expiresAt: string;
   ttlMinutes: number;

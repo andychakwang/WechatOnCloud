@@ -75,6 +75,10 @@ function isPastIso(value?: string): boolean {
   const ms = Date.parse(value);
   return Number.isFinite(ms) && ms <= Date.now();
 }
+function shortDigest(value?: string): string {
+  const raw = String(value || '').trim();
+  return raw.length > 12 ? raw.slice(0, 12) : raw;
+}
 function isScheduleWaiting(value?: string): boolean {
   if (!value) return false;
   const ms = Date.parse(value);
@@ -2212,6 +2216,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <span className="chip chip-static">schema {rpaPackagePreview.schema}</span>
                         <span className="chip chip-static">target {rpaPackagePreview.target}</span>
                         <span className="chip chip-static">limit {rpaPackagePreview.limit}</span>
+                        {rpaPackagePreview.packageDigest && <span className="chip chip-static">包 {shortDigest(rpaPackagePreview.packageDigest)}</span>}
+                        {rpaPackagePreview.taskDigest && <span className="chip chip-static">任务 {shortDigest(rpaPackagePreview.taskDigest)}</span>}
                         <span className={'chip chip-static' + (isPastIso(rpaPackagePreview.expiresAt) ? ' chip-bad' : '')}>
                           有效至 {fmtDate(Date.parse(rpaPackagePreview.expiresAt))}
                         </span>
@@ -2616,6 +2622,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                                 <span className="chip chip-static">
                                   RPA {BRIDGE_RUNNER_TARGET_LABEL[handoff.packageTarget]} · 建议 {BRIDGE_RUNNER_MODE_LABEL[handoff.recommendedMode]}
                                 </span>
+                                {handoff.packageDigest && <span className="chip chip-static">包 {shortDigest(handoff.packageDigest)}</span>}
+                                {handoff.taskDigest && <span className="chip chip-static">任务 {shortDigest(handoff.taskDigest)}</span>}
                                 <span className={'chip chip-static' + (handoff.blockedByPreflight ? ' chip-bad' : '')}>
                                   预检 {PREFLIGHT_LEVEL_LABEL[handoff.preflightLevel]}
                                 </span>

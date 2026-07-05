@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Instance, User } from './store.js';
 
 export type AutomationStep =
@@ -226,7 +226,11 @@ export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
 
 export interface WecomRpaPackageHandoff {
   generatedFrom: 'automation-rpa-package';
+  packageId?: string;
   packageTarget: WecomRpaPackageTarget;
+  packageDigest?: string;
+  taskDigest?: string;
+  packageTaskCount?: number;
   packageTtlMinutes?: number;
   packageExpiresAt?: string;
   recommendedMode: WecomBridgeRunnerMode;
@@ -780,6 +784,7 @@ export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
 export interface WecomRpaTask {
   schema: 'woc.wecom.rpa.task.v1';
   packageId: string;
+  taskDigest?: string;
   exportedAt: string;
   expiresAt?: string;
   source: string;
@@ -813,6 +818,8 @@ export interface WecomRpaTask {
 export interface WecomRpaPackage {
   schema: 'woc.wecom.rpa.package.v1';
   packageId: string;
+  packageDigest: string;
+  taskDigest: string;
   exportedAt: string;
   expiresAt: string;
   ttlMinutes: number;
@@ -3677,7 +3684,9 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
     if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(limit, pullOptions).map((task) => ({ target: 'moment' as const, task })));
   }
 
-  const tasks = pulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
+  const baseTasks = pulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
+  const taskDigest = digestWecomRpaTasks(baseTasks);
+  const tasks = baseTasks.map((task) => ({ ...task, taskDigest }));
   const policy = getWecomBridgeRunnerPolicy();
   const preflight = getAutomationPreflightReport();
   const includesMoments = tasks.some((task) => task.target === 'moment');
@@ -3690,9 +3699,10 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
     policy.requireTargetMatch ? '云端策略要求目标窗口匹配，Mac handler 应在粘贴/发送前校验会话。' : '',
     policy.requireHandlerVerification ? '云端策略要求 handler 回传正向校验后才标记成功。' : '',
   ].filter(Boolean);
-  return {
+  const pkgWithoutDigest: Omit<WecomRpaPackage, 'packageDigest'> = {
     schema: 'woc.wecom.rpa.package.v1',
     ...meta,
+    taskDigest,
     ttlMinutes,
     target,
     limit,
@@ -3705,7 +3715,10 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
     },
     handoff: {
       generatedFrom: 'automation-rpa-package',
+      packageId,
       packageTarget: target,
+      taskDigest,
+      packageTaskCount: tasks.length,
       packageTtlMinutes: ttlMinutes,
       packageExpiresAt: expiresAt,
       recommendedMode,
@@ -3722,6 +3735,15 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
       notes,
     },
     tasks,
+  };
+  const packageDigest = digestWecomRpaPackage(pkgWithoutDigest);
+  return {
+    ...pkgWithoutDigest,
+    packageDigest,
+    handoff: {
+      ...pkgWithoutDigest.handoff,
+      packageDigest,
+    },
   };
 }
 
@@ -5105,9 +5127,19 @@ function normalizeRpaPackageHandoff(raw: any): WecomRpaPackageHandoff | undefine
   const notes = Array.isArray(raw.notes)
     ? raw.notes.map((note: any) => str(note, 240).trim()).filter(Boolean).slice(0, 5)
     : [];
+  const packageDigest = normalizeRpaDigest(raw.packageDigest ?? raw.digest ?? raw.checksum);
+  const taskDigest = normalizeRpaDigest(raw.taskDigest ?? raw.tasksDigest ?? raw.taskChecksum);
+  const packageTaskCount =
+    raw.packageTaskCount !== undefined || raw.taskCount !== undefined || raw.tasks !== undefined
+      ? clampInt(raw.packageTaskCount ?? raw.taskCount ?? raw.tasks, 0, 2000, 0)
+      : undefined;
   return {
     generatedFrom: 'automation-rpa-package',
+    packageId: str(raw.packageId ?? raw.id, 160).trim() || undefined,
     packageTarget,
+    packageDigest,
+    taskDigest,
+    packageTaskCount,
     packageTtlMinutes:
       raw.packageTtlMinutes !== undefined || raw.ttlMinutes !== undefined
         ? normalizeRpaPackageTtlMinutes(raw.packageTtlMinutes ?? raw.ttlMinutes)
@@ -6020,6 +6052,27 @@ function normalizeRpaPackageExpiresAt(value: unknown, exportedAt: string, ttlMin
     if (Number.isFinite(ms)) return new Date(ms).toISOString();
   }
   return new Date(Date.parse(exportedAt) + ttlMinutes * 60 * 1000).toISOString();
+}
+
+function digestJson(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function digestWecomRpaTasks(tasks: WecomRpaTask[]): string {
+  return digestJson(tasks.map((task) => ({ ...task, taskDigest: undefined })));
+}
+
+function digestWecomRpaPackage(pkg: Omit<WecomRpaPackage, 'packageDigest'>): string {
+  return digestJson({
+    ...pkg,
+    packageDigest: undefined,
+    handoff: pkg.handoff ? { ...pkg.handoff, packageDigest: undefined } : undefined,
+  });
+}
+
+function normalizeRpaDigest(value: unknown): string | undefined {
+  const raw = str(value, 160).trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(raw) ? raw : undefined;
 }
 
 function buildWecomRpaTask(
