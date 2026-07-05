@@ -322,6 +322,7 @@ export interface AutomationBridgeRunnerGuide {
     writeEnv: string;
     syncMaterialMap?: string;
     printConfig: string;
+    doctor: string;
     dryRunAll: string;
     prepareAll: string;
     sendAll: string;

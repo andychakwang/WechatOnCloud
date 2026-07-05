@@ -664,6 +664,16 @@ PY
   json_assert_eq policy.target replies
   json_assert_eq env.WECOM_RUNNER_TARGET replies
 
+  say "Check WeCom Bridge runner doctor"
+  WOC_PANEL_URL="$PANEL_URL" \
+    AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" \
+    WECOM_BRIDGE_WORKER_ID=smoke-worker \
+    WECOM_MATERIAL_MAP_FILE="$material_map_file" \
+    WECOM_DOCTOR_APP=0 \
+    "$WECOM_BRIDGE_RUNNER" doctor > "$body_file"
+  grep -q "remote policy reachable" "$body_file"
+  grep -q "Summary: 0 failure" "$body_file"
+
   say "Report WeCom Bridge runner result"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" report-run \
     --worker-id smoke-worker \

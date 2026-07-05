@@ -30,7 +30,7 @@ CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/wecom-bridge-runner.sh [run-once|print-config]
+Usage: scripts/wecom-bridge-runner.sh [run-once|print-config|doctor]
 
 Config file:
   ~/.config/wechat-on-cloud/wecom-bridge.env
@@ -55,6 +55,8 @@ Optional:
   WECOM_MOMENT_HANDLER=./scripts/wecom-mac-moment-handler.sh
   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
   WECOM_ALLOW_SEND=1                       required for send
+  WECOM_DOCTOR_REMOTE=0                    skip remote policy auth check in doctor
+  WECOM_DOCTOR_APP=0                       skip WeCom AppleScript window check in doctor
 
 Modes:
   dry-run  - list target tasks only; no claim, no window automation
@@ -78,6 +80,8 @@ case "$cmd" in
     printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nMATERIAL_MAP_FILE=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "${WECOM_MATERIAL_MAP_FILE:-}"
     exit 0
     ;;
+  doctor)
+    ;;
   run-once)
     ;;
   *)
@@ -89,21 +93,232 @@ esac
 validate_runner_config() {
   if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
     echo "ERROR: WECOM_RUNNER_MODE must be dry-run, prepare, or send." >&2
-    exit 2
+    return 2
   fi
 
   if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" && "$TARGET" != "all" ]]; then
     echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, moments, or all." >&2
-    exit 2
+    return 2
   fi
 
   if [[ "$TARGET" == "moments" && "$MODE" == "send" ]]; then
     echo "ERROR: WECOM_RUNNER_TARGET=moments does not support send mode; run prepare, review manually, then use mark-moment-published." >&2
-    exit 2
+    return 2
   fi
 }
 
-validate_runner_config
+DOCTOR_FAILURES=0
+DOCTOR_WARNINGS=0
+
+doctor_ok() {
+  printf 'OK    %s\n' "$*"
+}
+
+doctor_warn() {
+  DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1))
+  printf 'WARN  %s\n' "$*"
+}
+
+doctor_fail() {
+  DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1))
+  printf 'FAIL  %s\n' "$*"
+}
+
+doctor_is_disabled() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$value" == "0" || "$value" == "false" || "$value" == "off" || "$value" == "no" ]]
+}
+
+doctor_check_file() {
+  local label="$1"
+  local path="$2"
+  local executable="${3:-0}"
+  if [[ ! -e "$path" ]]; then
+    doctor_fail "$label missing: $path"
+    return
+  fi
+  if [[ ! -r "$path" ]]; then
+    doctor_fail "$label is not readable: $path"
+    return
+  fi
+  if [[ "$executable" == "1" && ! -x "$path" ]]; then
+    doctor_fail "$label is not executable: $path"
+    return
+  fi
+  doctor_ok "$label ready: $path"
+}
+
+doctor_env_permissions() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    doctor_warn "config file not found yet: $ENV_FILE"
+    return
+  fi
+  local perms
+  perms="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE" 2>/dev/null || true)"
+  if [[ -z "$perms" ]]; then
+    doctor_ok "config file exists: $ENV_FILE"
+    return
+  fi
+  case "$perms" in
+    400|500|600|700)
+      doctor_ok "config file permissions $perms: $ENV_FILE"
+      ;;
+    *)
+      doctor_warn "config file permissions are $perms; prefer 600 because it contains the Bridge token"
+      ;;
+  esac
+}
+
+doctor_remote_policy() {
+  if doctor_is_disabled "${WECOM_DOCTOR_REMOTE:-}"; then
+    doctor_warn "remote policy check skipped by WECOM_DOCTOR_REMOTE=0"
+    return
+  fi
+  if [[ -z "${WOC_PANEL_URL:-}" && -z "${PANEL_URL:-}" && -z "${WECHATONCLOUD_PANEL_URL:-}" ]]; then
+    doctor_fail "missing WOC_PANEL_URL/PANEL_URL/WECHATONCLOUD_PANEL_URL"
+    return
+  fi
+  if [[ -z "${AUTOMATION_BRIDGE_TOKEN:-}" && -z "${WECOM_BRIDGE_TOKEN:-}" ]]; then
+    doctor_fail "missing AUTOMATION_BRIDGE_TOKEN/WECOM_BRIDGE_TOKEN"
+    return
+  fi
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/woc-runner-doctor-policy.XXXXXX.json")"
+  if node "$CLIENT" runner-policy --worker-id "${WECOM_BRIDGE_WORKER_ID:-doctor}" > "$tmp" 2>"$tmp.err"; then
+    local summary
+    summary="$(node - "$tmp" <<'NODE'
+const fs = require('node:fs');
+const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const policy = payload.policy || {};
+const parts = [
+  `mode=${policy.mode || 'unknown'}`,
+  `target=${policy.target || 'unknown'}`,
+  `limit=${policy.limit ?? 'unknown'}`,
+  `ttl=${policy.claimTtlSeconds ?? 'unknown'}s`,
+  `interval=${policy.heartbeatIntervalSeconds ?? 'unknown'}s`,
+];
+process.stdout.write(parts.join(', '));
+NODE
+)"
+    rm -f "$tmp" "$tmp.err"
+    doctor_ok "remote policy reachable: $summary"
+  else
+    local err
+    err="$(tr '\n' ' ' < "$tmp.err" | sed 's/[[:space:]]\{1,\}/ /g' | cut -c1-240)"
+    rm -f "$tmp" "$tmp.err"
+    doctor_fail "remote policy check failed${err:+: $err}"
+  fi
+}
+
+doctor_material_map() {
+  if [[ -z "${WECOM_MATERIAL_MAP_FILE:-}" ]]; then
+    doctor_warn "WECOM_MATERIAL_MAP_FILE not set; image-key steps require a local material map"
+    return
+  fi
+  if [[ -f "$WECOM_MATERIAL_MAP_FILE" ]]; then
+    doctor_ok "material map file exists: $WECOM_MATERIAL_MAP_FILE"
+  else
+    doctor_warn "material map file missing; runner can sync it before run-once: $WECOM_MATERIAL_MAP_FILE"
+  fi
+}
+
+doctor_wecom_app() {
+  if doctor_is_disabled "${WECOM_DOCTOR_APP:-}"; then
+    doctor_warn "WeCom app/window check skipped by WECOM_DOCTOR_APP=0"
+    return
+  fi
+  if ! command -v osascript >/dev/null 2>&1; then
+    doctor_fail "osascript not found; prepare/send require macOS Automation"
+    return
+  fi
+  local app_name="${WECOM_APP_NAME:-企业微信}"
+  local snapshot
+  if snapshot="$(osascript - "$app_name" <<'APPLESCRIPT' 2>/dev/null
+on run argv
+  set appName to item 1 of argv
+  set activeApp to ""
+  set windowTitle to ""
+  tell application "System Events"
+    if exists process appName then
+      tell process appName
+        set activeApp to name
+        if exists window 1 then set windowTitle to name of window 1
+      end tell
+    end if
+  end tell
+  return activeApp & linefeed & windowTitle
+end run
+APPLESCRIPT
+)"; then
+    local active_app window_title
+    active_app="$(printf '%s' "$snapshot" | sed -n '1p')"
+    window_title="$(printf '%s' "$snapshot" | sed -n '2p')"
+    if [[ "$active_app" == "$app_name" ]]; then
+      if [[ -n "$window_title" ]]; then
+        doctor_ok "WeCom process visible: $active_app / $window_title"
+      else
+        doctor_warn "WeCom process is running but no window title was readable"
+      fi
+    else
+      doctor_warn "WeCom process '$app_name' is not running or not visible to System Events"
+    fi
+  else
+    doctor_fail "unable to query WeCom via AppleScript; check Automation/Accessibility permission for Terminal"
+  fi
+}
+
+run_doctor() {
+  printf 'WeCom Bridge runner doctor\n'
+  printf 'ROOT=%s\nENV_FILE=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\n\n' "$ROOT" "$ENV_FILE" "$MODE" "$TARGET" "$LIMIT"
+
+  if command -v node >/dev/null 2>&1; then
+    doctor_ok "node available: $(node --version)"
+  else
+    doctor_fail "node is required"
+  fi
+  if command -v osascript >/dev/null 2>&1; then
+    doctor_ok "osascript available"
+  else
+    doctor_warn "osascript not found; dry-run can work but prepare/send cannot"
+  fi
+  if command -v launchctl >/dev/null 2>&1; then
+    doctor_ok "launchctl available"
+  else
+    doctor_warn "launchctl not found; LaunchAgent install is macOS-only"
+  fi
+
+  doctor_env_permissions
+  doctor_check_file "Bridge client" "$CLIENT" 1
+  doctor_check_file "reply handler" "$HANDLER" 1
+  doctor_check_file "mass handler" "$MASS_HANDLER" 1
+  doctor_check_file "moment handler" "$MOMENT_HANDLER" 1
+
+  local validate_err
+  validate_err="$(mktemp "${TMPDIR:-/tmp}/woc-runner-doctor-validate.XXXXXX.err")"
+  if validate_runner_config 2>"$validate_err"; then
+    doctor_ok "runner config valid: mode=$MODE target=$TARGET"
+  else
+    doctor_fail "$(tr '\n' ' ' <"$validate_err" | sed 's/[[:space:]]\{1,\}/ /g')"
+  fi
+  rm -f "$validate_err"
+
+  doctor_remote_policy
+  doctor_material_map
+  doctor_wecom_app
+
+  printf '\nSummary: %s failure(s), %s warning(s)\n' "$DOCTOR_FAILURES" "$DOCTOR_WARNINGS"
+  if [[ "$DOCTOR_FAILURES" -gt 0 ]]; then
+    return 1
+  fi
+}
+
+if [[ "$cmd" == "doctor" ]]; then
+  run_doctor
+  exit $?
+fi
+
+validate_runner_config || exit $?
 
 if [[ -z "${WOC_PANEL_URL:-}" && -z "${PANEL_URL:-}" && -z "${WECHATONCLOUD_PANEL_URL:-}" ]]; then
   echo "ERROR: set WOC_PANEL_URL in env or $ENV_FILE." >&2
@@ -162,7 +377,7 @@ NODE
   fi
 fi
 
-validate_runner_config
+validate_runner_config || exit $?
 
 if [[ -n "${WECOM_MATERIAL_MAP_FILE:-}" && "${WECOM_SYNC_MATERIAL_MAP:-1}" != "0" ]]; then
   mkdir -p "$(dirname "$WECOM_MATERIAL_MAP_FILE")"

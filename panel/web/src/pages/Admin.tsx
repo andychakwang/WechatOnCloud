@@ -1828,6 +1828,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       )}
                       <div className="bridge-command-row">
                         <div>
+                          <b>接入体检</b>
+                          <code>{bridgeGuide.commands.doctor}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.doctor, '接入体检命令')}>
+                          复制
+                        </button>
+                      </div>
+                      <div className="bridge-command-row">
+                        <div>
                           <b>领取并准备</b>
                           <code>{bridgeGuide.commands.prepareAll}</code>
                         </div>
