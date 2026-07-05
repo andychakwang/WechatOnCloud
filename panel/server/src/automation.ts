@@ -301,6 +301,7 @@ export interface WecomBridgeRunnerPolicy {
   heartbeatIntervalSeconds: number;
   momentPasteMode: WecomBridgeMomentPasteMode;
   allowSend: boolean;
+  requireTargetMatch: boolean;
   updatedAt: string;
   updatedBy: string;
 }
@@ -640,6 +641,7 @@ const DEFAULT_RUNNER_POLICY: WecomBridgeRunnerPolicy = {
   heartbeatIntervalSeconds: 60,
   momentPasteMode: 'clipboard-only',
   allowSend: false,
+  requireTargetMatch: false,
   updatedAt: '',
   updatedBy: 'system',
 };
@@ -3867,6 +3869,12 @@ function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
     ),
     momentPasteMode: normalizeMomentPasteMode(base.momentPasteMode ?? base.pasteMode) || DEFAULT_RUNNER_POLICY.momentPasteMode,
     allowSend: base.allowSend === true,
+    requireTargetMatch:
+      base.requireTargetMatch === true ||
+      base.requireTargetMatch === '1' ||
+      base.requireTargetMatch === 'true' ||
+      base.requireTargetMatch === 'yes' ||
+      base.requireTargetMatch === 'on',
     updatedAt: typeof base.updatedAt === 'string' && base.updatedAt ? base.updatedAt : now,
     updatedBy: str(base.updatedBy || 'system', 80).trim() || 'system',
   };

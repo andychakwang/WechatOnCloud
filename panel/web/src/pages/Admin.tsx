@@ -1596,6 +1596,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <b>云端 Runner 策略</b>
                         <div className="muted small">
                           {BRIDGE_RUNNER_TARGET_LABEL[runnerPolicy.target]} · {BRIDGE_RUNNER_MODE_LABEL[runnerPolicy.mode]} · 每轮 {runnerPolicy.limit}
+                          {runnerPolicy.requireTargetMatch ? ' · 目标硬校验' : ''}
                         </div>
                       </div>
                       <div className="auto-actions inline">
@@ -1682,6 +1683,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         onChange={(e) => setRunnerPolicy({ ...runnerPolicy, allowSend: e.target.checked })}
                       />
                       <span>云端策略允许 send 模式，本机仍需显式授权真实发送</span>
+                    </label>
+                    <label className="auto-check">
+                      <input
+                        type="checkbox"
+                        checked={runnerPolicy.requireTargetMatch}
+                        onChange={(e) => setRunnerPolicy({ ...runnerPolicy, requireTargetMatch: e.target.checked })}
+                      />
+                      <span>回复和群发在粘贴/发送前必须命中目标窗口标题</span>
                     </label>
                   </div>
                 )}

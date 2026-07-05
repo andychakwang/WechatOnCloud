@@ -413,6 +413,7 @@ if [[ "${WECOM_USE_REMOTE_POLICY:-}" == "1" || "${WECOM_USE_REMOTE_POLICY:-}" ==
         MOMENT_PASTE_MODE) export WECOM_MOMENT_PASTE_MODE="$value" ;;
         BRIDGE_INTERVAL_SEC) export WECOM_BRIDGE_INTERVAL_SEC="$value" ;;
         ALLOW_SEND) remote_allow_send="$value" ;;
+        REQUIRE_TARGET_MATCH) export WECOM_REQUIRE_TARGET_MATCH="$value" ;;
       esac
     done < <(node - "$policy_file" <<'NODE'
 const fs = require('node:fs');
@@ -426,6 +427,7 @@ const out = {
   MOMENT_PASTE_MODE: policy.momentPasteMode,
   BRIDGE_INTERVAL_SEC: policy.heartbeatIntervalSeconds,
   ALLOW_SEND: policy.allowSend ? '1' : '',
+  REQUIRE_TARGET_MATCH: policy.requireTargetMatch ? '1' : '0',
 };
 for (const [key, value] of Object.entries(out)) {
   if (value !== undefined && value !== null && String(value).length > 0) {

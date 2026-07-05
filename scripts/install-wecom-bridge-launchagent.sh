@@ -13,6 +13,7 @@ LIMIT="${WECOM_RUNNER_LIMIT:-5}"
 CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
 USE_REMOTE_POLICY="${WECOM_USE_REMOTE_POLICY:-}"
 ACCEPT_REMOTE_SEND="${WECOM_ACCEPT_REMOTE_SEND:-}"
+REQUIRE_TARGET_MATCH="${WECOM_REQUIRE_TARGET_MATCH:-}"
 DRY_RUN=0
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -76,6 +77,7 @@ env_text() {
     printf 'WECOM_BRIDGE_WORKER_ID=%s\n' "$(quote "${WECOM_BRIDGE_WORKER_ID:-$(hostname)-launchagent}")"
     printf 'WECOM_APP_NAME=%s\n' "$(quote "${WECOM_APP_NAME:-企业微信}")"
     printf 'WECOM_SEARCH_SHORTCUT=%s\n' "$(quote "${WECOM_SEARCH_SHORTCUT:-command+k}")"
+    [[ -n "$REQUIRE_TARGET_MATCH" ]] && printf 'WECOM_REQUIRE_TARGET_MATCH=%s\n' "$(quote "$REQUIRE_TARGET_MATCH")"
     [[ -n "${WECOM_ALLOW_SEND:-}" ]] && printf 'WECOM_ALLOW_SEND=%s\n' "$(quote "$WECOM_ALLOW_SEND")"
   }
 }

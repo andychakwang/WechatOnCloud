@@ -321,6 +321,7 @@ export interface WecomBridgeRunnerPolicy {
   heartbeatIntervalSeconds: number;
   momentPasteMode: WecomBridgeMomentPasteMode;
   allowSend: boolean;
+  requireTargetMatch: boolean;
   updatedAt: string;
   updatedBy: string;
 }

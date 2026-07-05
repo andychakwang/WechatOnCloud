@@ -777,13 +777,15 @@ PY
   say "Update and fetch WeCom Bridge runner policy"
   request_json GET /api/admin/automation/runner-policy
   json_assert_path policy.mode
-  runner_policy_payload='{"mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false}'
+  runner_policy_payload='{"mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false,"requireTargetMatch":true}'
   request_json PUT /api/admin/automation/runner-policy "$runner_policy_payload"
   json_assert_eq policy.target replies
   json_assert_eq policy.limit 3
+  json_assert_eq policy.requireTargetMatch True
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" runner-policy --worker-id smoke-worker > "$body_file"
   json_assert_eq policy.target replies
   json_assert_eq env.WECOM_RUNNER_TARGET replies
+  json_assert_eq env.WECOM_REQUIRE_TARGET_MATCH 1
 
   say "Check WeCom Bridge runner doctor"
   WOC_PANEL_URL="$PANEL_URL" \

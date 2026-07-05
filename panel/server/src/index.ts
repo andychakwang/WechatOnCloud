@@ -253,7 +253,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
-    "WECOM_REQUIRE_TARGET_MATCH='0'",
+    `WECOM_REQUIRE_TARGET_MATCH=${shellSingle(policy.requireTargetMatch ? '1' : '0')}`,
     `WECOM_BRIDGE_INTERVAL_SEC=${shellSingle(String(policy.heartbeatIntervalSeconds))}`,
     `WECOM_BRIDGE_WORKER_ID=${shellSingle(defaultWorkerId)}`,
   ].join('\n');
@@ -687,6 +687,7 @@ app.get(AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT, async (req, reply) => {
       WECOM_BRIDGE_INTERVAL_SEC: String(policy.heartbeatIntervalSeconds),
       WECOM_MOMENT_PASTE_MODE: policy.momentPasteMode,
       WECOM_ALLOW_SEND: policy.allowSend ? '1' : '',
+      WECOM_REQUIRE_TARGET_MATCH: policy.requireTargetMatch ? '1' : '0',
     },
     serverTime: new Date().toISOString(),
   };
