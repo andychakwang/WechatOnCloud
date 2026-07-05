@@ -478,10 +478,14 @@ app.get('/api/admin/automation/rpa-package', async (req, reply) => {
       target: query?.target,
       limit: query?.limit,
       format: query?.format,
+      mode: query?.mode,
       includeSource: query?.includeSource,
       sourceTask: query?.sourceTask,
       source: query?.source,
+      workerSource: query?.workerSource ?? query?.bridgeSource ?? query?.worker_source ?? query?.bridge_source,
       workerId: query?.workerId || admin.username,
+      capabilities: query?.capabilities ?? query?.capability ?? query?.workerCapabilities,
+      requireSendable: query?.requireSendable ?? query?.sendable ?? query?.requireAutoSend,
       packageId: query?.packageId,
     });
     const download = query?.download === '1' || query?.download === 'true';

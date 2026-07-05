@@ -439,6 +439,13 @@ export interface WecomBridgeReplyPlanBatchResult {
 
 export interface WecomBridgeReplyListOptions {
   requireSendable?: boolean;
+  workerId?: unknown;
+  worker?: unknown;
+  clientId?: unknown;
+  source?: unknown;
+  capabilities?: unknown;
+  capability?: unknown;
+  workerCapabilities?: unknown;
 }
 
 export interface AutomationSettings {
@@ -808,11 +815,24 @@ export interface WecomRpaPackageExportOptions {
   queue?: unknown;
   limit?: unknown;
   format?: unknown;
+  mode?: unknown;
   includeSource?: unknown;
   include_source?: unknown;
   sourceTask?: unknown;
   source?: unknown;
+  workerSource?: unknown;
+  bridgeSource?: unknown;
+  worker_source?: unknown;
+  bridge_source?: unknown;
   workerId?: unknown;
+  worker?: unknown;
+  clientId?: unknown;
+  capabilities?: unknown;
+  capability?: unknown;
+  workerCapabilities?: unknown;
+  requireSendable?: unknown;
+  sendable?: unknown;
+  requireAutoSend?: unknown;
   packageId?: unknown;
 }
 
@@ -3579,9 +3599,10 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
   const pulled: Array<{ target: WecomRpaTaskTarget; task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask }> = [];
 
   for (const itemTarget of rpaPackageTargets(target)) {
-    if (itemTarget === 'replies') pulled.push(...listApprovedWecomBridgeReplies(limit).map((task) => ({ target: 'reply' as const, task })));
-    if (itemTarget === 'mass') pulled.push(...listApprovedWecomBridgeMassTasks(limit).map((task) => ({ target: 'mass' as const, task })));
-    if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(limit).map((task) => ({ target: 'moment' as const, task })));
+    const pullOptions = rpaPackagePullOptions(raw, workerId, itemTarget);
+    if (itemTarget === 'replies') pulled.push(...listApprovedWecomBridgeReplies(limit, pullOptions).map((task) => ({ target: 'reply' as const, task })));
+    if (itemTarget === 'mass') pulled.push(...listApprovedWecomBridgeMassTasks(limit, pullOptions).map((task) => ({ target: 'mass' as const, task })));
+    if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(limit, pullOptions).map((task) => ({ target: 'moment' as const, task })));
   }
 
   const tasks = pulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
@@ -5870,6 +5891,20 @@ function normalizeRpaPackageTarget(value: unknown): WecomRpaPackageTarget {
 
 function rpaPackageTargets(target: WecomRpaPackageTarget): Array<'replies' | 'mass' | 'moments'> {
   return target === 'all' ? ['replies', 'mass', 'moments'] : [target];
+}
+
+function rpaPackagePullOptions(raw: WecomRpaPackageExportOptions, workerId: string, target: 'replies' | 'mass' | 'moments') {
+  const workerSource = str(raw.workerSource ?? raw.bridgeSource ?? raw.worker_source ?? raw.bridge_source, 120).trim();
+  const mode = str(raw.mode, 40).trim().toLowerCase();
+  const options: any = { workerId };
+  if (workerSource) options.source = workerSource;
+  const capabilities = raw.capabilities ?? raw.capability ?? raw.workerCapabilities;
+  if (capabilities !== undefined) options.capabilities = capabilities;
+  if (mode) options.mode = mode;
+  if (target === 'replies' && (mode === 'send' || boolish(raw.requireSendable) || boolish(raw.sendable) || boolish(raw.requireAutoSend))) {
+    options.requireSendable = true;
+  }
+  return options;
 }
 
 function rpaTextLength(text: string): number {

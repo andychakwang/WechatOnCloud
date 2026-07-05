@@ -1198,12 +1198,16 @@ PY
   json_assert_eq worker.enabled False
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 --worker-id smoke-worker > "$body_file"
   json_assert_no_reply_id "$bridge_event_id"
+  request_json GET "/api/admin/automation/rpa-package?target=replies&limit=20&format=json&workerId=smoke-worker"
+  json_assert_no_task_id "$bridge_event_id"
   request_bridge_json PATCH "/api/automation/bridge/wecom/replies/$bridge_event_id" '{"deliveryStatus":"claimed","workerId":"smoke-worker","capabilities":["reply"],"claimTtlSeconds":120}' 400
   json_assert_path error
   request_json PATCH "/api/admin/automation/bridge-workers/wecom-mac-bridge:smoke-worker" '{"enabled":true}'
   json_assert_eq worker.enabled True
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 --worker-id smoke-worker > "$body_file"
   json_assert_reply_id "$bridge_event_id"
+  request_json GET "/api/admin/automation/rpa-package?target=replies&limit=20&format=json&workerId=smoke-worker"
+  json_assert_task_id "$bridge_event_id"
   request_bridge_json PATCH "/api/automation/bridge/wecom/replies/$bridge_event_id" '{"deliveryStatus":"claimed","workerId":"smoke-moment-only","capabilities":["moment"],"claimTtlSeconds":120}' 400
   json_assert_path error
   WECOM_BRIDGE_CAPABILITIES=reply WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-reply "$bridge_event_id" --worker-id smoke-worker > "$body_file"

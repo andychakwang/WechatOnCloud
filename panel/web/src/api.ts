@@ -915,6 +915,31 @@ async function req<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+function wecomRpaPackageParams(options: {
+  target?: WecomRpaPackageTarget;
+  limit?: number;
+  format?: WecomRpaPackageFormat;
+  includeSource?: boolean;
+  mode?: WecomBridgeRunnerMode;
+  workerId?: string;
+  workerSource?: string;
+  capabilities?: string[];
+  requireSendable?: boolean;
+}): string {
+  const params = new URLSearchParams({
+    target: options.target || 'all',
+    limit: String(options.limit || 50),
+    format: options.format || 'json',
+    includeSource: options.includeSource ? '1' : '0',
+  });
+  if (options.mode) params.set('mode', options.mode);
+  if (options.workerId) params.set('workerId', options.workerId);
+  if (options.workerSource) params.set('workerSource', options.workerSource);
+  if (options.capabilities?.length) params.set('capabilities', options.capabilities.join(','));
+  if (options.requireSendable) params.set('requireSendable', '1');
+  return params.toString();
+}
+
 export const api = {
   me: () => req<{ user: PanelUser }>('/api/auth/me'),
   login: (username: string, password: string) =>
@@ -958,10 +983,13 @@ export const api = {
     limit?: number;
     format?: WecomRpaPackageFormat;
     includeSource?: boolean;
+    mode?: WecomBridgeRunnerMode;
+    workerId?: string;
+    workerSource?: string;
+    capabilities?: string[];
+    requireSendable?: boolean;
   } = {}) =>
-    req<{ package: WecomRpaPackage }>(
-      `/api/admin/automation/rpa-package?target=${encodeURIComponent(options.target || 'all')}&limit=${encodeURIComponent(options.limit || 50)}&format=${encodeURIComponent(options.format || 'json')}&includeSource=${options.includeSource ? '1' : '0'}`,
-    ),
+    req<{ package: WecomRpaPackage }>(`/api/admin/automation/rpa-package?${wecomRpaPackageParams(options)}`),
   listWecomBridgeEvents: (limit = 100, status?: WecomBridgeEvent['status']) =>
     req<{ events: WecomBridgeEvent[] }>(
       `/api/admin/automation/bridge-events?limit=${encodeURIComponent(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`,

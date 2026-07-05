@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r68-worker-controls';
+const CLIENT_VERSION = 'automation-lab-r69-rpa-worker-gates';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const BOOLEAN_OPTIONS = new Set([
@@ -59,7 +59,7 @@ Commands:
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
   push-events <file|-> [--source name] [--plan-replies] [--approve-rule-replies] [--overwrite-reply-drafts]
-  export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source]
+  export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source] [--worker-id name]
   run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run]
   run-cloud-rpa-package [--target replies|mass|moments|all] [--limit 50] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--save-package file|--save-package-dir dir]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
