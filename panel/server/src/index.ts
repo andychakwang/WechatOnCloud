@@ -86,6 +86,8 @@ import {
   getAutomationPreflightReport,
   updateAutomationConfig,
   exportAutomationBundle,
+  exportWecomRpaPackage,
+  serializeWecomRpaPackage,
   importAutomationBundle,
   ingestWecomBridgeEvents,
   importAutomationKnowledge,
@@ -151,6 +153,7 @@ const AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT = '/api/automation/bridge/wecom/mom
 const AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT = '/api/automation/bridge/wecom/heartbeat';
 const AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT = '/api/automation/bridge/wecom/run-report';
 const AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT = '/api/automation/bridge/wecom/runner-policy';
+const AUTOMATION_RPA_PACKAGE_ENDPOINT = '/api/admin/automation/rpa-package';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
@@ -309,6 +312,7 @@ function automationBridgeStatus(req?: FastifyRequest) {
     heartbeatEndpoint: AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT,
     runReportEndpoint: AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT,
     runnerPolicyEndpoint: AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT,
+    rpaPackageEndpoint: AUTOMATION_RPA_PACKAGE_ENDPOINT,
     workers: listWecomBridgeWorkers(20),
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
     runnerGuide: automationBridgeRunnerGuide(req),
@@ -441,6 +445,35 @@ app.get('/api/admin/automation/bundle', async (req, reply) => {
       includeAudit: query?.includeAudit === '1' || query?.includeAudit === 'true',
     }),
   };
+});
+
+app.get('/api/admin/automation/rpa-package', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const query = req.query as any;
+    const pkg = exportWecomRpaPackage({
+      target: query?.target,
+      limit: query?.limit,
+      format: query?.format,
+      includeSource: query?.includeSource,
+      sourceTask: query?.sourceTask,
+      source: query?.source,
+      workerId: query?.workerId || admin.username,
+      packageId: query?.packageId,
+    });
+    const download = query?.download === '1' || query?.download === 'true';
+    const raw = download || pkg.format === 'jsonl' || query?.raw === '1' || query?.raw === 'true';
+    if (raw) {
+      const filename = `${pkg.packageId}.${pkg.format === 'json' ? 'json' : 'jsonl'}`;
+      reply.header('content-type', pkg.format === 'json' ? 'application/json; charset=utf-8' : 'application/x-ndjson; charset=utf-8');
+      if (download) reply.header('content-disposition', `attachment; filename="${filename}"`);
+      return reply.send(serializeWecomRpaPackage(pkg, pkg.format));
+    }
+    return { package: pkg };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '导出 RPA 运行包失败' });
+  }
 });
 
 app.post('/api/admin/automation/bundle/import', async (req, reply) => {

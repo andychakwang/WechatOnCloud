@@ -291,6 +291,58 @@ export interface WecomBridgeRunReport {
   updatedAt: string;
 }
 
+export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
+export type WecomRpaPackageFormat = 'json' | 'jsonl';
+export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
+
+export interface WecomRpaTask {
+  schema: 'woc.wecom.rpa.task.v1';
+  packageId: string;
+  exportedAt: string;
+  source: string;
+  workerId: string;
+  target: WecomRpaTaskTarget;
+  id: string;
+  operation: 'reply.prepare' | 'mass.prepare' | 'moment.prepare';
+  expectedName: string;
+  text: string;
+  textChars: number;
+  requiresOperatorReview: boolean;
+  conversationName?: string;
+  senderName?: string;
+  inboundText?: string;
+  steps?: AutomationStep[];
+  stepCount?: number;
+  imageStepCount?: number;
+  recipientName?: string;
+  jobId?: string;
+  itemId?: string;
+  jobTitle?: string;
+  draftId?: string;
+  title?: string;
+  imageNotes?: string;
+  materials?: string[];
+  materialCount?: number;
+}
+
+export interface WecomRpaPackage {
+  schema: 'woc.wecom.rpa.package.v1';
+  packageId: string;
+  exportedAt: string;
+  source: string;
+  workerId: string;
+  target: WecomRpaPackageTarget;
+  limit: number;
+  format: WecomRpaPackageFormat;
+  counts: {
+    total: number;
+    replies: number;
+    mass: number;
+    moments: number;
+  };
+  tasks: WecomRpaTask[];
+}
+
 export interface AutomationBridgeRecoveryChange {
   target: 'reply' | 'mass' | 'moment';
   id: string;
@@ -383,6 +435,7 @@ export interface AutomationBridgeStatus {
   heartbeatEndpoint: string;
   runReportEndpoint: string;
   runnerPolicyEndpoint: string;
+  rpaPackageEndpoint: string;
   workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];
   runnerGuide?: AutomationBridgeRunnerGuide;
@@ -746,6 +799,15 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getAutomationBridge: () => req<{ bridge: AutomationBridgeStatus }>('/api/admin/automation/bridge'),
+  exportWecomRpaPackage: (options: {
+    target?: WecomRpaPackageTarget;
+    limit?: number;
+    format?: WecomRpaPackageFormat;
+    includeSource?: boolean;
+  } = {}) =>
+    req<{ package: WecomRpaPackage }>(
+      `/api/admin/automation/rpa-package?target=${encodeURIComponent(options.target || 'all')}&limit=${encodeURIComponent(options.limit || 50)}&format=${encodeURIComponent(options.format || 'json')}&includeSource=${options.includeSource ? '1' : '0'}`,
+    ),
   listWecomBridgeEvents: (limit = 100, status?: WecomBridgeEvent['status']) =>
     req<{ events: WecomBridgeEvent[] }>(
       `/api/admin/automation/bridge-events?limit=${encodeURIComponent(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`,

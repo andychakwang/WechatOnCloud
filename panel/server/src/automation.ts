@@ -567,6 +567,72 @@ export interface WecomBridgeMomentTask {
   claimExpiresAt?: string;
 }
 
+export type WecomRpaPackageFormat = 'json' | 'jsonl';
+export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
+export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
+
+export interface WecomRpaTask {
+  schema: 'woc.wecom.rpa.task.v1';
+  packageId: string;
+  exportedAt: string;
+  source: string;
+  workerId: string;
+  target: WecomRpaTaskTarget;
+  id: string;
+  operation: 'reply.prepare' | 'mass.prepare' | 'moment.prepare';
+  expectedName: string;
+  text: string;
+  textChars: number;
+  requiresOperatorReview: boolean;
+  conversationName?: string;
+  senderName?: string;
+  inboundText?: string;
+  steps?: AutomationStep[];
+  stepCount?: number;
+  imageStepCount?: number;
+  recipientName?: string;
+  jobId?: string;
+  itemId?: string;
+  jobTitle?: string;
+  draftId?: string;
+  title?: string;
+  imageNotes?: string;
+  materials?: string[];
+  materialCount?: number;
+  sourceTask?: unknown;
+}
+
+export interface WecomRpaPackage {
+  schema: 'woc.wecom.rpa.package.v1';
+  packageId: string;
+  exportedAt: string;
+  source: string;
+  workerId: string;
+  target: WecomRpaPackageTarget;
+  limit: number;
+  format: WecomRpaPackageFormat;
+  counts: {
+    total: number;
+    replies: number;
+    mass: number;
+    moments: number;
+  };
+  tasks: WecomRpaTask[];
+}
+
+export interface WecomRpaPackageExportOptions {
+  target?: unknown;
+  queue?: unknown;
+  limit?: unknown;
+  format?: unknown;
+  includeSource?: unknown;
+  include_source?: unknown;
+  sourceTask?: unknown;
+  source?: unknown;
+  workerId?: unknown;
+  packageId?: unknown;
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -2601,6 +2667,46 @@ export function listAutomationAudit(limit = 200): AutomationAuditEvent[] {
   return data.auditEvents.slice(-n).reverse();
 }
 
+export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): WecomRpaPackage {
+  const target = normalizeRpaPackageTarget(raw.target ?? raw.queue ?? 'all');
+  const limit = clampInt(raw.limit, 1, 200, 50);
+  const format = normalizeRpaPackageFormat(raw.format);
+  const includeSource = boolish(raw.includeSource) || boolish(raw.include_source) || boolish(raw.sourceTask);
+  const exportedAt = new Date().toISOString();
+  const source = str(raw.source, 120).trim() || 'wechat-on-cloud-panel';
+  const workerId = str(raw.workerId, 120).trim() || 'web-admin-export';
+  const packageId = str(raw.packageId, 160).trim() || `woc-rpa-${exportedAt.replace(/[:.]/g, '-')}`;
+  const meta = { packageId, exportedAt, source, workerId };
+  const pulled: Array<{ target: WecomRpaTaskTarget; task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask }> = [];
+
+  for (const itemTarget of rpaPackageTargets(target)) {
+    if (itemTarget === 'replies') pulled.push(...listApprovedWecomBridgeReplies(limit).map((task) => ({ target: 'reply' as const, task })));
+    if (itemTarget === 'mass') pulled.push(...listApprovedWecomBridgeMassTasks(limit).map((task) => ({ target: 'mass' as const, task })));
+    if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(limit).map((task) => ({ target: 'moment' as const, task })));
+  }
+
+  const tasks = pulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
+  return {
+    schema: 'woc.wecom.rpa.package.v1',
+    ...meta,
+    target,
+    limit,
+    format,
+    counts: {
+      total: tasks.length,
+      replies: tasks.filter((task) => task.target === 'reply').length,
+      mass: tasks.filter((task) => task.target === 'mass').length,
+      moments: tasks.filter((task) => task.target === 'moment').length,
+    },
+    tasks,
+  };
+}
+
+export function serializeWecomRpaPackage(pkg: WecomRpaPackage, format: WecomRpaPackageFormat = pkg.format): string {
+  if (format === 'json') return `${JSON.stringify(pkg, null, 2)}\n`;
+  return `${pkg.tasks.map((task) => JSON.stringify(task)).join('\n')}${pkg.tasks.length ? '\n' : ''}`;
+}
+
 export function listMassSendJobs(limit = 100): MassSendJob[] {
   const n = clampInt(limit, 1, 500, 100);
   return data.massSendJobs.slice(-n).reverse().map(cloneMassSendJob);
@@ -4593,6 +4699,109 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function boolish(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  const raw = str(value, 20).trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function normalizeRpaPackageFormat(value: unknown): WecomRpaPackageFormat {
+  return str(value, 20).trim().toLowerCase() === 'json' ? 'json' : 'jsonl';
+}
+
+function normalizeRpaPackageTarget(value: unknown): WecomRpaPackageTarget {
+  const raw = str(value, 40).trim().toLowerCase().replace(/_/g, '-');
+  if (!raw || raw === 'all') return 'all';
+  if (['reply', 'replies', 'ai-reply', 'ai-replies'].includes(raw)) return 'replies';
+  if (['mass', 'mass-task', 'mass-tasks', 'group-send', 'broadcast'].includes(raw)) return 'mass';
+  if (['moment', 'moments', 'moment-task', 'moment-tasks', 'moment-draft', 'moment-drafts'].includes(raw)) return 'moments';
+  throw new Error('RPA 运行包目标不合法');
+}
+
+function rpaPackageTargets(target: WecomRpaPackageTarget): Array<'replies' | 'mass' | 'moments'> {
+  return target === 'all' ? ['replies', 'mass', 'moments'] : [target];
+}
+
+function rpaTextLength(text: string): number {
+  return [...String(text || '')].length;
+}
+
+function buildWecomRpaTask(
+  target: WecomRpaTaskTarget,
+  task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask,
+  meta: { packageId: string; exportedAt: string; source: string; workerId: string },
+  includeSource: boolean,
+): WecomRpaTask {
+  const base = {
+    schema: 'woc.wecom.rpa.task.v1' as const,
+    packageId: meta.packageId,
+    exportedAt: meta.exportedAt,
+    source: meta.source,
+    workerId: meta.workerId,
+    target,
+  };
+
+  if (target === 'reply') {
+    const reply = task as WecomBridgeEvent;
+    const steps = bridgeReplySteps(reply).map((step) => ({ ...step }));
+    const text = str(reply.replyDraft || steps.find((step) => step.type === 'text')?.text, 1000).trim();
+    return {
+      ...base,
+      id: reply.id,
+      operation: 'reply.prepare',
+      expectedName: str(reply.conversationName || reply.senderName, 120).trim(),
+      conversationName: str(reply.conversationName, 120).trim(),
+      senderName: str(reply.senderName, 120).trim(),
+      inboundText: str(reply.inboundText, 2000).trim(),
+      text,
+      textChars: rpaTextLength(text),
+      steps,
+      stepCount: steps.length,
+      imageStepCount: steps.filter((step) => step.type === 'image').length,
+      requiresOperatorReview: true,
+      ...(includeSource ? { sourceTask: reply } : {}),
+    };
+  }
+
+  if (target === 'mass') {
+    const mass = task as WecomBridgeMassSendTask;
+    const text = str(mass.message, 2000).trim();
+    return {
+      ...base,
+      id: mass.id,
+      operation: 'mass.prepare',
+      expectedName: str(mass.recipientName, 120).trim(),
+      recipientName: str(mass.recipientName, 120).trim(),
+      jobId: mass.jobId,
+      itemId: mass.itemId,
+      jobTitle: str(mass.jobTitle, 120).trim(),
+      text,
+      textChars: rpaTextLength(text),
+      requiresOperatorReview: true,
+      ...(includeSource ? { sourceTask: mass } : {}),
+    };
+  }
+
+  const moment = task as WecomBridgeMomentTask;
+  const text = str(moment.text, 2000).trim();
+  const materials = moment.materials.map(String).filter(Boolean);
+  return {
+    ...base,
+    id: moment.id || moment.draftId,
+    operation: 'moment.prepare',
+    expectedName: str(moment.title || moment.id, 120).trim(),
+    draftId: moment.draftId || moment.id,
+    title: str(moment.title, 120).trim(),
+    text,
+    textChars: rpaTextLength(text),
+    imageNotes: str(moment.imageNotes, 2000).trim(),
+    materials,
+    materialCount: materials.length,
+    requiresOperatorReview: true,
+    ...(includeSource ? { sourceTask: moment } : {}),
+  };
 }
 
 function normalizeBridgeRecoveryReleaseMode(value: unknown): BridgeRecoveryReleaseMode | null {

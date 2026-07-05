@@ -37,6 +37,9 @@ import {
   type WecomBridgeRunnerMode,
   type WecomBridgeRunnerPolicy,
   type WecomBridgeRunnerTarget,
+  type WecomRpaPackage,
+  type WecomRpaPackageFormat,
+  type WecomRpaPackageTarget,
 } from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
 import { useUI, PasswordInput } from '../ui';
@@ -403,6 +406,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [recoveryCursor, setRecoveryCursor] = useState('');
   const [recoveryLimit, setRecoveryLimit] = useState('500');
   const [recoveryPreview, setRecoveryPreview] = useState<AutomationBridgeRecoveryResult | null>(null);
+  const [rpaPackageTarget, setRpaPackageTarget] = useState<WecomRpaPackageTarget>('all');
+  const [rpaPackageLimit, setRpaPackageLimit] = useState('50');
+  const [rpaPackagePreview, setRpaPackagePreview] = useState<WecomRpaPackage | null>(null);
+  const [rpaPackageIncludeSource, setRpaPackageIncludeSource] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -564,6 +571,41 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     const parsed = Number.parseInt(recoveryMaxRetryAttempts, 10);
     if (!Number.isFinite(parsed)) return 0;
     return Math.max(0, Math.min(100, parsed));
+  };
+  const wecomRpaPackageLimit = () => {
+    const parsed = Number.parseInt(rpaPackageLimit, 10);
+    if (!Number.isFinite(parsed)) return 50;
+    return Math.max(1, Math.min(200, parsed));
+  };
+  const wecomRpaPackageQuery = (format: WecomRpaPackageFormat, download = false) => {
+    const params = new URLSearchParams({
+      target: rpaPackageTarget,
+      limit: String(wecomRpaPackageLimit()),
+      format,
+      includeSource: rpaPackageIncludeSource ? '1' : '0',
+    });
+    if (download) params.set('download', '1');
+    return params.toString();
+  };
+  const previewWecomRpaPackage = async () => {
+    setBusy('rpa-package');
+    try {
+      const { package: pkg } = await api.exportWecomRpaPackage({
+        target: rpaPackageTarget,
+        limit: wecomRpaPackageLimit(),
+        format: 'json',
+        includeSource: rpaPackageIncludeSource,
+      });
+      setRpaPackagePreview(pkg);
+      toast(`RPA 包已生成：${pkg.counts.total} 个任务`, 'ok');
+    } catch (e: any) {
+      toast(e.message || '生成 RPA 包失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+  const downloadWecomRpaPackage = (format: WecomRpaPackageFormat) => {
+    window.open(`/api/admin/automation/rpa-package?${wecomRpaPackageQuery(format, true)}`, '_blank', 'noopener,noreferrer');
   };
 
   const bridgeRecoveryPayload = (dryRun: boolean, cursorOverride?: string) => {
@@ -1723,6 +1765,62 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     </label>
                   </div>
                 )}
+                <div className="bridge-runner-guide">
+                  <div className="bridge-runner-head">
+                    <div>
+                      <b>RPA 运行包</b>
+                      <div className="muted small">
+                        {rpaPackagePreview
+                          ? `${rpaPackagePreview.packageId} · ${rpaPackagePreview.counts.total} 项 · 回复 ${rpaPackagePreview.counts.replies} · 群发 ${rpaPackagePreview.counts.mass} · 朋友圈 ${rpaPackagePreview.counts.moments}`
+                          : '未生成'}
+                      </div>
+                    </div>
+                    <div className="auto-actions inline">
+                      <button className="btn-text" disabled={busy === 'rpa-package'} onClick={previewWecomRpaPackage}>
+                        预览
+                      </button>
+                      <button className="btn-text" onClick={() => downloadWecomRpaPackage('json')}>
+                        JSON
+                      </button>
+                      <button className="btn-text" onClick={() => downloadWecomRpaPackage('jsonl')}>
+                        JSONL
+                      </button>
+                    </div>
+                  </div>
+                  <div className="auto-grid three compact">
+                    <label>
+                      <span className="field-label">目标</span>
+                      <select className="input" value={rpaPackageTarget} onChange={(e) => setRpaPackageTarget(e.target.value as WecomRpaPackageTarget)}>
+                        <option value="all">全队列</option>
+                        <option value="replies">AI 回复</option>
+                        <option value="mass">群发</option>
+                        <option value="moments">朋友圈</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span className="field-label">每类上限</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={rpaPackageLimit}
+                        onChange={(e) => setRpaPackageLimit(e.target.value.replace(/[^0-9]/g, ''))}
+                      />
+                    </label>
+                    <label className="auto-check compact-check">
+                      <input type="checkbox" checked={rpaPackageIncludeSource} onChange={(e) => setRpaPackageIncludeSource(e.target.checked)} />
+                      <span>包含源任务</span>
+                    </label>
+                  </div>
+                  {rpaPackagePreview && (
+                    <div className="chip-row">
+                      <span className="chip chip-static">schema {rpaPackagePreview.schema}</span>
+                      <span className="chip chip-static">target {rpaPackagePreview.target}</span>
+                      <span className="chip chip-static">limit {rpaPackagePreview.limit}</span>
+                    </div>
+                  )}
+                </div>
                 <div className="bridge-runner-guide">
                   <div className="bridge-runner-head">
                     <div>
