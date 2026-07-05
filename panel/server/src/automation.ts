@@ -45,6 +45,31 @@ export interface AutomationKnowledgeImportResult {
   errors: string[];
 }
 
+export type AutomationAudienceContactType = 'contact' | 'group' | 'room' | 'unknown';
+
+export interface AutomationAudienceContact {
+  id: string;
+  name: string;
+  type: AutomationAudienceContactType;
+  aliases: string[];
+  tags: string[];
+  source: string;
+  note: string;
+  enabled: boolean;
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastImportedAt?: string;
+}
+
+export interface AutomationAudienceImportResult {
+  contacts: AutomationAudienceContact[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
 type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
 type WecomBridgeMassDeliveryStatus = 'claimed' | 'failed' | 'sent' | 'delivered' | 'released';
@@ -131,6 +156,13 @@ export interface AutomationOverview {
     total: number;
     approved: number;
     enabled: number;
+  };
+  audience: {
+    total: number;
+    enabled: number;
+    approved: number;
+    groups: number;
+    contacts: number;
   };
   rules: {
     total: number;
@@ -315,6 +347,7 @@ export interface AutomationAuditEvent {
 }
 
 interface AutomationData extends AutomationConfig {
+  audienceContacts: AutomationAudienceContact[];
   bridgeEvents: WecomBridgeEvent[];
   bridgeWorkers: WecomBridgeWorker[];
   massSendJobs: MassSendJob[];
@@ -325,6 +358,7 @@ interface AutomationData extends AutomationConfig {
 const FILE = process.env.PANEL_AUTOMATION_DATA || '/data/automation.json';
 const MAX_AUDIT_EVENTS = 1000;
 const MAX_KNOWLEDGE_ITEMS = 500;
+const MAX_AUDIENCE_CONTACTS = 2000;
 const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
@@ -346,6 +380,7 @@ const DEFAULT_DATA: AutomationData = {
   knowledgeNotes: '',
   rules: [],
   knowledgeItems: [],
+  audienceContacts: [],
   bridgeEvents: [],
   bridgeWorkers: [],
   massSendJobs: [],
@@ -427,6 +462,13 @@ export function getAutomationOverview(): AutomationOverview {
       approved: data.knowledgeItems.filter((item) => item.approved).length,
       enabled: data.knowledgeItems.filter((item) => item.enabled).length,
     },
+    audience: {
+      total: data.audienceContacts.length,
+      enabled: data.audienceContacts.filter((contact) => contact.enabled).length,
+      approved: data.audienceContacts.filter((contact) => contact.approved).length,
+      groups: data.audienceContacts.filter((contact) => contact.type === 'group' || contact.type === 'room').length,
+      contacts: data.audienceContacts.filter((contact) => contact.type === 'contact').length,
+    },
     rules: {
       total: data.rules.length,
       enabled: data.rules.filter((rule) => rule.enabled).length,
@@ -492,6 +534,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       knowledgeNotes: raw?.knowledgeNotes ?? data.knowledgeNotes,
       rules: raw?.rules ?? data.rules,
       knowledgeItems: raw?.knowledgeItems ?? data.knowledgeItems,
+      audienceContacts: data.audienceContacts,
       bridgeEvents: data.bridgeEvents,
       bridgeWorkers: data.bridgeWorkers,
       massSendJobs: data.massSendJobs,
@@ -881,6 +924,144 @@ export function deleteAutomationKnowledge(actor: User, itemId: string): { ok: tr
     action: 'knowledge_deleted',
     actor: actor.username,
     message: `删除企微接入资料「${removed.title}」`,
+  });
+  return { ok: true };
+}
+
+export function listAutomationAudience(limit = 200, query = '', tag = ''): AutomationAudienceContact[] {
+  const n = clampInt(limit, 1, 1000, 200);
+  const q = String(query || '').trim().toLowerCase();
+  const t = String(tag || '').trim().toLowerCase();
+  return data.audienceContacts
+    .filter((contact) => {
+      const haystack = [contact.name, contact.source, contact.note, ...contact.aliases, ...contact.tags].join('\n').toLowerCase();
+      if (q && !haystack.includes(q)) return false;
+      if (t && !contact.tags.some((tagName) => tagName.toLowerCase() === t)) return false;
+      return true;
+    })
+    .slice(-n)
+    .reverse()
+    .map(cloneAudienceContact);
+}
+
+export function importAutomationAudience(actor: User, raw: any): AutomationAudienceImportResult {
+  const now = new Date().toISOString();
+  const source = str(raw?.source || raw?.sourceName || 'wecom-mac', 80).trim() || 'wecom-mac';
+  const defaultType = normalizeAudienceContactType(raw?.type ?? raw?.contactType);
+  const defaultApproved = raw?.approveImported === true || raw?.approved === true;
+  const defaultEnabled = raw?.enabled !== false;
+  const mode = raw?.mode === 'append' ? 'append' : 'upsert';
+  const rawItems = extractAudienceImportItems(raw).slice(0, 500);
+  const result: AutomationAudienceImportResult = {
+    contacts: [],
+    imported: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const [index, rawItem] of rawItems.entries()) {
+    try {
+      const contact = normalizeAudienceContact(
+        {
+          ...rawItem,
+          source: rawItem?.source || source,
+          type: rawItem?.type || rawItem?.contactType || defaultType,
+          enabled: typeof rawItem?.enabled === 'boolean' ? rawItem.enabled : defaultEnabled,
+          approved: typeof rawItem?.approved === 'boolean' ? rawItem.approved : defaultApproved,
+          createdAt: now,
+          updatedAt: now,
+          lastImportedAt: now,
+        },
+        false,
+        now,
+      );
+      if (!contact.name.trim()) throw new Error('名称为空');
+      const existingIndex =
+        mode === 'upsert'
+          ? data.audienceContacts.findIndex(
+              (x) =>
+                x.source.toLowerCase() === contact.source.toLowerCase() &&
+                x.name.toLowerCase() === contact.name.toLowerCase() &&
+                x.type === contact.type,
+            )
+          : -1;
+      if (existingIndex >= 0) {
+        const existing = data.audienceContacts[existingIndex];
+        const saved: AutomationAudienceContact = {
+          ...contact,
+          id: existing.id,
+          aliases: uniqueStrings([...existing.aliases, ...contact.aliases]).slice(0, 20),
+          tags: uniqueStrings([...existing.tags, ...contact.tags]).slice(0, 30),
+          note: contact.note || existing.note,
+          createdAt: existing.createdAt,
+          updatedAt: now,
+          lastImportedAt: now,
+        };
+        data.audienceContacts[existingIndex] = saved;
+        result.updated += 1;
+        result.contacts.push(cloneAudienceContact(saved));
+      } else {
+        data.audienceContacts.push(contact);
+        result.imported += 1;
+        result.contacts.push(cloneAudienceContact(contact));
+      }
+    } catch (e: any) {
+      result.skipped += 1;
+      result.errors.push(`第 ${index + 1} 条跳过：${e?.message || e}`);
+    }
+  }
+
+  if (data.audienceContacts.length > MAX_AUDIENCE_CONTACTS) {
+    data.audienceContacts = data.audienceContacts.slice(-MAX_AUDIENCE_CONTACTS);
+  }
+  if (result.imported || result.updated) {
+    persist();
+    addAutomationAudit({
+      action: 'audience_imported',
+      actor: actor.username,
+      message: `导入受众资产：新增 ${result.imported} 个，更新 ${result.updated} 个，跳过 ${result.skipped} 个`,
+    });
+  }
+  return result;
+}
+
+export function patchAutomationAudienceContact(actor: User, contactId: string, raw: any): AutomationAudienceContact {
+  const current = data.audienceContacts.find((contact) => contact.id === contactId);
+  if (!current) throw new Error('受众不存在');
+  const now = new Date().toISOString();
+  const next = normalizeAudienceContact(
+    {
+      ...current,
+      ...raw,
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: now,
+      lastImportedAt: current.lastImportedAt,
+    },
+    true,
+    now,
+  );
+  if (!next.name.trim()) throw new Error('受众名称不能为空');
+  Object.assign(current, next);
+  persist();
+  addAutomationAudit({
+    action: 'audience_updated',
+    actor: actor.username,
+    message: `更新受众「${current.name}」：${current.enabled ? '启用' : '停用'}，${current.approved ? '已审核' : '未审核'}`,
+  });
+  return cloneAudienceContact(current);
+}
+
+export function deleteAutomationAudienceContact(actor: User, contactId: string): { ok: true } {
+  const index = data.audienceContacts.findIndex((contact) => contact.id === contactId);
+  if (index < 0) throw new Error('受众不存在');
+  const [removed] = data.audienceContacts.splice(index, 1);
+  persist();
+  addAutomationAudit({
+    action: 'audience_deleted',
+    actor: actor.username,
+    message: `删除受众「${removed.name}」`,
   });
   return { ok: true };
 }
@@ -1863,6 +2044,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const now = new Date().toISOString();
   const rulesRaw = Array.isArray(raw?.rules) ? raw.rules : [];
   const knowledgeRaw = Array.isArray(raw?.knowledgeItems) ? raw.knowledgeItems : [];
+  const audienceRaw = Array.isArray(raw?.audienceContacts) ? raw.audienceContacts : [];
   const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
   const bridgeWorkersRaw = Array.isArray(raw?.bridgeWorkers) ? raw.bridgeWorkers : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
@@ -1873,6 +2055,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     knowledgeNotes: str(raw?.knowledgeNotes, 50000),
     rules: rulesRaw.slice(0, 200).map((r: any) => normalizeRule(r, preserveIds, now)),
     knowledgeItems: knowledgeRaw.slice(-MAX_KNOWLEDGE_ITEMS).map((item: any) => normalizeKnowledgeItem(item, preserveIds, now)),
+    audienceContacts: audienceRaw.slice(-MAX_AUDIENCE_CONTACTS).map((contact: any) => normalizeAudienceContact(contact, preserveIds, now)),
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
@@ -1935,6 +2118,37 @@ function normalizeKnowledgeItem(raw: any, preserveIds: boolean, now: string): Au
     targetNames,
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+  };
+}
+
+function normalizeAudienceContact(raw: any, preserveIds: boolean, now: string): AutomationAudienceContact {
+  const name = str(
+    (typeof raw === 'string' ? raw : undefined) ??
+      raw?.name ??
+      raw?.displayName ??
+      raw?.recipientName ??
+      raw?.conversationName ??
+      raw?.roomName ??
+      raw?.groupName ??
+      raw?.contactName ??
+      raw?.title,
+    120,
+  ).trim();
+  const type = normalizeAudienceContactType(raw?.type ?? raw?.contactType ?? raw?.category, name);
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    name,
+    type,
+    aliases: normalizeStringList(raw?.aliases ?? raw?.alias ?? raw?.nicknames ?? raw?.remarkNames, 120, 20),
+    tags: normalizeStringList(raw?.tags ?? raw?.labels ?? raw?.groups ?? raw?.segments, 60, 30),
+    source: str(raw?.source || 'manual', 80).trim() || 'manual',
+    note: str(raw?.note ?? raw?.notes ?? raw?.description ?? raw?.memo, 500).trim(),
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : true,
+    approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    createdAt,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+    lastImportedAt: typeof raw?.lastImportedAt === 'string' && raw.lastImportedAt ? raw.lastImportedAt : undefined,
   };
 }
 
@@ -2396,6 +2610,14 @@ function cloneKnowledgeItem(item: AutomationKnowledgeItem): AutomationKnowledgeI
   };
 }
 
+function cloneAudienceContact(contact: AutomationAudienceContact): AutomationAudienceContact {
+  return {
+    ...contact,
+    aliases: [...contact.aliases],
+    tags: [...contact.tags],
+  };
+}
+
 function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
   return { ...event };
 }
@@ -2438,6 +2660,18 @@ function normalizeMassSendJobStatus(value: unknown): MassSendJobStatus | null {
 
 function normalizeMomentDraftStatus(value: unknown): MomentDraftStatus | null {
   return value === 'draft' || value === 'ready' || value === 'prepared' || value === 'published' || value === 'archived' ? value : null;
+}
+
+function normalizeAudienceContactType(value: unknown, name = ''): AutomationAudienceContactType {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (['contact', 'person', 'user', 'friend', '客户', '联系人', '个人'].includes(raw)) return 'contact';
+  if (['group', '群', '客户群', '社群'].includes(raw)) return 'group';
+  if (['room', 'chatroom', 'group-chat', '群聊', '聊天室'].includes(raw)) return 'room';
+  const inferred = String(name || '').trim();
+  if (/群|班|营|社群|交流群|客户群/.test(inferred)) return 'group';
+  return 'unknown';
 }
 
 function normalizeBridgeEventStatus(value: unknown): WecomBridgeEventStatus | null {
@@ -2483,6 +2717,29 @@ function extractKnowledgeImportItems(raw: any, fallbackCategory: AutomationKnowl
   if (parsed && Array.isArray(parsed.items)) return parsed.items;
   if (parsed && typeof parsed === 'object') return [parsed];
   return parseKnowledgeText(rawText, fallbackCategory);
+}
+
+function extractAudienceImportItems(raw: any): any[] {
+  if (Array.isArray(raw)) return raw.map(audienceItemFromRaw);
+  if (Array.isArray(raw?.contacts)) return raw.contacts.map(audienceItemFromRaw);
+  if (Array.isArray(raw?.audiences)) return raw.audiences.map(audienceItemFromRaw);
+  if (Array.isArray(raw?.recipients)) return raw.recipients.map((name: any) => ({ name }));
+  if (Array.isArray(raw?.items)) return raw.items.map(audienceItemFromRaw);
+  const rawText = typeof raw?.rawText === 'string' ? raw.rawText : typeof raw?.text === 'string' ? raw.text : '';
+  if (!rawText.trim()) return [];
+
+  const parsed = tryParseJson(rawText);
+  if (Array.isArray(parsed)) return parsed.map(audienceItemFromRaw);
+  if (parsed && Array.isArray(parsed.contacts)) return parsed.contacts.map(audienceItemFromRaw);
+  if (parsed && Array.isArray(parsed.audiences)) return parsed.audiences.map(audienceItemFromRaw);
+  if (parsed && Array.isArray(parsed.recipients)) return parsed.recipients.map((name: any) => ({ name }));
+  if (parsed && Array.isArray(parsed.items)) return parsed.items.map(audienceItemFromRaw);
+  if (parsed && typeof parsed === 'object') return [parsed];
+  return parseAudienceText(rawText);
+}
+
+function audienceItemFromRaw(item: any): any {
+  return typeof item === 'string' ? { name: item } : item;
 }
 
 function extractBridgeEventItems(raw: any): any[] {
@@ -2534,6 +2791,31 @@ function parseKnowledgeBlock(block: string, fallbackCategory: AutomationKnowledg
     triggers: mapped.triggers || mapped['关键词'] || mapped['触发词'],
     targetNames: mapped.targets || mapped.recipients || mapped['目标'] || mapped['联系人'],
     content: content || block,
+  };
+}
+
+function parseAudienceText(text: string): any[] {
+  return str(text, 120000)
+    .split(/\n/g)
+    .map((line) => line.trim().replace(/^[-*•]\s*/, ''))
+    .filter(Boolean)
+    .slice(0, 1000)
+    .map((line) => parseAudienceLine(line));
+}
+
+function parseAudienceLine(line: string): any {
+  const kindMatch = line.match(/^(contact|person|group|room|联系人|客户|群|群聊|客户群|社群)\s*[:：]\s*(.+)$/i);
+  const kind = kindMatch?.[1];
+  const rest = kindMatch?.[2] || line;
+  const parts = rest
+    .split(/\t|\|/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return {
+    name: parts[0] || rest.trim(),
+    type: kind || undefined,
+    tags: parts[1] || undefined,
+    note: parts.slice(2).join(' · '),
   };
 }
 

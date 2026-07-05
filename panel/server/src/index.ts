@@ -86,6 +86,10 @@ import {
   updateAutomationConfig,
   ingestWecomBridgeEvents,
   importAutomationKnowledge,
+  importAutomationAudience,
+  listAutomationAudience,
+  patchAutomationAudienceContact,
+  deleteAutomationAudienceContact,
   listWecomBridgeWorkers,
   listApprovedWecomBridgeReplies,
   listApprovedWecomBridgeMassTasks,
@@ -123,6 +127,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const STATIC_DIR = process.env.STATIC_DIR || join(__dirname, '../../web/dist');
 const COOKIE = 'woc_sess';
 const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
+const AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT = '/api/automation/bridge/wecom/audience';
 const AUTOMATION_BRIDGE_EVENT_ENDPOINT = '/api/automation/bridge/wecom/events';
 const AUTOMATION_BRIDGE_REPLY_ENDPOINT = '/api/automation/bridge/wecom/replies';
 const AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT = '/api/automation/bridge/wecom/mass-tasks';
@@ -263,6 +268,7 @@ function automationBridgeStatus(req?: FastifyRequest) {
     compatibilityEnvName: 'WECOM_BRIDGE_TOKEN',
     endpoint: AUTOMATION_BRIDGE_ENDPOINT,
     knowledgeEndpoint: AUTOMATION_BRIDGE_ENDPOINT,
+    audienceEndpoint: AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT,
     eventEndpoint: AUTOMATION_BRIDGE_EVENT_ENDPOINT,
     replyEndpoint: AUTOMATION_BRIDGE_REPLY_ENDPOINT,
     massTaskEndpoint: AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT,
@@ -420,6 +426,26 @@ app.post('/api/admin/automation/knowledge/import', async (req, reply) => {
   }
 });
 
+app.get('/api/admin/automation/audience', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return {
+    contacts: listAutomationAudience(Number(query?.limit || 200), String(query?.query || ''), String(query?.tag || '')),
+  };
+});
+
+app.post('/api/admin/automation/audience/import', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = importAutomationAudience(admin, req.body as any);
+    appendPanelLog('INFO', `导入受众资产 by ${admin.username}：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '导入受众资产失败' });
+  }
+});
+
 app.post(AUTOMATION_BRIDGE_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   try {
@@ -431,6 +457,20 @@ app.post(AUTOMATION_BRIDGE_ENDPOINT, async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 导入接入资料失败' });
+  }
+});
+
+app.post(AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const result = importAutomationAudience(AUTOMATION_BRIDGE_USER, {
+      ...(req.body as any),
+      source: (req.body as any)?.source || 'wecom-mac-bridge',
+    });
+    appendPanelLog('INFO', `Bridge 导入受众资产：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 导入受众资产失败' });
   }
 });
 
@@ -548,6 +588,28 @@ app.delete('/api/admin/automation/knowledge/:itemId', async (req, reply) => {
     return deleteAutomationKnowledge(admin, (req.params as any).itemId);
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '删除接入资料失败' });
+  }
+});
+
+app.patch('/api/admin/automation/audience/:contactId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const contact = patchAutomationAudienceContact(admin, (req.params as any).contactId, req.body as any);
+    appendPanelLog('INFO', `更新受众资产「${contact.name}」by ${admin.username}`);
+    return { contact };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新受众资产失败' });
+  }
+});
+
+app.delete('/api/admin/automation/audience/:contactId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    return deleteAutomationAudienceContact(admin, (req.params as any).contactId);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '删除受众资产失败' });
   }
 });
 

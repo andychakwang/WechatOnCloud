@@ -7,6 +7,8 @@ import {
   appProfile,
   type AutomationBridgeStatus,
   type AutomationConfig,
+  type AutomationAudienceContact,
+  type AutomationAudienceContactType,
   type AutomationKnowledgeCategory,
   type AutomationKnowledgeItem,
   type AutomationOverview,
@@ -149,6 +151,13 @@ const KNOWLEDGE_CATEGORY_LABEL: Record<AutomationKnowledgeCategory, string> = {
   other: '其他',
 };
 
+const AUDIENCE_TYPE_LABEL: Record<AutomationAudienceContactType, string> = {
+  contact: '联系人',
+  group: '客户群',
+  room: '群聊',
+  unknown: '未分类',
+};
+
 const AUTOMATION_RISK_LABEL: Record<string, string> = {
   automation_off: '总开关关闭',
   bridge_workers_offline: 'Mac 离线',
@@ -192,6 +201,7 @@ function nextMassTarget(job: MassSendJob): string {
 function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] }) {
   const { toast, confirm } = useUI();
   const [config, setConfig] = useState<AutomationConfig | null>(null);
+  const [audienceContacts, setAudienceContacts] = useState<AutomationAudienceContact[]>([]);
   const [jobs, setJobs] = useState<MassSendJob[]>([]);
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
@@ -233,6 +243,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [knowledgeCategory, setKnowledgeCategory] = useState<AutomationKnowledgeCategory>('faq');
   const [knowledgeApproveImported, setKnowledgeApproveImported] = useState(false);
   const [knowledgeImportText, setKnowledgeImportText] = useState('');
+  const [audienceSource, setAudienceSource] = useState('wecom-mac');
+  const [audienceType, setAudienceType] = useState<AutomationAudienceContactType>('unknown');
+  const [audienceApproveImported, setAudienceApproveImported] = useState(false);
+  const [audienceImportText, setAudienceImportText] = useState('');
 
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
@@ -240,9 +254,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { overview }, { jobs }, { drafts }, { events }, { events: bridgeEvents }] = await Promise.all([
+      const [{ config }, { overview }, { contacts }, { jobs }, { drafts }, { events }, { events: bridgeEvents }] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
+        api.listAutomationAudience(200),
         api.listMassSendJobs(),
         api.listMomentDrafts(),
         api.automationAudit(30),
@@ -251,6 +266,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
       setOverview(overview);
+      setAudienceContacts(contacts);
       setJobs(jobs);
       setDrafts(drafts);
       setAudit(events);
@@ -377,6 +393,71 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (item.targetNames.length === 0) return toast('这条资料没有目标名单', 'error');
     setMassRecipients((current) => linesOf([current, item.targetNames.join('\n')].filter(Boolean).join('\n')).join('\n'));
     toast('已填入群发目标', 'ok');
+  };
+
+  const importAudience = async () => {
+    const rawText = audienceImportText.trim();
+    if (!rawText) return toast('请先粘贴联系人或群聊名单', 'error');
+    setBusy('audience-import');
+    try {
+      const { result } = await api.importAutomationAudience({
+        source: audienceSource.trim() || 'wecom-mac',
+        type: audienceType,
+        approveImported: audienceApproveImported,
+        enabled: true,
+        mode: 'upsert',
+        rawText,
+      });
+      setAudienceImportText('');
+      toast(`受众已导入：新增 ${result.imported}，更新 ${result.updated}`, 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '导入受众失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const patchAudience = async (contact: AutomationAudienceContact, payload: Partial<AutomationAudienceContact>) => {
+    setBusy(`audience-${contact.id}`);
+    try {
+      const { contact: saved } = await api.patchAutomationAudience(contact.id, payload);
+      setAudienceContacts((list) => list.map((item) => (item.id === saved.id ? saved : item)));
+      toast('受众已更新', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新受众失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const removeAudience = async (contact: AutomationAudienceContact) => {
+    const ok = await confirm({
+      title: `删除受众「${contact.name}」？`,
+      body: '删除后不会影响已经创建的群发队列，只会从受众资产池移除。',
+      danger: true,
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    setBusy(`audience-${contact.id}`);
+    try {
+      await api.deleteAutomationAudience(contact.id);
+      setAudienceContacts((list) => list.filter((item) => item.id !== contact.id));
+      toast('受众已删除', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '删除受众失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const useAudienceForMass = (contacts: AutomationAudienceContact[]) => {
+    const names = contacts.map((contact) => contact.name).filter(Boolean);
+    if (names.length === 0) return toast('没有可填入的受众', 'error');
+    setMassRecipients((current) => linesOf([current, names.join('\n')].filter(Boolean).join('\n')).join('\n'));
+    toast(`已填入 ${names.length} 个群发目标`, 'ok');
   };
 
   const useBridgeEventForReply = async (event: WecomBridgeEvent) => {
@@ -797,7 +878,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <span className={'tag ' + (overview.settings.enabled ? 'tag-on' : 'tag-off')}>{overview.settings.enabled ? '已开启' : '已关闭'}</span>
               </div>
               <div className="auto-overview-metric">{overview.knowledge.approved}/{overview.knowledge.total}</div>
-              <div className="muted small">已审核资料 · 规则 {overview.rules.approved}/{overview.rules.total}</div>
+              <div className="muted small">
+                已审核资料 · 受众 {overview.audience.approved}/{overview.audience.total} · 规则 {overview.rules.approved}/{overview.rules.total}
+              </div>
             </div>
             <div className="auto-overview-card">
               <div className="auto-overview-head">
@@ -954,6 +1037,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   资料 <code>{location.origin + bridge.knowledgeEndpoint}</code>
                 </div>
                 <div className="muted small">
+                  受众 <code>{location.origin + bridge.audienceEndpoint}</code>
+                </div>
+                <div className="muted small">
                   消息 <code>{location.origin + bridge.eventEndpoint}</code>
                 </div>
                 <div className="muted small">
@@ -1075,6 +1161,78 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </div>
               ))}
               {knowledgeItems.length === 0 && <div className="muted small">暂无接入资料</div>}
+            </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>受众资产</b>
+              <span className="tag">{audienceContacts.length} 个对象</span>
+            </div>
+            <div className="auto-grid two compact">
+              <input className="input" placeholder="来源，例如 wecom-mac" value={audienceSource} onChange={(e) => setAudienceSource(e.target.value)} />
+              <select className="input" value={audienceType} onChange={(e) => setAudienceType(e.target.value as AutomationAudienceContactType)}>
+                <option value="unknown">自动识别</option>
+                <option value="contact">联系人</option>
+                <option value="group">客户群</option>
+                <option value="room">群聊</option>
+              </select>
+            </div>
+            <textarea
+              className="input textarea"
+              placeholder="一行一个联系人或群聊名。也支持 JSON：contacts/items/recipients 数组。"
+              value={audienceImportText}
+              onChange={(e) => setAudienceImportText(e.target.value)}
+            />
+            <div className="auto-actions inline">
+              <label className="auto-check inline-check">
+                <input type="checkbox" checked={audienceApproveImported} onChange={(e) => setAudienceApproveImported(e.target.checked)} />
+                <span>导入后标记为已审核</span>
+              </label>
+              <button className="btn s-btn" disabled={busy === 'audience-import' || !audienceImportText.trim()} onClick={importAudience}>
+                导入受众
+              </button>
+              <button
+                className="btn-text"
+                disabled={audienceContacts.filter((item) => item.enabled && item.approved).length === 0}
+                onClick={() => useAudienceForMass(audienceContacts.filter((item) => item.enabled && item.approved))}
+              >
+                已审核受众填入群发
+              </button>
+            </div>
+            <div className="auto-list">
+              {audienceContacts.slice(0, 8).map((contact) => (
+                <div key={contact.id} className="auto-list-item">
+                  <div>
+                    <b>{contact.name}</b>
+                    <div className="muted small">
+                      {AUDIENCE_TYPE_LABEL[contact.type]} · {contact.source} · {contact.enabled ? '启用' : '停用'} · {contact.approved ? '已审核' : '未审核'}
+                    </div>
+                    {(contact.tags.length > 0 || contact.aliases.length > 0 || contact.note) && (
+                      <div className="muted small auto-snippet">
+                        {[contact.tags.length ? `标签 ${contact.tags.slice(0, 6).join('、')}` : '', contact.aliases.length ? `别名 ${contact.aliases.slice(0, 4).join('、')}` : '', contact.note]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="auto-actions">
+                    <button className="btn-text" disabled={busy === `audience-${contact.id}`} onClick={() => patchAudience(contact, { approved: !contact.approved })}>
+                      {contact.approved ? '撤审' : '审核'}
+                    </button>
+                    <button className="btn-text" disabled={busy === `audience-${contact.id}`} onClick={() => patchAudience(contact, { enabled: !contact.enabled })}>
+                      {contact.enabled ? '停用' : '启用'}
+                    </button>
+                    <button className="btn-text" onClick={() => useAudienceForMass([contact])}>
+                      群发目标
+                    </button>
+                    <button className="btn-text danger" disabled={busy === `audience-${contact.id}`} onClick={() => removeAudience(contact)}>
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {audienceContacts.length === 0 && <div className="muted small">暂无受众资产</div>}
             </div>
           </section>
 

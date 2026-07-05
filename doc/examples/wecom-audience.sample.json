@@ -1,0 +1,20 @@
+{
+  "source": "wecom-mac",
+  "type": "group",
+  "mode": "upsert",
+  "approveImported": false,
+  "contacts": [
+    {
+      "name": "测试客户群",
+      "aliases": ["测试群"],
+      "tags": ["白名单", "活动提醒"],
+      "note": "用于小范围验证群发队列和朋友圈运营。"
+    },
+    {
+      "name": "张三",
+      "type": "contact",
+      "tags": ["重点客户"],
+      "note": "示例联系人，不会触发自动发送。"
+    }
+  ]
+}

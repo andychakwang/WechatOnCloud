@@ -126,6 +126,31 @@ export interface AutomationKnowledgeImportResult {
   errors: string[];
 }
 
+export type AutomationAudienceContactType = 'contact' | 'group' | 'room' | 'unknown';
+
+export interface AutomationAudienceContact {
+  id: string;
+  name: string;
+  type: AutomationAudienceContactType;
+  aliases: string[];
+  tags: string[];
+  source: string;
+  note: string;
+  enabled: boolean;
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastImportedAt?: string;
+}
+
+export interface AutomationAudienceImportResult {
+  contacts: AutomationAudienceContact[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface WecomBridgeWorkerStatus {
   id: string;
   workerId: string;
@@ -176,6 +201,7 @@ export interface AutomationBridgeStatus {
   compatibilityEnvName: string;
   endpoint: string;
   knowledgeEndpoint: string;
+  audienceEndpoint: string;
   eventEndpoint: string;
   replyEndpoint: string;
   massTaskEndpoint: string;
@@ -236,6 +262,13 @@ export interface AutomationOverview {
     total: number;
     approved: number;
     enabled: number;
+  };
+  audience: {
+    total: number;
+    enabled: number;
+    approved: number;
+    groups: number;
+    contacts: number;
   };
   rules: {
     total: number;
@@ -464,6 +497,36 @@ export const api = {
     req<{ result: AutomationKnowledgeImportResult }>('/api/admin/automation/knowledge/import', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  listAutomationAudience: (limit = 200, query = '', tag = '') =>
+    req<{ contacts: AutomationAudienceContact[] }>(
+      `/api/admin/automation/audience?limit=${encodeURIComponent(limit)}&query=${encodeURIComponent(query)}&tag=${encodeURIComponent(tag)}`,
+    ),
+  importAutomationAudience: (payload: {
+    source?: string;
+    type?: AutomationAudienceContactType;
+    approveImported?: boolean;
+    enabled?: boolean;
+    mode?: 'append' | 'upsert';
+    contacts?: any[];
+    audiences?: any[];
+    recipients?: string[];
+    items?: any[];
+    rawText?: string;
+    text?: string;
+  }) =>
+    req<{ result: AutomationAudienceImportResult }>('/api/admin/automation/audience/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  patchAutomationAudience: (contactId: string, payload: Partial<AutomationAudienceContact>) =>
+    req<{ contact: AutomationAudienceContact }>(`/api/admin/automation/audience/${contactId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteAutomationAudience: (contactId: string) =>
+    req<{ ok: true }>(`/api/admin/automation/audience/${contactId}`, {
+      method: 'DELETE',
     }),
   patchAutomationKnowledge: (itemId: string, payload: Partial<AutomationKnowledgeItem>) =>
     req<{ item: AutomationKnowledgeItem }>(`/api/admin/automation/knowledge/${itemId}`, {

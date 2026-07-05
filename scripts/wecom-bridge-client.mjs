@@ -15,6 +15,7 @@ Environment:
 
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
+  import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   pull-replies [--limit 50]
@@ -39,6 +40,7 @@ Commands:
 
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
+  node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
@@ -171,6 +173,19 @@ function normalizeKnowledgePayload(input, options) {
   return { source, category, mode, approveImported, items: [input] };
 }
 
+function normalizeAudiencePayload(input, options) {
+  const source = String(options.source || input?.source || DEFAULT_SOURCE);
+  const type = String(options.type || input?.type || 'unknown');
+  const mode = String(options.mode || input?.mode || 'upsert');
+  const approveImported = boolOpt(options, 'approve-imported', 'approve') || input?.approveImported === true;
+  if (Array.isArray(input)) return { source, type, mode, approveImported, contacts: input };
+  if (Array.isArray(input?.contacts)) return { ...input, source, type: input.type || type, mode, approveImported };
+  if (Array.isArray(input?.audiences)) return { ...input, source, type: input.type || type, mode, approveImported };
+  if (Array.isArray(input?.recipients)) return { ...input, source, type: input.type || type, mode, approveImported };
+  if (Array.isArray(input?.items)) return { ...input, source, type: input.type || type, mode, approveImported };
+  return { source, type, mode, approveImported, contacts: [input] };
+}
+
 function normalizeEventPayload(input, options) {
   const source = String(options.source || input?.source || DEFAULT_SOURCE);
   if (Array.isArray(input)) return { source, events: input };
@@ -254,6 +269,13 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeKnowledgePayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/import', payload));
+    return;
+  }
+
+  if (command === 'import-audience') {
+    const input = await readJsonInput(positional[0] || options.file || '-');
+    const payload = normalizeAudiencePayload(input, options);
+    printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/audience', payload));
     return;
   }
 

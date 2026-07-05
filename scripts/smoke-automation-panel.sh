@@ -240,6 +240,7 @@ json_assert_path config.settings
 request_json GET /api/admin/automation/overview
 json_assert_path overview.generatedAt
 json_assert_path overview.settings
+json_assert_path overview.audience.total
 json_assert_path overview.bridge.pendingReplies
 json_assert_path overview.mass.itemsPending
 json_assert_path overview.moments.draftsTotal
@@ -247,6 +248,7 @@ request_json GET /api/admin/automation/bridge
 json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.commands.writeEnv
 json_assert_path bridge.runnerGuide.commands.dryRunAll
+json_assert_path bridge.audienceEndpoint
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -287,6 +289,37 @@ json_assert_path item.approved
 request_json DELETE "/api/admin/automation/knowledge/$knowledge_id"
 json_assert_path ok
 
+say "Import and remove automation audience contact"
+audience_name="Smoke Audience $stamp"
+audience_payload="$(python3 - "$audience_name" <<'PY'
+import json
+import sys
+
+name = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-mac",
+    "type": "group",
+    "approveImported": False,
+    "mode": "upsert",
+    "contacts": [{
+        "name": name,
+        "tags": ["smoke", "群发测试"],
+        "aliases": [name + " alias"],
+        "note": "这是一条受众资产 smoke 测试，不会用于真实发送。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/audience/import "$audience_payload"
+json_assert_path result.contacts[0].id
+audience_id="$(json_get result.contacts[0].id)"
+request_json GET /api/admin/automation/audience
+json_assert_path contacts[0].id
+request_json PATCH "/api/admin/automation/audience/$audience_id" '{"approved":true,"enabled":true}'
+json_assert_path contact.approved
+request_json DELETE "/api/admin/automation/audience/$audience_id"
+json_assert_path ok
+
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
   say "Check WeCom Mac handler dry-run"
   WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" < "$ROOT/doc/examples/wecom-bridge-reply.sample.json" > "$body_file"
@@ -317,6 +350,27 @@ PY
   json_assert_path result.items[0].id
   bridge_id="$(json_get result.items[0].id)"
   request_json DELETE "/api/admin/automation/knowledge/$bridge_id"
+  json_assert_path ok
+
+  say "Import audience through Bridge"
+  bridge_audience_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "type": "group",
+    "approveImported": False,
+    "mode": "upsert",
+    "contacts": [{"name": f"Smoke Bridge Audience {stamp}", "tags": ["bridge"], "note": "Bridge audience smoke"}],
+}, ensure_ascii=False))
+PY
+)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-audience - <<<"$bridge_audience_payload" > "$body_file"
+  json_assert_path result.contacts[0].id
+  bridge_audience_id="$(json_get result.contacts[0].id)"
+  request_json DELETE "/api/admin/automation/audience/$bridge_audience_id"
   json_assert_path ok
 
   say "Report WeCom Bridge worker heartbeat"
