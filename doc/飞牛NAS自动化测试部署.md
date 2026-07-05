@@ -13,6 +13,28 @@
 - 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r79-2026-07-06`
 - 本版新增：Web「Mac Runner 接入」会生成完整 bootstrap 脚本，帮助新 Mac Runner 拉取 `andy/automation-lab`、写入本机 env 模板、同步 doctor/run-once 入口，便于把企业微信自动化 Mac 工具接入 SaaS 面板。
 
+## 2026-07-06 R79 更新验收
+
+- GitHub Actions release run `28757986372` 已成功构建并推送 panel / wechat 双镜像。
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板已通过飞牛 Docker socket helper 更新，公网入口返回 `200`。
+- 飞牛 Docker 容器详情已验证 `woc-panel-automation-test` 使用镜像：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r79-2026-07-06
+  ```
+
+- 一次性 helper 容器 `woc-updater-...` 已在更新完成后删除。
+- 本次公网入口检查：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  http://nasbot.cloud:36081/api/auth/me -> 401 {"error":"未登录"}
+  ```
+
+  其中 `/api/auth/me` 返回 401 属于未登录预期响应，说明后端 API 正常响应。
+
 ## 2026-07-06 R78 更新验收
 
 - `36080` 原版面板保持不变，公网入口仍返回 `200`。
