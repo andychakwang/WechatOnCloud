@@ -102,6 +102,7 @@ import {
   listWecomBridgeRunReports,
   getWecomBridgeRunnerPolicy,
   updateWecomBridgeRunnerPolicy,
+  recoverAutomationBridgeOutbox,
   listApprovedWecomBridgeReplies,
   listApprovedWecomBridgeMassTasks,
   listApprovedWecomBridgeMomentTasks,
@@ -482,6 +483,21 @@ app.put('/api/admin/automation/runner-policy', async (req, reply) => {
     return { policy };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '更新 Mac Runner 策略失败' });
+  }
+});
+
+app.post('/api/admin/automation/bridge-recovery', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = recoverAutomationBridgeOutbox(admin, req.body as any);
+    appendPanelLog(
+      'INFO',
+      `${result.dryRun ? '预览' : '恢复'} Bridge 出箱 by ${admin.username}：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims}，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed}`,
+    );
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '恢复 Bridge 出箱失败' });
   }
 });
 

@@ -178,6 +178,7 @@ export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
+export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 
 export interface WecomBridgeRunReportItem {
   id: string;
@@ -213,6 +214,26 @@ export interface WecomBridgeRunReport {
   items: WecomBridgeRunReportItem[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AutomationBridgeRecoveryChange {
+  target: 'reply' | 'mass' | 'moment';
+  id: string;
+  name?: string;
+  action: 'release-claim' | 'retry-failed';
+  reason?: string;
+}
+
+export interface AutomationBridgeRecoveryResult {
+  generatedAt: string;
+  dryRun: boolean;
+  releaseClaims: BridgeRecoveryReleaseMode;
+  retryFailed: boolean;
+  replies: { releasedClaims: number; retriedFailed: number };
+  mass: { releasedClaims: number; retriedFailed: number; resumedJobs: number };
+  moments: { releasedClaims: number; retriedFailed: number };
+  totalChanged: number;
+  changes: AutomationBridgeRecoveryChange[];
 }
 
 export interface WecomBridgeRunnerPolicy {
@@ -1547,6 +1568,183 @@ export function patchWecomBridgeReplyDelivery(actor: User, eventId: string, raw:
 
 export function markWecomBridgeReplyDelivered(actor: User, eventId: string): WecomBridgeEvent {
   return patchWecomBridgeEvent(actor, eventId, { markDelivered: true });
+}
+
+export function recoverAutomationBridgeOutbox(actor: User, raw: any): AutomationBridgeRecoveryResult {
+  const payload = raw && typeof raw === 'object' ? raw : {};
+  const now = new Date().toISOString();
+  const dryRun = payload.dryRun === true;
+  const releaseClaims = normalizeBridgeRecoveryReleaseMode(payload.releaseClaims ?? payload.claims) || 'expired';
+  const retryFailed = payload.retryFailed !== false;
+  const includeReplies = payload.includeReplies !== false;
+  const includeMass = payload.includeMass !== false;
+  const includeMoments = payload.includeMoments !== false;
+  const limit = clampInt(payload.limit, 1, 2000, 500);
+  const result: AutomationBridgeRecoveryResult = {
+    generatedAt: now,
+    dryRun,
+    releaseClaims,
+    retryFailed,
+    replies: { releasedClaims: 0, retriedFailed: 0 },
+    mass: { releasedClaims: 0, retriedFailed: 0, resumedJobs: 0 },
+    moments: { releasedClaims: 0, retriedFailed: 0 },
+    totalChanged: 0,
+    changes: [],
+  };
+  const resumedJobIds = new Set<string>();
+  const canChange = () => result.changes.length < limit;
+  const record = (change: AutomationBridgeRecoveryChange): boolean => {
+    if (!canChange()) return false;
+    result.changes.push(change);
+    return true;
+  };
+  const shouldReleaseReplyClaim = (event: WecomBridgeEvent) => {
+    if (releaseClaims === 'none' || !event.replyClaimedAt) return false;
+    return releaseClaims === 'all' || isBridgeReplyClaimExpired(event, now);
+  };
+  const shouldReleaseMassClaim = (item: MassSendItem) => {
+    if (releaseClaims === 'none' || !item.bridgeClaimedAt) return false;
+    return releaseClaims === 'all' || isMassItemBridgeClaimExpired(item, now);
+  };
+  const shouldReleaseMomentClaim = (draft: MomentDraft) => {
+    if (releaseClaims === 'none' || !draft.bridgeClaimedAt) return false;
+    return releaseClaims === 'all' || isMomentDraftBridgeClaimExpired(draft, now);
+  };
+  let changed = false;
+
+  if (includeReplies) {
+    for (const event of data.bridgeEvents) {
+      if (!canChange()) break;
+      if (event.status === 'archived' || !event.replyApproved || !hasRunnableBridgeReply(event) || event.replyDeliveredAt) continue;
+      if (shouldReleaseReplyClaim(event)) {
+        const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
+        if (!record({ target: 'reply', id: event.id, name: event.conversationName || event.senderName, action: 'release-claim', reason })) break;
+        result.replies.releasedClaims += 1;
+        if (!dryRun) {
+          event.replyClaimedAt = undefined;
+          event.replyClaimedBy = undefined;
+          event.replyClaimExpiresAt = undefined;
+          event.updatedAt = now;
+        }
+        changed = true;
+      }
+      if (!canChange()) break;
+      if (retryFailed && event.replyFailedAt) {
+        if (
+          !record({
+            target: 'reply',
+            id: event.id,
+            name: event.conversationName || event.senderName,
+            action: 'retry-failed',
+            reason: 'failed_retry',
+          })
+        ) {
+          break;
+        }
+        result.replies.retriedFailed += 1;
+        if (!dryRun) {
+          event.replyFailedAt = undefined;
+          event.replyError = undefined;
+          event.replyClaimedAt = undefined;
+          event.replyClaimedBy = undefined;
+          event.replyClaimExpiresAt = undefined;
+          event.updatedAt = now;
+        }
+        changed = true;
+      }
+    }
+  }
+
+  if (includeMass) {
+    for (const job of data.massSendJobs) {
+      if (!canChange()) break;
+      if (!job.approved || job.status === 'draft' || job.status === 'completed' || job.status === 'cancelled') continue;
+      let jobChanged = false;
+      for (const item of job.items) {
+        if (!canChange()) break;
+        if (item.status === 'pending' && shouldReleaseMassClaim(item)) {
+          const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
+          if (!record({ target: 'mass', id: `${job.id}:${item.id}`, name: item.recipientName, action: 'release-claim', reason })) break;
+          result.mass.releasedClaims += 1;
+          if (!dryRun) {
+            item.bridgeClaimedAt = undefined;
+            item.bridgeClaimedBy = undefined;
+            item.bridgeClaimExpiresAt = undefined;
+            item.error = undefined;
+          }
+          jobChanged = true;
+          changed = true;
+        }
+        if (!canChange()) break;
+        if (retryFailed && item.status === 'failed') {
+          if (!record({ target: 'mass', id: `${job.id}:${item.id}`, name: item.recipientName, action: 'retry-failed', reason: 'failed_retry' })) break;
+          result.mass.retriedFailed += 1;
+          if (!resumedJobIds.has(job.id) && job.status === 'paused') {
+            resumedJobIds.add(job.id);
+            result.mass.resumedJobs += 1;
+          }
+          if (!dryRun) {
+            item.status = 'pending';
+            item.error = undefined;
+            item.sentAt = undefined;
+            item.auditEventId = undefined;
+            item.bridgeClaimedAt = undefined;
+            item.bridgeClaimedBy = undefined;
+            item.bridgeClaimExpiresAt = undefined;
+            if (job.status === 'paused') job.status = 'queued';
+          }
+          jobChanged = true;
+          changed = true;
+        }
+      }
+      if (jobChanged && !dryRun) {
+        job.updatedAt = now;
+        refreshMassJobCompletion(job);
+      }
+    }
+  }
+
+  if (includeMoments) {
+    for (const draft of data.momentDrafts) {
+      if (!canChange()) break;
+      if (draft.status === 'published' || draft.status === 'archived') continue;
+      if (shouldReleaseMomentClaim(draft)) {
+        const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
+        if (!record({ target: 'moment', id: draft.id, name: draft.title, action: 'release-claim', reason })) break;
+        result.moments.releasedClaims += 1;
+        if (!dryRun) {
+          clearMomentBridgeClaim(draft);
+          draft.updatedAt = now;
+        }
+        changed = true;
+      }
+      if (!canChange()) break;
+      if (retryFailed && draft.bridgeFailedAt) {
+        if (!record({ target: 'moment', id: draft.id, name: draft.title, action: 'retry-failed', reason: 'failed_retry' })) break;
+        result.moments.retriedFailed += 1;
+        if (!dryRun) {
+          draft.status = 'ready';
+          draft.approved = true;
+          draft.bridgeFailedAt = undefined;
+          draft.bridgeError = undefined;
+          clearMomentBridgeClaim(draft);
+          draft.updatedAt = now;
+        }
+        changed = true;
+      }
+    }
+  }
+
+  result.totalChanged = result.changes.length;
+  if (changed && !dryRun) {
+    persist();
+    addAutomationAudit({
+      action: 'bridge_outbox_recovered',
+      actor: actor.username,
+      message: `恢复 Bridge 出箱：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims} 个领取，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed} 个失败项`,
+    });
+  }
+  return result;
 }
 
 export function importAutomationKnowledge(actor: User, raw: any): AutomationKnowledgeImportResult {
@@ -3781,6 +3979,14 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function normalizeBridgeRecoveryReleaseMode(value: unknown): BridgeRecoveryReleaseMode | null {
+  if (value === false || value === 'false') return 'none';
+  if (value === true || value === 'true') return 'expired';
+  const v = str(value, 20).trim().toLowerCase();
+  if (v === 'none' || v === 'expired' || v === 'all') return v;
+  return null;
 }
 
 function claimExpiresAt(nowIso: string, rawTtlSeconds: unknown): string {

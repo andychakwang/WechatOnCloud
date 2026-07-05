@@ -478,6 +478,27 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const recoverBridgeOutbox = async () => {
+    const ok = await confirm({
+      title: '恢复 Bridge 出箱？',
+      body: '会释放已超时领取，并把失败的 AI 回复、群发目标和朋友圈草稿放回待处理队列；不会直接发送内容。',
+      confirmText: '恢复',
+    });
+    if (!ok) return;
+    setBusy('bridge-recovery');
+    try {
+      const { result } = await api.recoverAutomationBridgeOutbox({ releaseClaims: 'expired', retryFailed: true });
+      const released = result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims;
+      const retried = result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed;
+      toast(`Bridge 出箱已恢复：释放 ${released}，重试 ${retried}`, 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '恢复 Bridge 出箱失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const importKnowledge = async () => {
     const rawText = knowledgeImportText.trim();
     if (!rawText) return toast('请先粘贴要导入的资料', 'error');
@@ -1426,9 +1447,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           {BRIDGE_RUNNER_TARGET_LABEL[runnerPolicy.target]} · {BRIDGE_RUNNER_MODE_LABEL[runnerPolicy.mode]} · 每轮 {runnerPolicy.limit}
                         </div>
                       </div>
-                      <button className="btn-text" disabled={busy === 'runner-policy'} onClick={saveRunnerPolicy}>
-                        保存策略
-                      </button>
+                      <div className="auto-actions inline">
+                        <button className="btn-text" disabled={busy === 'bridge-recovery'} onClick={recoverBridgeOutbox}>
+                          恢复出箱
+                        </button>
+                        <button className="btn-text" disabled={busy === 'runner-policy'} onClick={saveRunnerPolicy}>
+                          保存策略
+                        </button>
+                      </div>
                     </div>
                     <div className="auto-grid three compact">
                       <label>

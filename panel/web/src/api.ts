@@ -205,6 +205,7 @@ export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
+export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 
 export interface WecomBridgeRunReportItem {
   id: string;
@@ -240,6 +241,26 @@ export interface WecomBridgeRunReport {
   items: WecomBridgeRunReportItem[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AutomationBridgeRecoveryChange {
+  target: 'reply' | 'mass' | 'moment';
+  id: string;
+  name?: string;
+  action: 'release-claim' | 'retry-failed';
+  reason?: string;
+}
+
+export interface AutomationBridgeRecoveryResult {
+  generatedAt: string;
+  dryRun: boolean;
+  releaseClaims: BridgeRecoveryReleaseMode;
+  retryFailed: boolean;
+  replies: { releasedClaims: number; retriedFailed: number };
+  mass: { releasedClaims: number; retriedFailed: number; resumedJobs: number };
+  moments: { releasedClaims: number; retriedFailed: number };
+  totalChanged: number;
+  changes: AutomationBridgeRecoveryChange[];
 }
 
 export interface WecomBridgeRunnerPolicy {
@@ -661,6 +682,19 @@ export const api = {
     req<{ policy: WecomBridgeRunnerPolicy }>('/api/admin/automation/runner-policy', {
       method: 'PUT',
       body: JSON.stringify(policy),
+    }),
+  recoverAutomationBridgeOutbox: (payload: {
+    dryRun?: boolean;
+    releaseClaims?: BridgeRecoveryReleaseMode | boolean;
+    retryFailed?: boolean;
+    includeReplies?: boolean;
+    includeMass?: boolean;
+    includeMoments?: boolean;
+    limit?: number;
+  }) =>
+    req<{ result: AutomationBridgeRecoveryResult }>('/api/admin/automation/bridge-recovery', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
   patchWecomBridgeEvent: (
     eventId: string,

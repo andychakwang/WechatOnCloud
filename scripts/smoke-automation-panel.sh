@@ -725,6 +725,12 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-failed "$bridge_event_id" --error "smoke handler failed once" > "$body_file"
   json_assert_path event.replyFailedAt
   json_assert_path event.replyError
+  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false}'
+  json_assert_eq result.replies.retriedFailed 1
+  json_assert_eq result.changes[0].target reply
+  json_assert_eq result.changes[0].action retry-failed
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
+  json_assert_reply_id "$bridge_event_id"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-delivered "$bridge_event_id" --worker-id smoke-worker > "$body_file"
   json_assert_path event.replyDeliveredAt
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
@@ -854,6 +860,15 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-mass-failed "$bridge_mass_task_id" --worker-id smoke-worker --error "smoke mass handler failed once" > "$body_file"
   json_assert_eq item.status failed
   json_assert_eq job.status paused
+  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeReplies":false,"includeMoments":false}'
+  json_assert_eq result.mass.retriedFailed 1
+  json_assert_eq result.mass.resumedJobs 1
+  json_assert_eq result.changes[0].target mass
+  json_assert_eq result.changes[0].action retry-failed
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 20 > "$body_file"
+  json_assert_task_id "$bridge_mass_task_id"
+  request_json PATCH "/api/admin/automation/mass-jobs/$bridge_mass_job_id" '{"status":"cancelled","approved":false}'
+  json_assert_eq job.status cancelled
 
   bridge_mass_sent_payload="$(python3 - "$bridge_mass_title" <<'PY'
 import json
@@ -924,6 +939,14 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-moment-failed "$bridge_moment_task_id" --worker-id smoke-worker --error "smoke moment handler failed once" > "$body_file"
   json_assert_eq draft.status draft
   json_assert_eq draft.approved False
+  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeReplies":false,"includeMass":false}'
+  json_assert_eq result.moments.retriedFailed 1
+  json_assert_eq result.changes[0].target moment
+  json_assert_eq result.changes[0].action retry-failed
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 20 > "$body_file"
+  json_assert_task_id "$bridge_moment_task_id"
+  request_json PATCH "/api/admin/automation/moment-drafts/$bridge_moment_draft_id" '{"status":"archived","approved":false}'
+  json_assert_eq draft.status archived
 
   bridge_moment_prepare_payload="$(python3 - "$bridge_moment_title" <<'PY'
 import json
