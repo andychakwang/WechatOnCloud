@@ -1221,6 +1221,16 @@ button {
 .auto-action-queue-head {
   justify-content: space-between;
 }
+.auto-action-queue-tools {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px 10px;
+  max-width: 360px;
+  text-align: right;
+}
 .auto-action-queue-head b,
 .auto-action-queue-item b {
   font-size: 13px;
@@ -1569,6 +1579,11 @@ button {
   .auto-action-queue-head,
   .auto-action-queue-item {
     flex-direction: column;
+  }
+  .auto-action-queue-tools {
+    justify-content: flex-start;
+    max-width: none;
+    text-align: left;
   }
   .auto-action-tags {
     flex-direction: row;

@@ -307,6 +307,34 @@ function actionQueuePriorityClass(priority: string): string {
   return 'tag-on';
 }
 
+function actionQueueRpaTarget(queue: AutomationActionQueue): {
+  target: WecomRpaPackageTarget;
+  total: number;
+  replies: number;
+  mass: number;
+  moments: number;
+  label: string;
+} {
+  const replies = queue.items.filter((item) => item.target === 'reply').length;
+  const mass = queue.items.filter((item) => item.target === 'mass').length;
+  const moments = queue.items.filter((item) => item.target === 'moment').length;
+  const total = replies + mass + moments;
+  const active = [
+    { target: 'replies' as const, count: replies, label: 'AI 回复' },
+    { target: 'mass' as const, count: mass, label: '群发' },
+    { target: 'moments' as const, count: moments, label: '朋友圈' },
+  ].filter((item) => item.count > 0);
+  const target = active.length === 1 ? active[0].target : 'all';
+  return {
+    target,
+    total,
+    replies,
+    mass,
+    moments,
+    label: active.length === 1 ? active[0].label : '全队列',
+  };
+}
+
 function linesOf(text: string): string[] {
   return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
 }
@@ -560,6 +588,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const approvedKnowledgeCount = knowledgeItems.filter((item) => item.enabled && item.approved).length;
   const bridgeGuide = bridge?.runnerGuide;
   const bridgeWorkerOptions = Array.from(new Map((bridge?.workers || []).map((worker) => [worker.workerId, worker])).values());
+  const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue) : null;
   const copyBridgeText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -633,11 +662,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (download) params.set('download', '1');
     return params.toString();
   };
-  const previewWecomRpaPackage = async () => {
+  const previewWecomRpaPackage = async (targetOverride?: WecomRpaPackageTarget) => {
+    const target = targetOverride || rpaPackageTarget;
     setBusy('rpa-package');
     try {
       const { package: pkg } = await api.exportWecomRpaPackage({
-        target: rpaPackageTarget,
+        target,
         limit: wecomRpaPackageLimit(),
         format: 'json',
         includeSource: rpaPackageIncludeSource,
@@ -649,6 +679,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     } finally {
       setBusy('');
     }
+  };
+  const previewActionQueueRpaPackage = async () => {
+    if (!actionQueueRpa || actionQueueRpa.total <= 0) {
+      toast('当前队列没有可交给 RPA 包的任务', 'error');
+      return;
+    }
+    setRpaPackageTarget(actionQueueRpa.target);
+    await previewWecomRpaPackage(actionQueueRpa.target);
   };
   const downloadWecomRpaPackage = (format: WecomRpaPackageFormat) => {
     window.open(`/api/admin/automation/rpa-package?${wecomRpaPackageQuery(format, true)}`, '_blank', 'noopener,noreferrer');
@@ -1545,6 +1583,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <span className="tag tag-warn">高优先 {actionQueue.summary.high}</span>
                 <span className="tag tag-on">普通 {actionQueue.summary.normal}</span>
               </div>
+              <div className="auto-action-queue-tools">
+                <span className="muted small">
+                  RPA {actionQueueRpa?.total || 0} · 回复 {actionQueueRpa?.replies || 0} · 群发 {actionQueueRpa?.mass || 0} · 朋友圈 {actionQueueRpa?.moments || 0}
+                </span>
+                <button className="btn-text" disabled={busy === 'rpa-package' || !actionQueueRpa?.total} onClick={previewActionQueueRpaPackage}>
+                  生成 {actionQueueRpa?.label || '全队列'}包
+                </button>
+              </div>
             </div>
             <div className="auto-action-queue-list">
               {actionQueue.items.slice(0, 8).map((item) => (
@@ -1885,7 +1931,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       </div>
                     </div>
                     <div className="auto-actions inline">
-                      <button className="btn-text" disabled={busy === 'rpa-package'} onClick={previewWecomRpaPackage}>
+                      <button className="btn-text" disabled={busy === 'rpa-package'} onClick={() => previewWecomRpaPackage()}>
                         预览
                       </button>
                       <button className="btn-text" onClick={() => downloadWecomRpaPackage('json')}>
