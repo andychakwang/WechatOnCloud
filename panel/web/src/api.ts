@@ -252,6 +252,8 @@ export interface AutomationBridgeRecoveryChange {
   workerId?: string;
   error?: string;
   failedAt?: string;
+  retryCount?: number;
+  nextRetryCount?: number;
   cursor?: string;
 }
 
@@ -263,6 +265,7 @@ export interface AutomationBridgeRecoveryResult {
   workerId?: string;
   failureReason?: string;
   minFailedAgeSeconds: number;
+  maxRetryAttempts: number;
   cursor?: string;
   nextCursor?: string;
   hasMore: boolean;
@@ -356,6 +359,7 @@ export interface WecomBridgeEvent {
   replyFailedAt?: string;
   replyFailedBy?: string;
   replyError?: string;
+  replyRetryCount?: number;
   replyDeliveredAt?: string;
 }
 
@@ -568,6 +572,7 @@ export interface MassSendItem {
   bridgeClaimExpiresAt?: string;
   bridgeFailedAt?: string;
   bridgeFailedBy?: string;
+  bridgeRetryCount?: number;
 }
 
 export interface MassSendJob {
@@ -615,6 +620,7 @@ export interface MomentDraft {
   bridgeFailedAt?: string;
   bridgeFailedBy?: string;
   bridgeError?: string;
+  bridgeRetryCount?: number;
 }
 
 // 原始二进制上传（File 直传 application/octet-stream），用于数据卷上传/解压/恢复
@@ -711,6 +717,7 @@ export const api = {
     workerId?: string;
     failureReason?: string;
     minFailedAgeSeconds?: number;
+    maxRetryAttempts?: number;
     cursor?: string;
     limit?: number;
   }) =>

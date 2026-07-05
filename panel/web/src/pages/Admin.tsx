@@ -364,6 +364,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [recoveryWorkerId, setRecoveryWorkerId] = useState('');
   const [recoveryFailureReason, setRecoveryFailureReason] = useState('');
   const [recoveryMinFailedAge, setRecoveryMinFailedAge] = useState('0');
+  const [recoveryMaxRetryAttempts, setRecoveryMaxRetryAttempts] = useState('0');
   const [recoveryCursor, setRecoveryCursor] = useState('');
   const [recoveryLimit, setRecoveryLimit] = useState('500');
   const [recoveryPreview, setRecoveryPreview] = useState<AutomationBridgeRecoveryResult | null>(null);
@@ -520,6 +521,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!Number.isFinite(parsed)) return 0;
     return Math.max(0, Math.min(7 * 24 * 60 * 60, parsed));
   };
+  const bridgeRecoveryMaxRetryAttempts = () => {
+    const parsed = Number.parseInt(recoveryMaxRetryAttempts, 10);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.max(0, Math.min(100, parsed));
+  };
 
   const bridgeRecoveryPayload = (dryRun: boolean, cursorOverride?: string) => {
     const cursor = (cursorOverride ?? recoveryCursor).trim();
@@ -533,6 +539,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       workerId: recoveryWorkerId.trim() || undefined,
       failureReason: recoveryFailureReason.trim() || undefined,
       minFailedAgeSeconds: bridgeRecoveryMinFailedAge(),
+      maxRetryAttempts: bridgeRecoveryMaxRetryAttempts(),
       cursor: cursor || undefined,
       limit: bridgeRecoveryLimit(),
     };
@@ -563,10 +570,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     const workerText = recoveryWorkerId.trim() || '全部 worker';
     const reasonText = recoveryFailureReason.trim() || '全部失败原因';
     const cooldownText = bridgeRecoveryMinFailedAge() > 0 ? `失败冷却 ${bridgeRecoveryMinFailedAge()} 秒` : '不设失败冷却';
+    const retryLimitText = bridgeRecoveryMaxRetryAttempts() > 0 ? `最多重试 ${bridgeRecoveryMaxRetryAttempts()} 次` : '不限制重试次数';
     const cursorText = recoveryCursor.trim() ? '从游标继续' : '从头扫描';
     const ok = await confirm({
       title: '恢复 Bridge 出箱？',
-      body: `范围：${scopes.join('、') || '未选择'}；Worker：${workerText}；领取：${releaseText}；失败项：${recoveryRetryFailed ? `重试，${reasonText}，${cooldownText}` : '不处理'}；${cursorText}；每批 ${bridgeRecoveryLimit()}。不会直接发送内容。`,
+      body: `范围：${scopes.join('、') || '未选择'}；Worker：${workerText}；领取：${releaseText}；失败项：${recoveryRetryFailed ? `重试，${reasonText}，${cooldownText}，${retryLimitText}` : '不处理'}；${cursorText}；每批 ${bridgeRecoveryLimit()}。不会直接发送内容。`,
       confirmText: '恢复',
     });
     if (!ok) return;
@@ -1625,7 +1633,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       <b>Bridge 出箱恢复</b>
                       <div className="muted small">
                         {recoveryPreview
-                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${recoveryPreview.workerId || '全部 worker'} · 冷却 ${recoveryPreview.minFailedAgeSeconds}s · 每批 ${recoveryPreview.limit} · ${bridgeRecoveryCount(recoveryPreview).total} 项${recoveryPreview.hasMore ? ' · 还有下一批' : ''}`
+                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${recoveryPreview.workerId || '全部 worker'} · 冷却 ${recoveryPreview.minFailedAgeSeconds}s · 重试 ${recoveryPreview.maxRetryAttempts || '不限'} · 每批 ${recoveryPreview.limit} · ${bridgeRecoveryCount(recoveryPreview).total} 项${recoveryPreview.hasMore ? ' · 还有下一批' : ''}`
                           : '待预览'}
                       </div>
                     </div>
@@ -1678,6 +1686,19 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         value={recoveryMinFailedAge}
                         onChange={(e) => setRecoveryMinFailedAge(e.target.value)}
                         placeholder="秒"
+                      />
+                    </label>
+                    <label>
+                      <span className="field-label">重试上限</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={recoveryMaxRetryAttempts}
+                        onChange={(e) => setRecoveryMaxRetryAttempts(e.target.value)}
+                        placeholder="0=不限"
                       />
                     </label>
                     <label>
@@ -1736,6 +1757,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             </div>
                             {change.error && <div className="muted small">失败：{change.error}</div>}
                             {change.failedAt && <div className="muted small">失败时间：{change.failedAt}</div>}
+                            {change.retryCount !== undefined && (
+                              <div className="muted small">
+                                重试：当前 {change.retryCount} 次{change.nextRetryCount !== undefined ? `，恢复后 ${change.nextRetryCount} 次` : ''}
+                              </div>
+                            )}
                             {change.cursor && <div className="muted small">游标：{change.cursor}</div>}
                           </div>
                           <span className="tag tag-warn">{recoveryPreview.dryRun ? '预览' : '已处理'}</span>

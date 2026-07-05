@@ -147,6 +147,7 @@ export interface WecomBridgeEvent {
   replyFailedAt?: string;
   replyFailedBy?: string;
   replyError?: string;
+  replyRetryCount?: number;
   replyDeliveredAt?: string;
 }
 
@@ -226,6 +227,8 @@ export interface AutomationBridgeRecoveryChange {
   workerId?: string;
   error?: string;
   failedAt?: string;
+  retryCount?: number;
+  nextRetryCount?: number;
   cursor?: string;
 }
 
@@ -237,6 +240,7 @@ export interface AutomationBridgeRecoveryResult {
   workerId?: string;
   failureReason?: string;
   minFailedAgeSeconds: number;
+  maxRetryAttempts: number;
   cursor?: string;
   nextCursor?: string;
   hasMore: boolean;
@@ -433,6 +437,7 @@ export interface MassSendItem {
   bridgeClaimExpiresAt?: string;
   bridgeFailedAt?: string;
   bridgeFailedBy?: string;
+  bridgeRetryCount?: number;
 }
 
 export interface MassSendJobOptions {
@@ -491,6 +496,7 @@ export interface MomentDraft {
   bridgeFailedAt?: string;
   bridgeFailedBy?: string;
   bridgeError?: string;
+  bridgeRetryCount?: number;
 }
 
 export interface WecomBridgeMomentTask {
@@ -1436,6 +1442,7 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
           replyFailedAt: existing.replyFailedAt,
           replyFailedBy: existing.replyFailedBy,
           replyError: existing.replyError,
+          replyRetryCount: existing.replyRetryCount,
           replyDeliveredAt: existing.replyDeliveredAt,
         };
         data.bridgeEvents[existingIndex] = saved;
@@ -1547,6 +1554,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     event.replyFailedAt = undefined;
     event.replyFailedBy = undefined;
     event.replyError = undefined;
+    event.replyRetryCount = undefined;
     event.replyDeliveredAt = now;
   }
   event.updatedAt = now;
@@ -1612,6 +1620,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     7 * 24 * 60 * 60,
     0,
   );
+  const maxRetryAttempts = clampInt(payload.maxRetryAttempts ?? payload.maxRetries ?? payload.retryLimit ?? payload.retryAttemptsLimit, 0, 100, 0);
   const cursorFilter = str(payload.cursor ?? payload.after ?? payload.afterCursor ?? '', 300).trim();
   const result: AutomationBridgeRecoveryResult = {
     generatedAt: now,
@@ -1621,6 +1630,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     workerId: workerIdFilter || undefined,
     failureReason: failureReasonFilter || undefined,
     minFailedAgeSeconds,
+    maxRetryAttempts,
     cursor: cursorFilter || undefined,
     hasMore: false,
     limit,
@@ -1661,6 +1671,8 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     if (!Number.isFinite(failedAtMs)) return false;
     return nowMs - failedAtMs >= minFailedAgeSeconds * 1000;
   };
+  const retryAttempts = (value?: number) => (Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0);
+  const retryAttemptsMatch = (value?: number) => maxRetryAttempts <= 0 || retryAttempts(value) < maxRetryAttempts;
   const shouldReleaseReplyClaim = (event: WecomBridgeEvent) => {
     if (releaseClaims === 'none' || !event.replyClaimedAt) return false;
     if (!workerMatches(event.replyClaimedBy)) return false;
@@ -1716,8 +1728,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         event.replyFailedAt &&
         workerMatches(event.replyFailedBy) &&
         failureReasonMatches(event.replyError) &&
-        failedAgeMatches(event.replyFailedAt)
+        failedAgeMatches(event.replyFailedAt) &&
+        retryAttemptsMatch(event.replyRetryCount)
       ) {
+        const retryCount = retryAttempts(event.replyRetryCount);
         if (
           !record({
             target: 'reply',
@@ -1728,6 +1742,8 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             workerId: event.replyFailedBy,
             error: event.replyError,
             failedAt: event.replyFailedAt,
+            retryCount,
+            nextRetryCount: retryCount + 1,
             cursor: retryCursor,
           })
         ) {
@@ -1739,6 +1755,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
           event.replyFailedAt = undefined;
           event.replyFailedBy = undefined;
           event.replyError = undefined;
+          event.replyRetryCount = retryCount + 1;
           event.replyClaimedAt = undefined;
           event.replyClaimedBy = undefined;
           event.replyClaimExpiresAt = undefined;
@@ -1792,8 +1809,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
           item.status === 'failed' &&
           workerMatches(item.bridgeFailedBy) &&
           failureReasonMatches(item.error) &&
-          failedAgeMatches(item.bridgeFailedAt)
+          failedAgeMatches(item.bridgeFailedAt) &&
+          retryAttemptsMatch(item.bridgeRetryCount)
         ) {
+          const retryCount = retryAttempts(item.bridgeRetryCount);
           if (
             !record({
               target: 'mass',
@@ -1804,6 +1823,8 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
               workerId: item.bridgeFailedBy,
               error: item.error,
               failedAt: item.bridgeFailedAt,
+              retryCount,
+              nextRetryCount: retryCount + 1,
               cursor: retryCursor,
             })
           ) {
@@ -1825,6 +1846,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             item.bridgeClaimExpiresAt = undefined;
             item.bridgeFailedAt = undefined;
             item.bridgeFailedBy = undefined;
+            item.bridgeRetryCount = retryCount + 1;
             if (job.status === 'paused') job.status = 'queued';
           }
           jobChanged = true;
@@ -1873,8 +1895,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         draft.bridgeFailedAt &&
         workerMatches(draft.bridgeFailedBy) &&
         failureReasonMatches(draft.bridgeError) &&
-        failedAgeMatches(draft.bridgeFailedAt)
+        failedAgeMatches(draft.bridgeFailedAt) &&
+        retryAttemptsMatch(draft.bridgeRetryCount)
       ) {
+        const retryCount = retryAttempts(draft.bridgeRetryCount);
         if (
           !record({
             target: 'moment',
@@ -1885,6 +1909,8 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             workerId: draft.bridgeFailedBy,
             error: draft.bridgeError,
             failedAt: draft.bridgeFailedAt,
+            retryCount,
+            nextRetryCount: retryCount + 1,
             cursor: retryCursor,
           })
         ) {
@@ -1898,6 +1924,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
           draft.bridgeFailedAt = undefined;
           draft.bridgeFailedBy = undefined;
           draft.bridgeError = undefined;
+          draft.bridgeRetryCount = retryCount + 1;
           clearMomentBridgeClaim(draft);
           draft.updatedAt = now;
         }
@@ -1912,7 +1939,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     addAutomationAudit({
       action: 'bridge_outbox_recovered',
       actor: actor.username,
-      message: `恢复 Bridge 出箱${workerIdFilter ? `（worker=${workerIdFilter}）` : ''}${failureReasonFilter ? `（原因=${failureReasonFilter}）` : ''}${minFailedAgeSeconds > 0 ? `（失败冷却>=${minFailedAgeSeconds}s）` : ''}：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims} 个领取，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed} 个失败项`,
+      message: `恢复 Bridge 出箱${workerIdFilter ? `（worker=${workerIdFilter}）` : ''}${failureReasonFilter ? `（原因=${failureReasonFilter}）` : ''}${minFailedAgeSeconds > 0 ? `（失败冷却>=${minFailedAgeSeconds}s）` : ''}${maxRetryAttempts > 0 ? `（最多重试${maxRetryAttempts}次）` : ''}：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims} 个领取，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed} 个失败项`,
     });
   }
   return result;
@@ -2432,6 +2459,7 @@ export function patchMassSendItem(actor: User, jobId: string, itemId: string, ra
   item.status = status;
   item.error = status === 'pending' ? undefined : reason || (status === 'skipped' ? '手动跳过' : '手动标记失败');
   item.bridgeFailedAt = status === 'failed' ? new Date().toISOString() : undefined;
+  item.bridgeRetryCount = undefined;
   if (status === 'pending') {
     item.sentAt = undefined;
     item.auditEventId = undefined;
@@ -2572,6 +2600,7 @@ export function patchWecomBridgeMassTaskDelivery(
     item.bridgeClaimExpiresAt = undefined;
     item.bridgeFailedAt = undefined;
     item.bridgeFailedBy = undefined;
+    item.bridgeRetryCount = undefined;
     job.status = 'running';
     job.updatedAt = now;
     const event = addAutomationAudit({
@@ -2767,6 +2796,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     draft.bridgeFailedAt = undefined;
     draft.bridgeFailedBy = undefined;
     draft.bridgeError = undefined;
+    draft.bridgeRetryCount = undefined;
     clearMomentBridgeClaim(draft);
     draft.updatedAt = now;
     const event = addAutomationAudit({
@@ -2787,6 +2817,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     draft.bridgeFailedAt = undefined;
     draft.bridgeFailedBy = undefined;
     draft.bridgeError = undefined;
+    draft.bridgeRetryCount = undefined;
     clearMomentBridgeClaim(draft);
     draft.updatedAt = now;
     const event = addAutomationAudit({
@@ -3115,6 +3146,7 @@ export async function sendNextMassSendItem(
   pending.bridgeClaimExpiresAt = undefined;
   pending.bridgeFailedAt = undefined;
   pending.bridgeFailedBy = undefined;
+  pending.bridgeRetryCount = undefined;
   const event = addAutomationAudit({
     action: 'mass_item_sent',
     actor: actor.username,
@@ -3177,6 +3209,7 @@ export async function prepareMomentDraft(
   draft.bridgeFailedAt = undefined;
   draft.bridgeFailedBy = undefined;
   draft.bridgeError = undefined;
+  draft.bridgeRetryCount = undefined;
   clearMomentBridgeClaim(draft);
   draft.updatedAt = now;
   const event = addAutomationAudit({
@@ -3525,6 +3558,7 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     replyFailedAt: typeof raw?.replyFailedAt === 'string' && raw.replyFailedAt ? raw.replyFailedAt : undefined,
     replyFailedBy: str(raw?.replyFailedBy, 120).trim() || undefined,
     replyError: str(raw?.replyError, 1000).trim() || undefined,
+    replyRetryCount: clampInt(raw?.replyRetryCount ?? raw?.retryCount, 0, 100, 0) || undefined,
     replyDeliveredAt: typeof raw?.replyDeliveredAt === 'string' && raw.replyDeliveredAt ? raw.replyDeliveredAt : undefined,
   };
   if (event.replyApproved && !hasRunnableBridgeReply(event)) {
@@ -3687,6 +3721,7 @@ function normalizeMassSendItem(raw: any, preserveIds: boolean, now: string): Mas
     bridgeClaimExpiresAt: typeof raw?.bridgeClaimExpiresAt === 'string' && raw.bridgeClaimExpiresAt ? raw.bridgeClaimExpiresAt : undefined,
     bridgeFailedAt: typeof raw?.bridgeFailedAt === 'string' && raw.bridgeFailedAt ? raw.bridgeFailedAt : undefined,
     bridgeFailedBy: str(raw?.bridgeFailedBy, 120).trim() || undefined,
+    bridgeRetryCount: clampInt(raw?.bridgeRetryCount ?? raw?.retryCount, 0, 100, 0) || undefined,
   };
 }
 
@@ -3723,6 +3758,7 @@ function normalizeMomentDraft(raw: any, preserveIds: boolean, now: string): Mome
     bridgeFailedAt: typeof raw?.bridgeFailedAt === 'string' && raw.bridgeFailedAt ? raw.bridgeFailedAt : undefined,
     bridgeFailedBy: str(raw?.bridgeFailedBy, 120).trim() || undefined,
     bridgeError: str(raw?.bridgeError, 300).trim() || undefined,
+    bridgeRetryCount: clampInt(raw?.bridgeRetryCount ?? raw?.retryCount, 0, 100, 0) || undefined,
   };
 }
 
@@ -3827,6 +3863,7 @@ function resetBridgeReplyDeliveryState(event: WecomBridgeEvent) {
   event.replyFailedAt = undefined;
   event.replyFailedBy = undefined;
   event.replyError = undefined;
+  event.replyRetryCount = undefined;
   event.replyDeliveredAt = undefined;
 }
 
@@ -4282,6 +4319,7 @@ function clearMomentBridgeState(draft: MomentDraft) {
   draft.bridgeFailedAt = undefined;
   draft.bridgeFailedBy = undefined;
   draft.bridgeError = undefined;
+  draft.bridgeRetryCount = undefined;
 }
 
 function cloneRule(rule: AutomationRule): AutomationRule {
@@ -4434,6 +4472,7 @@ function prepareBundleMassJob(raw: any, keepOperationalState: boolean): any {
         bridgeClaimExpiresAt: undefined,
         bridgeFailedAt: undefined,
         bridgeFailedBy: undefined,
+        bridgeRetryCount: undefined,
       }))
     : raw?.items;
   return {
@@ -4458,6 +4497,7 @@ function prepareBundleMomentDraft(raw: any, keepOperationalState: boolean): any 
     bridgeFailedAt: undefined,
     bridgeFailedBy: undefined,
     bridgeError: undefined,
+    bridgeRetryCount: undefined,
   };
 }
 
