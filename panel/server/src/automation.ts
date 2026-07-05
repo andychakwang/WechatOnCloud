@@ -71,6 +71,30 @@ export interface AutomationAudienceImportResult {
   errors: string[];
 }
 
+export type AutomationAudienceMassJobTypeFilter = AutomationAudienceContactType | 'all';
+
+export interface AutomationAudienceMassJobFilter {
+  query: string;
+  tags: string[];
+  type: AutomationAudienceMassJobTypeFilter;
+  requireApproved: boolean;
+  requireEnabled: boolean;
+  limit: number;
+}
+
+export interface AutomationAudienceMassJobSelection {
+  filters: AutomationAudienceMassJobFilter;
+  matched: number;
+  selected: number;
+  skipped: number;
+  contacts: AutomationAudienceContact[];
+}
+
+export interface AutomationAudienceMassJobResult {
+  job: MassSendJob;
+  selection: AutomationAudienceMassJobSelection;
+}
+
 export type AutomationMaterialKind = 'image' | 'video' | 'file' | 'link' | 'text' | 'other';
 
 export interface AutomationMaterialAsset {
@@ -2093,6 +2117,42 @@ export function listAutomationAudience(limit = 200, query = '', tag = ''): Autom
     .map(cloneAudienceContact);
 }
 
+function selectAudienceForMassJob(raw: any): AutomationAudienceMassJobSelection {
+  const filters = normalizeAudienceMassJobFilter(raw);
+  const query = filters.query.toLowerCase();
+  const tags = filters.tags.map((tag) => tag.toLowerCase());
+  const matched = data.audienceContacts.filter((contact) => {
+    if (filters.requireEnabled && !contact.enabled) return false;
+    if (filters.requireApproved && !contact.approved) return false;
+    if (filters.type !== 'all' && contact.type !== filters.type) return false;
+    if (query) {
+      const haystack = [contact.name, contact.source, contact.note, ...contact.aliases, ...contact.tags].join('\n').toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    if (tags.length > 0) {
+      const contactTags = contact.tags.map((tag) => tag.toLowerCase());
+      if (!tags.every((tag) => contactTags.includes(tag))) return false;
+    }
+    return true;
+  });
+  const seen = new Set<string>();
+  const selectedContacts: AutomationAudienceContact[] = [];
+  for (const contact of matched) {
+    const key = contact.name.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    selectedContacts.push(contact);
+    if (selectedContacts.length >= filters.limit) break;
+  }
+  return {
+    filters,
+    matched: matched.length,
+    selected: selectedContacts.length,
+    skipped: Math.max(0, matched.length - selectedContacts.length),
+    contacts: selectedContacts.map(cloneAudienceContact),
+  };
+}
+
 export function importAutomationAudience(actor: User, raw: any): AutomationAudienceImportResult {
   const now = new Date().toISOString();
   const source = str(raw?.source || raw?.sourceName || 'wecom-mac', 80).trim() || 'wecom-mac';
@@ -2434,6 +2494,21 @@ export function createMassSendJob(actor: User, raw: any): MassSendJob {
     message: `创建群发队列「${job.title}」，${job.items.length} 个目标`,
   });
   return cloneMassSendJob(job);
+}
+
+export function createMassSendJobFromAudience(actor: User, raw: any): AutomationAudienceMassJobResult {
+  const selection = selectAudienceForMassJob(raw?.audienceFilter ?? raw?.audience ?? raw);
+  if (selection.contacts.length === 0) throw new Error('没有匹配的已启用且已审核受众');
+  const job = createMassSendJob(actor, {
+    ...raw,
+    recipients: selection.contacts.map((contact) => contact.name),
+  });
+  addAutomationAudit({
+    action: 'mass_job_created_from_audience',
+    actor: actor.username,
+    message: `从受众资产创建群发队列「${job.title}」：匹配 ${selection.matched} 个，选入 ${selection.selected} 个`,
+  });
+  return { job, selection };
 }
 
 export function patchMassSendJob(actor: User, jobId: string, raw: any): MassSendJob {
@@ -3515,6 +3590,23 @@ function normalizeAudienceContact(raw: any, preserveIds: boolean, now: string): 
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
     lastImportedAt: typeof raw?.lastImportedAt === 'string' && raw.lastImportedAt ? raw.lastImportedAt : undefined,
+  };
+}
+
+function normalizeAudienceMassJobFilter(raw: any): AutomationAudienceMassJobFilter {
+  const rawType = String(raw?.type ?? raw?.contactType ?? raw?.category ?? 'all').trim().toLowerCase();
+  const type =
+    rawType === 'all' || rawType === '全部' || rawType === 'any'
+      ? 'all'
+      : normalizeAudienceContactType(raw?.type ?? raw?.contactType ?? raw?.category) || 'all';
+  const tags = normalizeStringList(raw?.tags ?? raw?.tag ?? raw?.labels ?? raw?.segments, 60, 10);
+  return {
+    query: str(raw?.query ?? raw?.q ?? raw?.keyword ?? raw?.search, 120).trim(),
+    tags,
+    type,
+    requireApproved: raw?.requireApproved === false || raw?.approvedOnly === false || raw?.includeUnapproved === true ? false : true,
+    requireEnabled: raw?.requireEnabled === false || raw?.enabledOnly === false || raw?.includeDisabled === true ? false : true,
+    limit: clampInt(raw?.limit, 1, 500, 500),
   };
 }
 

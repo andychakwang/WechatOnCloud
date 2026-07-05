@@ -10,6 +10,7 @@ import {
   type AutomationBridgeStatus,
   type AutomationConfig,
   type AutomationAudienceContact,
+  type AutomationAudienceMassJobTypeFilter,
   type AutomationAudienceContactType,
   type AutomationBundleImportResult,
   type AutomationBundleMode,
@@ -407,6 +408,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [massSearchShortcut, setMassSearchShortcut] = useState('ctrl+f');
   const [massSearchDelay, setMassSearchDelay] = useState('2');
   const [massPostOpenDelay, setMassPostOpenDelay] = useState('1');
+  const [massAudienceQuery, setMassAudienceQuery] = useState('');
+  const [massAudienceTag, setMassAudienceTag] = useState('');
+  const [massAudienceType, setMassAudienceType] = useState<AutomationAudienceMassJobTypeFilter>('all');
+  const [massAudienceLimit, setMassAudienceLimit] = useState('500');
 
   const [momentTopic, setMomentTopic] = useState('');
   const [momentAudience, setMomentAudience] = useState('');
@@ -1125,6 +1130,41 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '创建失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const createMassJobFromAudience = async () => {
+    setBusy('mass-audience-create');
+    try {
+      const { job, selection } = await api.createMassSendJobFromAudience({
+        title: massTitle.trim() || `受众群发 ${new Date().toLocaleString()}`,
+        message: massMessage,
+        audienceFilter: {
+          query: massAudienceQuery.trim(),
+          tag: massAudienceTag.trim(),
+          type: massAudienceType,
+          requireApproved: true,
+          requireEnabled: true,
+          limit: Number(massAudienceLimit) || 500,
+        },
+        options: {
+          perSendDelaySeconds: Number(massDelay) || 0,
+          requireOperatorConfirmRecipient: true,
+          openConversationBeforeSend: massAutoOpen,
+          searchShortcut: massSearchShortcut,
+          searchResultDelaySeconds: Number(massSearchDelay) || 2,
+          postOpenDelaySeconds: Number(massPostOpenDelay) || 1,
+        },
+      });
+      setJobs((list) => [job, ...list]);
+      setMassTitle('');
+      setMassMessage('');
+      toast(`已从受众创建 ${selection.selected} 个目标的群发队列`, 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '从受众创建失败', 'error');
     } finally {
       setBusy('');
     }
@@ -2255,6 +2295,21 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <input className="input" placeholder="队列名称" value={massTitle} onChange={(e) => setMassTitle(e.target.value)} />
             <textarea className="input textarea tall" placeholder="群发内容" value={massMessage} onChange={(e) => setMassMessage(e.target.value)} />
             <textarea className="input textarea" placeholder="联系人或群聊名，一行一个" value={massRecipients} onChange={(e) => setMassRecipients(e.target.value)} />
+            <div className="auto-grid two compact">
+              <input className="input" placeholder="受众关键词" value={massAudienceQuery} onChange={(e) => setMassAudienceQuery(e.target.value)} />
+              <input className="input" placeholder="受众标签" value={massAudienceTag} onChange={(e) => setMassAudienceTag(e.target.value)} />
+              <select className="input" value={massAudienceType} onChange={(e) => setMassAudienceType(e.target.value as AutomationAudienceMassJobTypeFilter)}>
+                <option value="all">全部类型</option>
+                <option value="contact">联系人</option>
+                <option value="group">客户群</option>
+                <option value="room">群聊</option>
+                <option value="unknown">未知</option>
+              </select>
+              <input className="input" inputMode="numeric" placeholder="最多目标数" value={massAudienceLimit} onChange={(e) => setMassAudienceLimit(e.target.value.replace(/[^0-9]/g, ''))} />
+            </div>
+            <button className="btn s-btn" disabled={busy === 'mass-audience-create' || !massMessage.trim()} onClick={createMassJobFromAudience}>
+              从受众创建队列
+            </button>
             <label className="auto-check">
               <input type="checkbox" checked={massAutoOpen} onChange={(e) => setMassAutoOpen(e.target.checked)} />
               <span>发送前自动搜索并打开目标会话</span>

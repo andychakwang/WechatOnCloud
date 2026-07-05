@@ -404,6 +404,33 @@ request_json GET /api/admin/automation/audience
 json_assert_path contacts[0].id
 request_json PATCH "/api/admin/automation/audience/$audience_id" '{"approved":true,"enabled":true}'
 json_assert_path contact.approved
+audience_mass_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-audience-mass-{stamp}",
+    "message": "这是一条按受众筛选生成的 smoke 群发队列，不会发送。",
+    "audienceFilter": {
+        "tag": "群发测试",
+        "type": "group",
+        "limit": 20,
+    },
+    "options": {
+        "perSendDelaySeconds": 0,
+        "requireOperatorConfirmRecipient": True,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/mass-jobs/from-audience "$audience_mass_payload"
+json_assert_eq selection.selected 1
+json_assert_path job.id
+audience_mass_job_id="$(json_get job.id)"
+request_json PATCH "/api/admin/automation/mass-jobs/$audience_mass_job_id" '{"status":"cancelled","approved":false}'
+json_assert_eq job.status cancelled
 request_json DELETE "/api/admin/automation/audience/$audience_id"
 json_assert_path ok
 

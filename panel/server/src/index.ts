@@ -119,6 +119,7 @@ import {
   listAutomationAudit,
   listMassSendJobs,
   createMassSendJob,
+  createMassSendJobFromAudience,
   patchMassSendJob,
   patchMassSendItem,
   listMomentDrafts,
@@ -871,6 +872,21 @@ app.post('/api/admin/automation/mass-jobs', async (req, reply) => {
     return { job };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '创建群发队列失败' });
+  }
+});
+
+app.post('/api/admin/automation/mass-jobs/from-audience', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = createMassSendJobFromAudience(admin, req.body as any);
+    appendPanelLog(
+      'INFO',
+      `从受众资产创建群发队列「${result.job.title}」by ${admin.username}：${result.selection.selected}/${result.selection.matched} 个目标`,
+    );
+    return result;
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '从受众创建群发队列失败' });
   }
 });
 

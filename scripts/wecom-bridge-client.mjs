@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r44-doctor-report';
+const CLIENT_VERSION = 'automation-lab-r45-audience-mass';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.

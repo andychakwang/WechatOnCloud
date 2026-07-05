@@ -152,6 +152,25 @@ export interface AutomationAudienceImportResult {
   errors: string[];
 }
 
+export type AutomationAudienceMassJobTypeFilter = AutomationAudienceContactType | 'all';
+
+export interface AutomationAudienceMassJobFilter {
+  query: string;
+  tags: string[];
+  type: AutomationAudienceMassJobTypeFilter;
+  requireApproved: boolean;
+  requireEnabled: boolean;
+  limit: number;
+}
+
+export interface AutomationAudienceMassJobSelection {
+  filters: AutomationAudienceMassJobFilter;
+  matched: number;
+  selected: number;
+  skipped: number;
+  contacts: AutomationAudienceContact[];
+}
+
 export type AutomationMaterialKind = 'image' | 'video' | 'file' | 'link' | 'text' | 'other';
 
 export interface AutomationMaterialAsset {
@@ -879,6 +898,31 @@ export const api = {
     };
   }) =>
     req<{ job: MassSendJob }>('/api/admin/automation/mass-jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  createMassSendJobFromAudience: (payload: {
+    title: string;
+    message: string;
+    audienceFilter?: {
+      query?: string;
+      tag?: string;
+      tags?: string[];
+      type?: AutomationAudienceMassJobTypeFilter;
+      requireApproved?: boolean;
+      requireEnabled?: boolean;
+      limit?: number;
+    };
+    options?: {
+      perSendDelaySeconds?: number;
+      requireOperatorConfirmRecipient?: boolean;
+      openConversationBeforeSend?: boolean;
+      searchShortcut?: string;
+      searchResultDelaySeconds?: number;
+      postOpenDelaySeconds?: number;
+    };
+  }) =>
+    req<{ job: MassSendJob; selection: AutomationAudienceMassJobSelection }>('/api/admin/automation/mass-jobs/from-audience', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
