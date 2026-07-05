@@ -444,8 +444,12 @@ export interface AutomationSettings {
   massSendEnabled: boolean;
   momentsEnabled: boolean;
   maximumAutomaticSendsPerHour: number;
+  maximumAutomaticActionsPerDay: number;
   perConversationCooldownMinutes: number;
   requireConfirmForSend: boolean;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
 }
 
 export interface AutomationConfig {
@@ -459,6 +463,7 @@ export interface AutomationConfig {
 export interface AutomationOverview {
   generatedAt: string;
   settings: AutomationSettings;
+  gates: AutomationRunGates;
   knowledge: {
     total: number;
     approved: number;
@@ -542,6 +547,16 @@ export interface AutomationOverview {
     lastAction?: string;
   };
   riskFlags: string[];
+}
+
+export interface AutomationRunGates {
+  quietHoursActive: boolean;
+  quietHoursWindow: string;
+  dailyActions: number;
+  dailyLimit: number;
+  dailyRemaining: number | null;
+  blocked: boolean;
+  reasons: string[];
 }
 
 export type AutomationPreflightLevel = 'ok' | 'warn' | 'block';
@@ -874,6 +889,14 @@ const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
 const MAX_BRIDGE_RUN_REPORT_ITEMS = 100;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
+const AUTOMATION_DAILY_ACTIONS = new Set([
+  'rule_sent',
+  'text_sent',
+  'bridge_reply_delivered',
+  'mass_item_sent',
+  'moment_draft_prepared',
+  'moment_draft_published',
+]);
 const BRIDGE_WORKER_CAPABILITIES: WecomBridgeWorkerCapability[] = [
   'reply',
   'mass',
@@ -909,8 +932,12 @@ const DEFAULT_SETTINGS: AutomationSettings = {
   massSendEnabled: false,
   momentsEnabled: false,
   maximumAutomaticSendsPerHour: 20,
+  maximumAutomaticActionsPerDay: 0,
   perConversationCooldownMinutes: 10,
   requireConfirmForSend: true,
+  quietHoursEnabled: false,
+  quietHoursStart: '22:00',
+  quietHoursEnd: '08:00',
 };
 
 const DEFAULT_DATA: AutomationData = {
@@ -954,6 +981,7 @@ export function getAutomationConfig(): AutomationConfig {
 
 export function getAutomationOverview(): AutomationOverview {
   const nowIso = new Date().toISOString();
+  const gates = getAutomationRunGates(new Date(Date.parse(nowIso)));
   const workers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
   const onlineWorkers = workers.filter((worker) => worker.online);
   const workerCapabilities = Object.fromEntries(
@@ -1020,10 +1048,13 @@ export function getAutomationOverview(): AutomationOverview {
   }
   if (massItems.some((item) => item.status === 'failed')) riskFlags.push('mass_failures');
   if (data.momentDrafts.some((draft) => !!draft.bridgeFailedAt)) riskFlags.push('moment_failures');
+  if (gates.quietHoursActive) riskFlags.push('quiet_hours_active');
+  if (gates.dailyRemaining !== null && gates.dailyRemaining <= 0) riskFlags.push('daily_action_limit_reached');
 
   return {
     generatedAt: nowIso,
     settings: { ...data.settings },
+    gates,
     knowledge: {
       total: data.knowledgeItems.length,
       approved: data.knowledgeItems.filter((item) => item.approved).length,
@@ -1137,6 +1168,44 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
       message: 'Bridge 拉取、群发队列和朋友圈草稿都会被总开关拦截。',
       action: '在自动化工作台开启总开关后再运行 Mac Runner。',
     });
+  }
+
+  if (data.settings.enabled && overview.gates.quietHoursActive) {
+    add({
+      id: 'quiet_hours_active',
+      level: 'block',
+      title: '当前处于安静时段',
+      message: `安静时段 ${overview.gates.quietHoursWindow} 正在生效，Bridge/RPA 暂停领取回复、群发和朋友圈任务。`,
+      action: '等待安静时段结束，或在自动化工作台调整安静时段。',
+    });
+  } else if (data.settings.quietHoursEnabled) {
+    add({
+      id: 'quiet_hours_configured',
+      level: 'ok',
+      title: '安静时段已配置',
+      message: `当前不在安静时段内；配置窗口为 ${overview.gates.quietHoursWindow}。`,
+    });
+  }
+
+  if (overview.gates.dailyLimit > 0 && overview.gates.dailyRemaining !== null) {
+    if (overview.gates.dailyRemaining <= 0) {
+      add({
+        id: 'daily_action_limit_reached',
+        level: 'block',
+        title: '今日自动化交付已达上限',
+        message: `今天已记录 ${overview.gates.dailyActions}/${overview.gates.dailyLimit} 次自动化交付，Bridge/RPA 暂停领取新任务。`,
+        count: overview.gates.dailyActions,
+        action: '等到明天计数重置，或在确认风险后调高每日上限。',
+      });
+    } else {
+      add({
+        id: 'daily_action_budget_ok',
+        level: overview.gates.dailyRemaining <= 5 ? 'warn' : 'ok',
+        title: overview.gates.dailyRemaining <= 5 ? '今日自动化交付额度将用尽' : '今日自动化交付额度充足',
+        message: `今天已记录 ${overview.gates.dailyActions}/${overview.gates.dailyLimit} 次自动化交付，剩余 ${overview.gates.dailyRemaining} 次。`,
+        count: overview.gates.dailyRemaining,
+      });
+    }
   }
 
   if (overview.bridge.workersOnline > 0) {
@@ -1570,7 +1639,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   }
 
   const massTasks: WecomBridgeMassSendTask[] = [];
-  if (data.settings.enabled && data.settings.massSendEnabled) {
+  if (data.settings.enabled && data.settings.massSendEnabled && isAutomationRunGateOpen()) {
     for (const job of data.massSendJobs) {
       if (massTasks.length >= rpaScanLimit) break;
       if (!isMassJobBridgeRunnable(job, generatedAt)) continue;
@@ -2508,6 +2577,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
   if (raw?.markClaimed === true || deliveryStatus === 'claimed') {
     if (!event.replyApproved || !hasRunnableBridgeReply(event)) throw new Error('未批准的回复不能领取');
     if (event.replyDeliveredAt) throw new Error('已交付的回复不能再次领取');
+    enforceAutomationRunGates();
     const workerId = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
     if (event.replyClaimedAt && !isBridgeReplyClaimExpired(event, now) && event.replyClaimedBy && event.replyClaimedBy !== workerId) {
       throw new Error(`回复已由 ${event.replyClaimedBy} 领取，未超时前不能重复领取`);
@@ -2580,6 +2650,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
 
 export function listApprovedWecomBridgeReplies(limit = 50, raw: WecomBridgeReplyListOptions = {}): WecomBridgeEvent[] {
   const n = clampInt(limit, 1, 200, 50);
+  if (!data.settings.enabled || !isAutomationRunGateOpen()) return [];
   const now = new Date().toISOString();
   const requireSendable = raw.requireSendable === true;
   return data.bridgeEvents
@@ -3617,6 +3688,7 @@ export function patchMassSendItem(actor: User, jobId: string, itemId: string, ra
 export function listApprovedWecomBridgeMassTasks(limit = 50): WecomBridgeMassSendTask[] {
   const n = clampInt(limit, 1, 200, 50);
   if (!data.settings.enabled || !data.settings.massSendEnabled) return [];
+  if (!isAutomationRunGateOpen()) return [];
   const now = new Date().toISOString();
   const tasks: WecomBridgeMassSendTask[] = [];
   for (const job of data.massSendJobs) {
@@ -3629,6 +3701,7 @@ export function listApprovedWecomBridgeMassTasks(limit = 50): WecomBridgeMassSen
     }
     if (item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, now)) continue;
     try {
+      enforceAutomationRunGates();
       enforceRateLimits(item.recipientName);
       enforceMassSendDelay(job);
       const risk = assessRisk([job.message]);
@@ -3664,6 +3737,7 @@ export function patchWecomBridgeMassTaskDelivery(
       throw new Error(`群发目标已由 ${item.bridgeClaimedBy} 领取，未超时前不能重复领取`);
     }
     try {
+      enforceAutomationRunGates();
       enforceRateLimits(item.recipientName);
       enforceMassSendDelay(job);
       const risk = assessRisk([job.message]);
@@ -3726,6 +3800,7 @@ export function patchWecomBridgeMassTaskDelivery(
   if (deliveryStatus === 'sent' || deliveryStatus === 'delivered') {
     if (item.status === 'sent') return { job: cloneMassSendJob(job), item: { ...item } };
     if (item.status !== 'pending') throw new Error('只有待发送目标可以标记为已发送');
+    enforceAutomationRunGates();
     requireBridgeWorkerCapabilities(raw, workerId, ['mass', 'send'], '发送群发');
     item.status = 'sent';
     item.sentAt = now;
@@ -3853,6 +3928,7 @@ export function patchMomentDraft(actor: User, draftId: string, raw: any): Moment
 export function listApprovedWecomBridgeMomentTasks(limit = 50): WecomBridgeMomentTask[] {
   const n = clampInt(limit, 1, 200, 50);
   if (!data.settings.enabled || !data.settings.momentsEnabled) return [];
+  if (!isAutomationRunGateOpen()) return [];
   const now = new Date().toISOString();
   const tasks: WecomBridgeMomentTask[] = [];
   for (const draft of data.momentDrafts) {
@@ -3885,6 +3961,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, now) && draft.bridgeClaimedBy && draft.bridgeClaimedBy !== workerId) {
       throw new Error(`朋友圈草稿已由 ${draft.bridgeClaimedBy} 领取，未超时前不能重复领取`);
     }
+    enforceAutomationRunGates();
     const risk = assessRisk([draft.text, draft.imageNotes]);
     if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
     if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
@@ -3931,6 +4008,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能标记已准备');
     if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
     if (draft.status === 'published') throw new Error('朋友圈草稿已标记发布');
+    enforceAutomationRunGates();
     const risk = assessRisk([draft.text, draft.imageNotes]);
     if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
     if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
@@ -3956,6 +4034,7 @@ export function patchWecomBridgeMomentTaskDelivery(
   if (deliveryStatus === 'published') {
     if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能标记发布');
     if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
+    enforceAutomationRunGates();
     requireBridgeWorkerCapabilities(raw, workerId, ['moment', 'send'], '发布朋友圈');
     draft.status = 'published';
     draft.publishedAt = now;
@@ -4569,9 +4648,22 @@ function normalizeSettings(raw: any): AutomationSettings {
     massSendEnabled: typeof raw?.massSendEnabled === 'boolean' ? raw.massSendEnabled : DEFAULT_SETTINGS.massSendEnabled,
     momentsEnabled: typeof raw?.momentsEnabled === 'boolean' ? raw.momentsEnabled : DEFAULT_SETTINGS.momentsEnabled,
     maximumAutomaticSendsPerHour: clampInt(raw?.maximumAutomaticSendsPerHour, 0, 1000, DEFAULT_SETTINGS.maximumAutomaticSendsPerHour),
+    maximumAutomaticActionsPerDay: clampInt(raw?.maximumAutomaticActionsPerDay, 0, 10000, DEFAULT_SETTINGS.maximumAutomaticActionsPerDay),
     perConversationCooldownMinutes: clampInt(raw?.perConversationCooldownMinutes, 0, 24 * 60, DEFAULT_SETTINGS.perConversationCooldownMinutes),
     requireConfirmForSend: typeof raw?.requireConfirmForSend === 'boolean' ? raw.requireConfirmForSend : DEFAULT_SETTINGS.requireConfirmForSend,
+    quietHoursEnabled: typeof raw?.quietHoursEnabled === 'boolean' ? raw.quietHoursEnabled : DEFAULT_SETTINGS.quietHoursEnabled,
+    quietHoursStart: normalizeQuietTime(raw?.quietHoursStart, DEFAULT_SETTINGS.quietHoursStart),
+    quietHoursEnd: normalizeQuietTime(raw?.quietHoursEnd, DEFAULT_SETTINGS.quietHoursEnd),
   };
+}
+
+function normalizeQuietTime(value: unknown, fallback: string): string {
+  const raw = String(value || '').trim();
+  const match = /^(\d{1,2}):([0-5]\d)$/.exec(raw);
+  if (!match) return fallback;
+  const hour = Number(match[1]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return fallback;
+  return `${String(hour).padStart(2, '0')}:${match[2]}`;
 }
 
 function normalizeRule(raw: any, preserveIds: boolean, now: string): AutomationRule {
@@ -5554,6 +5646,7 @@ function assessApprovedRule(inboundParts: string[], draftText: string): RiskAsse
 function ensureAutomationEnabled(confirm?: boolean) {
   if (!data.settings.enabled) throw new Error('自动化总开关未开启');
   if (data.settings.requireConfirmForSend && confirm !== true) throw new Error('发送动作需要 confirm=true');
+  enforceAutomationRunGates();
 }
 
 function ensureFeatureEnabled(feature: 'mass' | 'moments', confirm?: boolean) {
@@ -5563,6 +5656,7 @@ function ensureFeatureEnabled(feature: 'mass' | 'moments', confirm?: boolean) {
 }
 
 function enforceRateLimits(conversationName?: string) {
+  enforceAutomationRunGates();
   const now = Date.now();
   const sends = data.auditEvents.filter((ev) => ['rule_sent', 'text_sent', 'bridge_reply_delivered', 'mass_item_sent'].includes(ev.action));
   const hourlyLimit = data.settings.maximumAutomaticSendsPerHour;
@@ -5575,6 +5669,64 @@ function enforceRateLimits(conversationName?: string) {
     const hit = sends.some((ev) => ev.conversationName === conversationName && now - Date.parse(ev.timestamp) < cooldownMs);
     if (hit) throw new Error('该会话处于自动发送冷却时间内');
   }
+}
+
+function enforceAutomationRunGates(now = new Date()) {
+  const gates = getAutomationRunGates(now);
+  if (gates.quietHoursActive) throw new Error(`当前处于安静时段 ${gates.quietHoursWindow}，自动化任务暂停执行`);
+  if (gates.dailyRemaining !== null && gates.dailyRemaining <= 0) {
+    throw new Error(`今日自动化交付已达上限 ${gates.dailyActions}/${gates.dailyLimit}`);
+  }
+}
+
+function isAutomationRunGateOpen(now = new Date()): boolean {
+  return !getAutomationRunGates(now).blocked;
+}
+
+function getAutomationRunGates(now = new Date()): AutomationRunGates {
+  const quietHoursActive = isQuietHoursActive(now);
+  const quietHoursWindow = `${data.settings.quietHoursStart}-${data.settings.quietHoursEnd}`;
+  const dailyLimit = data.settings.maximumAutomaticActionsPerDay;
+  const dailyActions = countAutomationDailyActions(now);
+  const dailyRemaining = dailyLimit > 0 ? Math.max(0, dailyLimit - dailyActions) : null;
+  const reasons: string[] = [];
+  if (quietHoursActive) reasons.push(`quiet-hours:${quietHoursWindow}`);
+  if (dailyRemaining !== null && dailyRemaining <= 0) reasons.push(`daily-limit:${dailyActions}/${dailyLimit}`);
+  return {
+    quietHoursActive,
+    quietHoursWindow,
+    dailyActions,
+    dailyLimit,
+    dailyRemaining,
+    blocked: reasons.length > 0,
+    reasons,
+  };
+}
+
+function countAutomationDailyActions(now = new Date()): number {
+  const key = localDateKey(now);
+  return data.auditEvents.filter((event) => AUTOMATION_DAILY_ACTIONS.has(event.action) && localDateKey(new Date(event.timestamp)) === key).length;
+}
+
+function localDateKey(value: Date): string {
+  if (!Number.isFinite(value.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+function isQuietHoursActive(now = new Date()): boolean {
+  if (!data.settings.quietHoursEnabled) return false;
+  const start = parseQuietTimeMinutes(data.settings.quietHoursStart);
+  const end = parseQuietTimeMinutes(data.settings.quietHoursEnd);
+  if (start === null || end === null || start === end) return false;
+  const current = now.getHours() * 60 + now.getMinutes();
+  return start < end ? current >= start && current < end : current >= start || current < end;
+}
+
+function parseQuietTimeMinutes(value: string): number | null {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value || '').trim());
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
 }
 
 function enforceMassSendDelay(job: MassSendJob) {

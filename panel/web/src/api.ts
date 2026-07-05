@@ -558,8 +558,12 @@ export interface AutomationSettings {
   massSendEnabled: boolean;
   momentsEnabled: boolean;
   maximumAutomaticSendsPerHour: number;
+  maximumAutomaticActionsPerDay: number;
   perConversationCooldownMinutes: number;
   requireConfirmForSend: boolean;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
 }
 
 export interface AutomationConfig {
@@ -573,6 +577,15 @@ export interface AutomationConfig {
 export interface AutomationOverview {
   generatedAt: string;
   settings: AutomationSettings;
+  gates: {
+    quietHoursActive: boolean;
+    quietHoursWindow: string;
+    dailyActions: number;
+    dailyLimit: number;
+    dailyRemaining: number | null;
+    blocked: boolean;
+    reasons: string[];
+  };
   knowledge: {
     total: number;
     approved: number;

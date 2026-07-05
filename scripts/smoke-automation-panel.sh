@@ -299,6 +299,9 @@ json_assert_path config.settings
 request_json GET /api/admin/automation/overview
 json_assert_path overview.generatedAt
 json_assert_path overview.settings
+json_assert_path overview.gates.blocked
+json_assert_path overview.gates.dailyActions
+json_assert_path overview.gates.quietHoursWindow
 json_assert_path overview.audience.total
 json_assert_path overview.materials.total
 json_assert_path overview.bridge.pendingReplies
@@ -921,6 +924,25 @@ PY
   json_assert_eq event.status archived
   request_json PUT /api/admin/automation/config "$bridge_plan_config_original"
   json_assert_path config.settings
+  bridge_enabled_config_payload="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config.get("settings", {})
+settings["enabled"] = True
+settings["aiDraftEnabled"] = True
+settings["automaticRuleRepliesEnabled"] = True
+settings["maximumAutomaticActionsPerDay"] = 0
+settings["quietHoursEnabled"] = False
+config["settings"] = settings
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$bridge_enabled_config_payload"
+  json_assert_eq config.settings.enabled True
 
   say "Check WeCom Bridge runner doctor"
   WOC_PANEL_URL="$PANEL_URL" \
@@ -1363,7 +1385,9 @@ settings["enabled"] = True
 settings["massSendEnabled"] = True
 settings["momentsEnabled"] = True
 settings["maximumAutomaticSendsPerHour"] = 200
+settings["maximumAutomaticActionsPerDay"] = 0
 settings["perConversationCooldownMinutes"] = 0
+settings["quietHoursEnabled"] = False
 config["settings"] = settings
 print(json.dumps(config, ensure_ascii=False))
 PY
@@ -1441,6 +1465,61 @@ PY
   request_json GET "/api/admin/automation/rpa-package?target=all&limit=50&format=json"
   json_assert_task_id "$scheduled_mass_task_id"
   json_assert_task_id "$scheduled_moment_id"
+
+  say "Check automation quiet-hours gate blocks Bridge and RPA pulls"
+  request_json GET /api/admin/automation/config
+  quiet_gate_config_payload="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+from datetime import datetime, timedelta
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config["settings"]
+now = datetime.now()
+start = now - timedelta(minutes=1)
+end = now + timedelta(minutes=2)
+settings["enabled"] = True
+settings["massSendEnabled"] = True
+settings["momentsEnabled"] = True
+settings["quietHoursEnabled"] = True
+settings["quietHoursStart"] = start.strftime("%H:%M")
+settings["quietHoursEnd"] = end.strftime("%H:%M")
+settings["maximumAutomaticActionsPerDay"] = 0
+config["settings"] = settings
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$quiet_gate_config_payload"
+  request_json GET /api/admin/automation/preflight
+  json_assert_check_id quiet_hours_active block
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 50 > "$body_file"
+  json_assert_no_task_id "$scheduled_mass_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 50 > "$body_file"
+  json_assert_no_task_id "$scheduled_moment_id"
+  request_json GET "/api/admin/automation/rpa-package?target=all&limit=50&format=json"
+  json_assert_no_task_id "$scheduled_mass_task_id"
+  json_assert_no_task_id "$scheduled_moment_id"
+
+  request_json GET /api/admin/automation/config
+  quiet_gate_restore_payload="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload.get("config") or {}
+if not config:
+    raise SystemExit("missing config payload")
+settings = config["settings"]
+settings["quietHoursEnabled"] = False
+settings["maximumAutomaticActionsPerDay"] = 0
+config["settings"] = settings
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$quiet_gate_restore_payload"
   request_json PATCH "/api/admin/automation/mass-jobs/$scheduled_mass_job_id" '{"status":"cancelled","approved":false}'
   request_json PATCH "/api/admin/automation/moment-drafts/$scheduled_moment_id" '{"status":"archived","approved":false}'
 
@@ -1621,6 +1700,42 @@ draft = matches[0]
 if draft.get("status") != "prepared" or not draft.get("lastPreparedAt"):
     raise SystemExit("report-apply moment draft was not marked prepared")
 PY
+
+  say "Check daily automation action limit preflight gate"
+  request_json GET /api/admin/automation/config
+  daily_gate_config_payload="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config["settings"]
+settings["enabled"] = True
+settings["quietHoursEnabled"] = False
+settings["maximumAutomaticActionsPerDay"] = 1
+config["settings"] = settings
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$daily_gate_config_payload"
+  request_json GET /api/admin/automation/preflight
+  json_assert_check_id daily_action_limit_reached block
+  request_json GET /api/admin/automation/config
+  daily_gate_restore_payload="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config["settings"]
+settings["maximumAutomaticActionsPerDay"] = 0
+config["settings"] = settings
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$daily_gate_restore_payload"
   request_json PATCH "/api/admin/automation/bridge-events/$report_apply_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
   request_json PATCH "/api/admin/automation/mass-jobs/$report_apply_mass_job_id" '{"status":"cancelled","approved":false}'

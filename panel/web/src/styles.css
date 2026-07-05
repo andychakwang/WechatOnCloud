@@ -1154,6 +1154,10 @@ button {
   gap: 12px;
   align-items: end;
 }
+.auto-toolbar-secondary {
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+  margin-top: 10px;
+}
 .auto-switches {
   display: flex;
   flex-wrap: wrap;

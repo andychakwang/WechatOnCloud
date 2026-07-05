@@ -303,6 +303,8 @@ const AUTOMATION_RISK_LABEL: Record<string, string> = {
   worker_lacks_rpa_package: 'Mac 缺 RPA 包能力',
   mass_failures: '群发失败',
   moment_failures: '朋友圈失败',
+  quiet_hours_active: '安静时段',
+  daily_action_limit_reached: '日上限',
 };
 
 const PREFLIGHT_LEVEL_LABEL: Record<string, string> = {
@@ -458,8 +460,12 @@ function defaultAutomationConfig(): AutomationConfig {
       massSendEnabled: false,
       momentsEnabled: false,
       maximumAutomaticSendsPerHour: 20,
+      maximumAutomaticActionsPerDay: 0,
       perConversationCooldownMinutes: 10,
       requireConfirmForSend: true,
+      quietHoursEnabled: false,
+      quietHoursStart: '22:00',
+      quietHoursEnd: '08:00',
     },
     persona: '',
     knowledgeNotes: '',
@@ -1552,6 +1558,55 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             </button>
           </div>
         </div>
+        <div className="auto-toolbar auto-toolbar-secondary">
+          <label className="auto-field compact">
+            <span className="field-label">每小时</span>
+            <input
+              className="input"
+              type="number"
+              min="0"
+              max="1000"
+              value={cfg.settings.maximumAutomaticSendsPerHour}
+              onChange={(e) => setSetting({ maximumAutomaticSendsPerHour: Math.max(0, Number.parseInt(e.target.value || '0', 10) || 0) })}
+            />
+          </label>
+          <label className="auto-field compact">
+            <span className="field-label">每日</span>
+            <input
+              className="input"
+              type="number"
+              min="0"
+              max="10000"
+              value={cfg.settings.maximumAutomaticActionsPerDay}
+              onChange={(e) => setSetting({ maximumAutomaticActionsPerDay: Math.max(0, Number.parseInt(e.target.value || '0', 10) || 0) })}
+            />
+          </label>
+          <label className="auto-field compact">
+            <span className="field-label">冷却分钟</span>
+            <input
+              className="input"
+              type="number"
+              min="0"
+              max="1440"
+              value={cfg.settings.perConversationCooldownMinutes}
+              onChange={(e) => setSetting({ perConversationCooldownMinutes: Math.max(0, Number.parseInt(e.target.value || '0', 10) || 0) })}
+            />
+          </label>
+          <button
+            className={'chip chip-toggle' + (cfg.settings.quietHoursEnabled ? ' on' : '')}
+            onClick={() => setSetting({ quietHoursEnabled: !cfg.settings.quietHoursEnabled })}
+          >
+            安静时段
+          </button>
+          <label className="auto-field compact">
+            <span className="field-label">开始</span>
+            <input className="input" type="time" value={cfg.settings.quietHoursStart} onChange={(e) => setSetting({ quietHoursStart: e.target.value })} />
+          </label>
+          <label className="auto-field compact">
+            <span className="field-label">结束</span>
+            <input className="input" type="time" value={cfg.settings.quietHoursEnd} onChange={(e) => setSetting({ quietHoursEnd: e.target.value })} />
+          </label>
+        </div>
         {overview && (
           <div className="auto-overview-grid">
             <div className="auto-overview-card">
@@ -1563,6 +1618,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               <div className="muted small">
                 已审核资料 · 素材 {overview.materials.approved}/{overview.materials.total} · 受众 {overview.audience.approved}/{overview.audience.total} · 规则{' '}
                 {overview.rules.approved}/{overview.rules.total}
+              </div>
+              <div className="muted small">
+                今日交付 {overview.gates.dailyActions}/{overview.gates.dailyLimit || '不限'} · {overview.gates.quietHoursActive ? '安静时段生效' : `安静 ${overview.gates.quietHoursWindow}`}
               </div>
             </div>
             <div className="auto-overview-card">
