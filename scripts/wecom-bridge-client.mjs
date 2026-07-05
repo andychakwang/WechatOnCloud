@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r67-operation-gates';
+const CLIENT_VERSION = 'automation-lab-r68-worker-controls';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const BOOLEAN_OPTIONS = new Set([
@@ -163,6 +163,18 @@ function intOpt(value, fallback, min, max) {
 
 function workerId(options) {
   return String(options['worker-id'] || options.worker || process.env.WECOM_BRIDGE_WORKER_ID || `${hostname()}-${process.pid}`).trim();
+}
+
+function bridgeSource(options) {
+  return String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE).trim() || DEFAULT_SOURCE;
+}
+
+function withWorkerQuery(path, options) {
+  const [base, query = ''] = String(path).split('?');
+  const params = new URLSearchParams(query);
+  params.set('workerId', workerId(options));
+  params.set('source', bridgeSource(options));
+  return `${base}?${params.toString()}`;
 }
 
 function config(options) {
@@ -541,7 +553,7 @@ function replyListPath(limit, options = {}) {
   const mode = String(options.mode || '').trim().toLowerCase();
   if (mode) params.set('mode', mode);
   if (mode === 'send' || boolOpt(options, 'require-sendable', 'sendable', 'requireAutoSend')) params.set('requireSendable', '1');
-  return `/api/automation/bridge/wecom/replies?${params.toString()}`;
+  return withWorkerQuery(`/api/automation/bridge/wecom/replies?${params.toString()}`, options);
 }
 
 function normalizeRpaExportTarget(value) {
@@ -733,10 +745,10 @@ async function pullRpaExportTasks(options, target, limit) {
     return replies.map((reply) => ({ target: 'reply', task: reply }));
   }
   if (target === 'mass') {
-    const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`);
+    const { tasks = [] } = await requestJson(options, 'GET', withWorkerQuery(`/api/automation/bridge/wecom/mass-tasks?limit=${limit}`, options));
     return tasks.map((task) => ({ target: 'mass', task }));
   }
-  const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`);
+  const { tasks = [] } = await requestJson(options, 'GET', withWorkerQuery(`/api/automation/bridge/wecom/moment-tasks?limit=${limit}`, options));
   return tasks.map((task) => ({ target: 'moment', task }));
 }
 
@@ -769,7 +781,7 @@ async function buildCloudRpaPackage(options) {
   const format = String(options.format || 'jsonl').trim().toLowerCase() === 'json' ? 'json' : 'jsonl';
   const includeSource = boolOpt(options, 'include-source', 'includeSource', 'source-task');
   const exportedAt = new Date().toISOString();
-  const source = String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE);
+  const source = bridgeSource(options);
   const pkgMeta = {
     packageId: String(options['package-id'] || options.packageId || `woc-rpa-${exportedAt.replace(/[:.]/g, '-')}`),
     exportedAt,
@@ -1240,7 +1252,7 @@ async function main() {
   }
 
   if (command === 'heartbeat') {
-    const source = String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE);
+    const source = bridgeSource(options);
     const mode = runnerMode(options, 'manual');
     printJson(
       await requestJson(options, 'POST', '/api/automation/bridge/wecom/heartbeat', {
@@ -1295,13 +1307,13 @@ async function main() {
 
   if (command === 'pull-mass-tasks') {
     const limit = intOpt(options.limit, 50, 1, 200);
-    printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`));
+    printJson(await requestJson(options, 'GET', withWorkerQuery(`/api/automation/bridge/wecom/mass-tasks?limit=${limit}`, options)));
     return;
   }
 
   if (command === 'pull-moment-tasks') {
     const limit = intOpt(options.limit, 50, 1, 200);
-    printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`));
+    printJson(await requestJson(options, 'GET', withWorkerQuery(`/api/automation/bridge/wecom/moment-tasks?limit=${limit}`, options)));
     return;
   }
 
@@ -1565,7 +1577,7 @@ async function main() {
     if (!handler && !dryRun) throw new BridgeError('run-mass requires --handler or --dry-run.');
     const startedMs = Date.now();
     const startedAt = new Date(startedMs).toISOString();
-    const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/mass-tasks?limit=${limit}`);
+    const { tasks = [] } = await requestJson(options, 'GET', withWorkerQuery(`/api/automation/bridge/wecom/mass-tasks?limit=${limit}`, options));
     const handled = [];
     for (const task of tasks) {
       if (dryRun) {
@@ -1643,7 +1655,7 @@ async function main() {
     if (markPrepared && markPublished) throw new BridgeError('run-moments cannot use --mark-prepared and --mark-published together.');
     const startedMs = Date.now();
     const startedAt = new Date(startedMs).toISOString();
-    const { tasks = [] } = await requestJson(options, 'GET', `/api/automation/bridge/wecom/moment-tasks?limit=${limit}`);
+    const { tasks = [] } = await requestJson(options, 'GET', withWorkerQuery(`/api/automation/bridge/wecom/moment-tasks?limit=${limit}`, options));
     const handled = [];
     for (const task of tasks) {
       if (dryRun) {

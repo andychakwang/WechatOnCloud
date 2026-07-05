@@ -35,6 +35,7 @@ import {
   type WecomBridgeMomentPasteMode,
   type WecomBridgeRunReport,
   type WecomBridgeRunReportsSummary,
+  type WecomBridgeWorkerStatus,
   type WecomBridgeWorkerCapability,
   type WecomBridgeRunnerEngine,
   type WecomBridgeRunnerMode,
@@ -296,7 +297,9 @@ const BRIDGE_RECOVERY_ACTION_LABEL: Record<string, string> = {
 const AUTOMATION_RISK_LABEL: Record<string, string> = {
   automation_off: '总开关关闭',
   bridge_workers_offline: 'Mac 离线',
+  bridge_workers_paused: 'Mac 已暂停',
   pending_without_worker: '有待办无在线 Mac',
+  pending_without_active_worker: '有待办无可用 Mac',
   worker_lacks_reply: 'Mac 缺回复能力',
   worker_lacks_mass: 'Mac 缺群发能力',
   worker_lacks_moment: 'Mac 缺朋友圈能力',
@@ -679,6 +682,20 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '保存 Runner 策略失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggleBridgeWorker = async (worker: WecomBridgeWorkerStatus, enabled: boolean) => {
+    const reason = enabled ? undefined : '管理员在云端暂停';
+    setBusy(`bridge-worker-${worker.id}`);
+    try {
+      await api.patchWecomBridgeWorker(worker.id, { enabled, reason });
+      toast(enabled ? 'Runner 已恢复' : 'Runner 已暂停', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新 Runner 状态失败', 'error');
     } finally {
       setBusy('');
     }
@@ -1665,6 +1682,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </div>
               <div className="muted small">
                 出箱待办 · {overview.bridge.lastWorkerSeenAt ? `最近心跳 ${fmtStaleSeconds((Date.now() - Date.parse(overview.bridge.lastWorkerSeenAt)) / 1000)}` : '暂无心跳'}
+                {overview.bridge.workersPaused ? ` · 已暂停 ${overview.bridge.workersPaused}` : ''}
               </div>
               <div className="muted small">
                 能力 回复 {overview.bridge.capabilities.reply} · 群发 {overview.bridge.capabilities.mass} · 朋友圈 {overview.bridge.capabilities.moment}
@@ -2365,6 +2383,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           <div className="muted small">
                             最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks} · 待朋友圈 {worker.pendingMomentTasks}
                           </div>
+                          {!worker.enabled && (
+                            <div className="muted small">
+                              已暂停{worker.pausedBy ? ` · ${worker.pausedBy}` : ''}
+                              {worker.pauseReason ? ` · ${worker.pauseReason}` : ''}
+                            </div>
+                          )}
                           <div className="chip-row">
                             {worker.capabilities.length > 0 ? (
                               worker.capabilities.slice(0, 8).map((capability) => (
@@ -2377,7 +2401,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             )}
                           </div>
                         </div>
-                        <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>
+                        <div className="chip-row auto-worker-actions">
+                          <span className={'tag ' + (!worker.enabled ? 'tag-warn' : worker.online ? 'tag-on' : 'tag-off')}>
+                            {!worker.enabled ? '已暂停' : worker.online ? '在线' : '离线'}
+                          </span>
+                          <button className="btn-text" disabled={busy === `bridge-worker-${worker.id}`} onClick={() => toggleBridgeWorker(worker, !worker.enabled)}>
+                            {worker.enabled ? '暂停' : '恢复'}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

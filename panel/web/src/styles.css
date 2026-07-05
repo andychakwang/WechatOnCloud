@@ -1158,6 +1158,10 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
   margin-top: 10px;
 }
+.auto-worker-actions {
+  justify-content: flex-end;
+  min-width: 104px;
+}
 .auto-switches {
   display: flex;
   flex-wrap: wrap;

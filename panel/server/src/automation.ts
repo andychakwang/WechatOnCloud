@@ -190,6 +190,10 @@ export interface WecomBridgeWorker {
   id: string;
   workerId: string;
   source: string;
+  enabled: boolean;
+  pausedAt?: string;
+  pausedBy?: string;
+  pauseReason?: string;
   mode: string;
   host: string;
   pid?: number;
@@ -490,6 +494,7 @@ export interface AutomationOverview {
   bridge: {
     workersTotal: number;
     workersOnline: number;
+    workersPaused: number;
     lastWorkerSeenAt?: string;
     events: {
       active: number;
@@ -983,7 +988,8 @@ export function getAutomationOverview(): AutomationOverview {
   const nowIso = new Date().toISOString();
   const gates = getAutomationRunGates(new Date(Date.parse(nowIso)));
   const workers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
-  const onlineWorkers = workers.filter((worker) => worker.online);
+  const onlineWorkers = workers.filter((worker) => worker.online && worker.enabled);
+  const pausedWorkers = workers.filter((worker) => !worker.enabled);
   const workerCapabilities = Object.fromEntries(
     [...BRIDGE_WORKER_CAPABILITIES, 'unknown' as const].map((capability) => [capability, 0]),
   ) as Record<WecomBridgeWorkerCapability | 'unknown', number>;
@@ -1034,6 +1040,10 @@ export function getAutomationOverview(): AutomationOverview {
   const riskFlags: string[] = [];
   if (!data.settings.enabled) riskFlags.push('automation_off');
   if (data.settings.enabled && data.bridgeWorkers.length > 0 && workers.every((worker) => !worker.online)) riskFlags.push('bridge_workers_offline');
+  if (pausedWorkers.length > 0) riskFlags.push('bridge_workers_paused');
+  if (pendingReplies + pendingMassTasks + pendingMomentTasks > 0 && workers.some((worker) => worker.online) && onlineWorkers.length === 0) {
+    riskFlags.push('pending_without_active_worker');
+  }
   if (pendingReplies + pendingMassTasks + pendingMomentTasks > 0 && workers.every((worker) => !worker.online)) riskFlags.push('pending_without_worker');
   if (pendingReplies > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'reply'))) riskFlags.push('worker_lacks_reply');
   if (pendingMassTasks > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'mass'))) riskFlags.push('worker_lacks_mass');
@@ -1081,6 +1091,7 @@ export function getAutomationOverview(): AutomationOverview {
     bridge: {
       workersTotal: workers.length,
       workersOnline: workers.filter((worker) => worker.online).length,
+      workersPaused: pausedWorkers.length,
       lastWorkerSeenAt,
       events: {
         active: activeBridgeEvents.length,
@@ -1149,6 +1160,7 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
   const runnableRuleCount = enabledApprovedRules.filter(hasRunnableSteps).length;
   const pendingTotal = overview.bridge.pendingReplies + overview.bridge.pendingMassTasks + overview.bridge.pendingMomentTasks;
   const bridgeWorkers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
+  const activeOnlineBridgeWorkers = bridgeWorkers.filter((worker) => worker.online && worker.enabled);
   const runnableMassJobs = data.massSendJobs.filter((job) => isMassJobBridgeRunnable(job, nowIso));
   const readyMomentDrafts = data.momentDrafts.filter((draft) => isMomentDraftBridgeRunnable(draft, nowIso));
   const add = (check: AutomationPreflightCheck) => checks.push(check);
@@ -1208,13 +1220,22 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
     }
   }
 
-  if (overview.bridge.workersOnline > 0) {
+  if (activeOnlineBridgeWorkers.length > 0) {
     add({
       id: 'bridge_worker_online',
       level: 'ok',
       title: 'Mac Bridge 在线',
-      message: `${overview.bridge.workersOnline} 个 Runner 最近上报了心跳。`,
-      count: overview.bridge.workersOnline,
+      message: `${activeOnlineBridgeWorkers.length} 个未暂停 Runner 最近上报了心跳。`,
+      count: activeOnlineBridgeWorkers.length,
+    });
+  } else if (pendingTotal > 0 && overview.bridge.workersPaused > 0) {
+    add({
+      id: 'pending_without_active_worker',
+      level: 'block',
+      title: '有待办但在线 Runner 已暂停',
+      message: `当前有 ${pendingTotal} 个出箱待办，但可用 Runner 为 0；已有 ${overview.bridge.workersPaused} 个 Runner 被暂停。`,
+      count: pendingTotal,
+      action: '在 Mac Bridge 区域恢复可信 Runner，或启动新的 Runner。',
     });
   } else if (pendingTotal > 0) {
     add({
@@ -1519,7 +1540,7 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
   }
 
   function addPolicyCapabilityCheck(id: string, capabilities: WecomBridgeWorkerCapability[], label: string, message: string) {
-    const online = bridgeWorkers.filter((worker) => worker.online);
+    const online = bridgeWorkers.filter((worker) => worker.online && worker.enabled);
     if (online.length === 0) return;
     const known = online.filter((worker) => worker.capabilities.length > 0);
     const knownCapable = known.filter((worker) => capabilities.some((capability) => worker.capabilities.includes(capability)));
@@ -2015,6 +2036,40 @@ export function listWecomBridgeWorkers(limit = 50, offlineAfterSeconds = 180): W
     .map((worker) => publicBridgeWorker(worker, now, offlineAfter));
 }
 
+export function patchWecomBridgeWorker(actor: User, workerRef: string, raw: any): WecomBridgeWorkerStatus {
+  const ref = str(workerRef, 220).trim();
+  const source = str(raw?.source ?? raw?.sourceName ?? '', 80).trim().toLowerCase();
+  const index = data.bridgeWorkers.findIndex(
+    (worker) => (worker.id === ref || worker.workerId === ref) && (!source || worker.source.toLowerCase() === source),
+  );
+  if (index < 0) throw new Error('Bridge worker 不存在');
+  const worker = data.bridgeWorkers[index];
+  const now = new Date().toISOString();
+  const shouldPause = raw?.enabled === false || raw?.paused === true || raw?.disabled === true;
+  const shouldResume = raw?.enabled === true || raw?.paused === false || raw?.disabled === false;
+  if (!shouldPause && !shouldResume) throw new Error('缺少 enabled/paused 状态');
+
+  if (shouldPause) {
+    worker.enabled = false;
+    worker.pausedAt = now;
+    worker.pausedBy = actor.username;
+    worker.pauseReason = str(raw?.pauseReason ?? raw?.reason ?? raw?.message ?? '', 300).trim() || undefined;
+  } else {
+    worker.enabled = true;
+    worker.pausedAt = undefined;
+    worker.pausedBy = undefined;
+    worker.pauseReason = undefined;
+  }
+  worker.updatedAt = now;
+  persist();
+  addAutomationAudit({
+    action: shouldPause ? 'bridge_worker_paused' : 'bridge_worker_resumed',
+    actor: actor.username,
+    message: `${shouldPause ? '暂停' : '恢复'} Bridge worker「${worker.workerId}」${worker.pauseReason ? `：${worker.pauseReason}` : ''}`,
+  });
+  return publicBridgeWorker(worker);
+}
+
 export function listWecomBridgeRunReports(limit = 50, workerId = ''): WecomBridgeRunReport[] {
   const n = clampInt(limit, 1, MAX_BRIDGE_RUN_REPORTS, 50);
   const wantedWorkerId = str(workerId, 120).trim();
@@ -2194,6 +2249,7 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
     id: `${source}:${workerId}`,
     workerId,
     source,
+    enabled: true,
     mode: str(raw?.mode || raw?.runnerMode || raw?.status || 'unknown', 60).trim() || 'unknown',
     host,
     pid,
@@ -2216,6 +2272,10 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
     data.bridgeWorkers[existingIndex] = {
       ...incoming,
       id: existing.id,
+      enabled: existing.enabled !== false,
+      pausedAt: existing.pausedAt,
+      pausedBy: existing.pausedBy,
+      pauseReason: existing.pauseReason,
       createdAt: existing.createdAt,
     };
   } else {
@@ -2651,6 +2711,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
 export function listApprovedWecomBridgeReplies(limit = 50, raw: WecomBridgeReplyListOptions = {}): WecomBridgeEvent[] {
   const n = clampInt(limit, 1, 200, 50);
   if (!data.settings.enabled || !isAutomationRunGateOpen()) return [];
+  if (!isBridgeWorkerEnabledForPull(raw)) return [];
   const now = new Date().toISOString();
   const requireSendable = raw.requireSendable === true;
   return data.bridgeEvents
@@ -3685,10 +3746,11 @@ export function patchMassSendItem(actor: User, jobId: string, itemId: string, ra
   return cloneMassSendJob(job);
 }
 
-export function listApprovedWecomBridgeMassTasks(limit = 50): WecomBridgeMassSendTask[] {
+export function listApprovedWecomBridgeMassTasks(limit = 50, raw: any = {}): WecomBridgeMassSendTask[] {
   const n = clampInt(limit, 1, 200, 50);
   if (!data.settings.enabled || !data.settings.massSendEnabled) return [];
   if (!isAutomationRunGateOpen()) return [];
+  if (!isBridgeWorkerEnabledForPull(raw)) return [];
   const now = new Date().toISOString();
   const tasks: WecomBridgeMassSendTask[] = [];
   for (const job of data.massSendJobs) {
@@ -3925,10 +3987,11 @@ export function patchMomentDraft(actor: User, draftId: string, raw: any): Moment
   return cloneMomentDraft(draft);
 }
 
-export function listApprovedWecomBridgeMomentTasks(limit = 50): WecomBridgeMomentTask[] {
+export function listApprovedWecomBridgeMomentTasks(limit = 50, raw: any = {}): WecomBridgeMomentTask[] {
   const n = clampInt(limit, 1, 200, 50);
   if (!data.settings.enabled || !data.settings.momentsEnabled) return [];
   if (!isAutomationRunGateOpen()) return [];
+  if (!isBridgeWorkerEnabledForPull(raw)) return [];
   const now = new Date().toISOString();
   const tasks: WecomBridgeMomentTask[] = [];
   for (const draft of data.momentDrafts) {
@@ -4866,6 +4929,10 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : `${source}:${workerId}`,
     workerId,
     source,
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : raw?.disabled === true || raw?.paused === true ? false : true,
+    pausedAt: typeof raw?.pausedAt === 'string' && raw.pausedAt ? raw.pausedAt : undefined,
+    pausedBy: str(raw?.pausedBy, 120).trim() || undefined,
+    pauseReason: str(raw?.pauseReason ?? raw?.disabledReason, 300).trim() || undefined,
     mode: str(raw?.mode || 'unknown', 60).trim() || 'unknown',
     host: str(raw?.host ?? raw?.hostname ?? '', 120).trim(),
     pid: Number.isFinite(Number(raw?.pid)) ? Math.max(0, Math.trunc(Number(raw.pid))) : undefined,
@@ -6068,6 +6135,7 @@ function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offline
   const staleSeconds = Number.isFinite(lastSeenMs) ? Math.max(0, Math.round((now - lastSeenMs) / 1000)) : offlineAfterSeconds + 1;
   return {
     ...worker,
+    enabled: worker.enabled !== false,
     capabilities: [...worker.capabilities],
     online: staleSeconds <= offlineAfterSeconds,
     staleSeconds,
@@ -6075,18 +6143,36 @@ function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offline
   };
 }
 
-function bridgeWorkerCan(worker: Pick<WecomBridgeWorker, 'capabilities'>, capability: WecomBridgeWorkerCapability): boolean {
-  return worker.capabilities.length === 0 || worker.capabilities.includes(capability);
+function bridgeWorkerCan(worker: Pick<WecomBridgeWorker, 'capabilities' | 'enabled'>, capability: WecomBridgeWorkerCapability): boolean {
+  return worker.enabled !== false && (worker.capabilities.length === 0 || worker.capabilities.includes(capability));
+}
+
+function bridgeClaimWorker(raw: any, workerId: string): WecomBridgeWorker | null {
+  const source = str(raw?.source ?? raw?.sourceName ?? '', 80).trim().toLowerCase();
+  const candidates = data.bridgeWorkers
+    .filter((worker) => worker.workerId === workerId && (!source || worker.source.toLowerCase() === source))
+    .sort((a, b) => Date.parse(b.lastSeenAt || b.updatedAt) - Date.parse(a.lastSeenAt || a.updatedAt));
+  return candidates[0] || null;
+}
+
+function isBridgeWorkerEnabledForPull(raw: any): boolean {
+  const workerId = str(raw?.workerId ?? raw?.worker ?? raw?.clientId ?? '', 120).trim();
+  if (!workerId) return true;
+  const worker = bridgeClaimWorker(raw, workerId);
+  return !worker || worker.enabled !== false;
 }
 
 function bridgeClaimCapabilities(raw: any, workerId: string): WecomBridgeWorkerCapability[] | null {
   const inline = normalizeBridgeWorkerCapabilities(raw?.capabilities ?? raw?.capability ?? raw?.workerCapabilities);
   if (inline.length > 0) return inline;
-  const source = str(raw?.source ?? raw?.sourceName ?? '', 80).trim().toLowerCase();
-  const candidates = data.bridgeWorkers
-    .filter((worker) => worker.workerId === workerId && (!source || worker.source.toLowerCase() === source))
-    .sort((a, b) => Date.parse(b.lastSeenAt || b.updatedAt) - Date.parse(a.lastSeenAt || a.updatedAt));
-  return candidates[0]?.capabilities ? [...candidates[0].capabilities] : null;
+  const worker = bridgeClaimWorker(raw, workerId);
+  return worker?.capabilities ? [...worker.capabilities] : null;
+}
+
+function requireBridgeWorkerEnabled(raw: any, workerId: string, actionLabel: string) {
+  const worker = bridgeClaimWorker(raw, workerId);
+  if (!worker || worker.enabled !== false) return;
+  throw new Error(`Bridge worker「${workerId}」已暂停，不能${actionLabel}${worker.pauseReason ? `：${worker.pauseReason}` : ''}`);
 }
 
 function requireBridgeWorkerCapabilities(
@@ -6095,6 +6181,7 @@ function requireBridgeWorkerCapabilities(
   capabilities: WecomBridgeWorkerCapability[],
   actionLabel: string,
 ) {
+  requireBridgeWorkerEnabled(raw, workerId, actionLabel);
   const reported = bridgeClaimCapabilities(raw, workerId);
   if (!reported || reported.length === 0) return;
   const missing = capabilities.filter((capability) => !reported.includes(capability));
@@ -6103,7 +6190,7 @@ function requireBridgeWorkerCapabilities(
 }
 
 function bridgeWorkersCapabilityState(workers: WecomBridgeWorkerStatus[], capability: WecomBridgeWorkerCapability) {
-  const online = workers.filter((worker) => worker.online);
+  const online = workers.filter((worker) => worker.online && worker.enabled);
   const known = online.filter((worker) => worker.capabilities.length > 0);
   const knownCapable = known.filter((worker) => worker.capabilities.includes(capability));
   const unknown = online.length - known.length;

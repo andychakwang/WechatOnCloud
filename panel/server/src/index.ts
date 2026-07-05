@@ -104,6 +104,7 @@ import {
   patchAutomationAudienceContact,
   deleteAutomationAudienceContact,
   listWecomBridgeWorkers,
+  patchWecomBridgeWorker,
   listWecomBridgeRunReports,
   summarizeWecomBridgeRunReports,
   getWecomBridgeRunnerPolicy,
@@ -544,6 +545,18 @@ app.get('/api/admin/automation/bridge-runs', async (req, reply) => {
   return { reports: listWecomBridgeRunReports(Number(query?.limit || 50), String(query?.workerId || '')) };
 });
 
+app.patch('/api/admin/automation/bridge-workers/:workerId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const worker = patchWecomBridgeWorker(admin, decodeURIComponent(String((req.params as any).workerId || '')), req.body as any);
+    appendPanelLog('INFO', `${worker.enabled ? '恢复' : '暂停'} Bridge worker「${worker.workerId}」by ${admin.username}`);
+    return { worker };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新 Bridge worker 失败' });
+  }
+});
+
 app.get('/api/admin/automation/bridge-runs/summary', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   const query = req.query as any;
@@ -742,11 +755,12 @@ app.post(AUTOMATION_BRIDGE_EVENT_ENDPOINT, async (req, reply) => {
 app.post(AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   try {
-    const pendingReplies = listApprovedWecomBridgeReplies(200).length;
-    const pendingMassTasks = listApprovedWecomBridgeMassTasks(200).length;
-    const pendingMomentTasks = listApprovedWecomBridgeMomentTasks(200).length;
+    const body = req.body as any;
+    const pendingReplies = listApprovedWecomBridgeReplies(200, body).length;
+    const pendingMassTasks = listApprovedWecomBridgeMassTasks(200, body).length;
+    const pendingMomentTasks = listApprovedWecomBridgeMomentTasks(200, body).length;
     const worker = recordWecomBridgeHeartbeat(AUTOMATION_BRIDGE_USER, {
-      ...(req.body as any),
+      ...body,
       pendingReplies,
       pendingMassTasks,
       pendingMomentTasks,
@@ -805,7 +819,7 @@ app.get(AUTOMATION_BRIDGE_REPLY_ENDPOINT, async (req, reply) => {
   const query = req.query as any;
   const mode = String(query?.mode || '').trim().toLowerCase();
   const requireSendable = boolQuery(query?.requireSendable ?? query?.sendable ?? query?.requireAutoSend) || mode === 'send';
-  return { replies: listApprovedWecomBridgeReplies(Number(query?.limit || 50), { requireSendable }) };
+  return { replies: listApprovedWecomBridgeReplies(Number(query?.limit || 50), { ...query, requireSendable }) };
 });
 
 app.patch(`${AUTOMATION_BRIDGE_REPLY_ENDPOINT}/:eventId`, async (req, reply) => {
@@ -823,7 +837,7 @@ app.patch(`${AUTOMATION_BRIDGE_REPLY_ENDPOINT}/:eventId`, async (req, reply) => 
 app.get(AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   const query = req.query as any;
-  return { tasks: listApprovedWecomBridgeMassTasks(Number(query?.limit || 50)) };
+  return { tasks: listApprovedWecomBridgeMassTasks(Number(query?.limit || 50), query) };
 });
 
 app.patch(`${AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT}/:taskId`, async (req, reply) => {
@@ -841,7 +855,7 @@ app.patch(`${AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT}/:taskId`, async (req, reply) 
 app.get(AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   const query = req.query as any;
-  return { tasks: listApprovedWecomBridgeMomentTasks(Number(query?.limit || 50)) };
+  return { tasks: listApprovedWecomBridgeMomentTasks(Number(query?.limit || 50), query) };
 });
 
 app.patch(`${AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT}/:taskId`, async (req, reply) => {

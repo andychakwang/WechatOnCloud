@@ -214,6 +214,10 @@ export interface WecomBridgeWorkerStatus {
   id: string;
   workerId: string;
   source: string;
+  enabled: boolean;
+  pausedAt?: string;
+  pausedBy?: string;
+  pauseReason?: string;
   mode: string;
   host: string;
   pid?: number;
@@ -612,6 +616,7 @@ export interface AutomationOverview {
   bridge: {
     workersTotal: number;
     workersOnline: number;
+    workersPaused: number;
     lastWorkerSeenAt?: string;
     events: {
       active: number;
@@ -974,6 +979,11 @@ export const api = {
     req<{ summary: WecomBridgeRunReportsSummary }>(
       `/api/admin/automation/bridge-runs/summary?hours=${encodeURIComponent(hours)}&limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,
     ),
+  patchWecomBridgeWorker: (workerId: string, payload: { enabled?: boolean; paused?: boolean; reason?: string; pauseReason?: string }) =>
+    req<{ worker: WecomBridgeWorkerStatus }>(`/api/admin/automation/bridge-workers/${encodeURIComponent(workerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   getWecomBridgeRunnerPolicy: () => req<{ policy: WecomBridgeRunnerPolicy }>('/api/admin/automation/runner-policy'),
   updateWecomBridgeRunnerPolicy: (policy: Partial<WecomBridgeRunnerPolicy>) =>
     req<{ policy: WecomBridgeRunnerPolicy }>('/api/admin/automation/runner-policy', {
