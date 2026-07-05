@@ -5,6 +5,7 @@ import {
   api,
   APP_LABELS,
   appProfile,
+  type AutomationStep,
   type AutomationBridgeStatus,
   type AutomationConfig,
   type AutomationAudienceContact,
@@ -194,6 +195,41 @@ const AUTOMATION_RISK_LABEL: Record<string, string> = {
 
 function linesOf(text: string): string[] {
   return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
+}
+
+function replyStepsFromDraft(draft: string): AutomationStep[] {
+  const steps: AutomationStep[] = [];
+  let buffer: string[] = [];
+  const flushText = () => {
+    const text = buffer.join('\n').trim();
+    buffer = [];
+    if (text) steps.push({ type: 'text', text, sendEnter: true });
+  };
+  for (const rawLine of draft.replace(/\r\n/g, '\n').split('\n')) {
+    const line = rawLine.trim();
+    const wait = line.match(/^(?:\[?\s*wait|等待)\s*[:：]?\s*(\d{1,3})\s*(?:s|秒)?\s*\]?$/i);
+    if (wait) {
+      flushText();
+      const seconds = Math.max(1, Math.min(600, Number(wait[1])));
+      steps.push({ type: 'wait', seconds });
+      continue;
+    }
+    if (!line) {
+      flushText();
+      continue;
+    }
+    buffer.push(rawLine);
+  }
+  flushText();
+  return steps.slice(0, 30);
+}
+
+function replyStepSummary(steps?: AutomationStep[]): string {
+  const items = steps || [];
+  const textCount = items.filter((step) => step.type === 'text').length;
+  const waitSeconds = items.reduce((sum, step) => (step.type === 'wait' ? sum + step.seconds : sum), 0);
+  if (!items.length) return '单段回复';
+  return `${textCount} 段文本${waitSeconds ? ` · 等待 ${waitSeconds} 秒` : ''}`;
 }
 
 function defaultAutomationConfig(): AutomationConfig {
@@ -544,19 +580,22 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
-  const saveBridgeReplyDraft = async (event: WecomBridgeEvent, approve = false) => {
+  const saveBridgeReplyDraft = async (event: WecomBridgeEvent, approve = false, asSequence = false) => {
     const draft = (bridgeReplyDrafts[event.id] || '').trim();
     if (!draft) return toast('请先填写回复草稿', 'error');
+    const replySteps = asSequence ? replyStepsFromDraft(draft) : undefined;
+    if (asSequence && !replySteps?.some((step) => step.type === 'text')) return toast('顺序回复至少需要一段文本', 'error');
     setBusy(`bridge-reply-${event.id}`);
     try {
       const { event: saved } = await api.patchWecomBridgeEvent(event.id, {
         status: 'planned',
         replyDraft: draft,
+        ...(replySteps ? { replySteps } : {}),
         replyApproved: approve ? true : event.replyApproved,
       });
       setBridgeEvents((list) => list.map((x) => (x.id === saved.id ? saved : x)));
       setBridgeReplyDrafts((map) => ({ ...map, [saved.id]: saved.replyDraft || '' }));
-      toast(approve ? '回复草稿已批准，Mac 端可拉取' : '回复草稿已保存', 'ok');
+      toast(approve ? (asSequence ? '顺序回复已批准，Mac 端可拉取' : '回复草稿已批准，Mac 端可拉取') : asSequence ? '顺序回复已保存' : '回复草稿已保存', 'ok');
     } catch (e: any) {
       toast(e.message || '保存回复草稿失败', 'error');
     } finally {
@@ -1423,6 +1462,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       {AUTO_STATUS_LABEL[event.status] || event.status} · {event.source} · {fmtDate(Date.parse(event.receivedAt || event.createdAt))}
                       {event.senderName ? ` · ${event.senderName}` : ''}
                       {event.replyApproved ? ' · 回复已批准' : ''}
+                      {event.replySteps?.length ? ` · 顺序回复 ${replyStepSummary(event.replySteps)}` : ''}
                       {event.replyClaimedAt && !event.replyDeliveredAt
                         ? isPastIso(event.replyClaimExpiresAt)
                           ? ` · 领取超时${event.replyClaimedBy ? `(${event.replyClaimedBy})` : ''}`
@@ -1451,16 +1491,23 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   <div className="auto-targets">
                     <textarea
                       className="input textarea"
-                      placeholder="人工确认后的回复草稿。批准后，企微 Mac 工具可以通过 Bridge 拉取。"
+                      placeholder="人工确认后的回复草稿。空行分段；写 [wait 3] 可插入等待。批准后，企微 Mac 工具可以通过 Bridge 拉取。"
                       value={bridgeReplyDrafts[event.id] ?? event.replyDraft ?? ''}
                       onChange={(e) => setBridgeReplyDrafts((map) => ({ ...map, [event.id]: e.target.value }))}
                     />
+                    <div className="muted small">当前：{replyStepSummary(event.replySteps)}</div>
                     <div className="auto-actions inline">
                       <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => saveBridgeReplyDraft(event)}>
                         保存草稿
                       </button>
+                      <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => saveBridgeReplyDraft(event, false, true)}>
+                        保存为顺序回复
+                      </button>
                       <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => saveBridgeReplyDraft(event, true)}>
                         保存并批准
+                      </button>
+                      <button className="btn-text" disabled={busy === `bridge-reply-${event.id}`} onClick={() => saveBridgeReplyDraft(event, true, true)}>
+                        顺序批准
                       </button>
                       {event.replyApproved && (
                         <button className="btn-text danger" disabled={busy === `bridge-reply-${event.id}`} onClick={() => toggleBridgeReplyApproval(event, false)}>

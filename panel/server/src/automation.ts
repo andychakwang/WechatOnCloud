@@ -89,6 +89,7 @@ export interface WecomBridgeEvent {
   updatedAt: string;
   lastPlannedAt?: string;
   replyDraft?: string;
+  replySteps?: AutomationStep[];
   replyApproved: boolean;
   replyApprovedAt?: string;
   replyClaimedAt?: string;
@@ -487,12 +488,12 @@ export function getAutomationOverview(): AutomationOverview {
   const pendingReplies = activeBridgeEvents.filter(
     (event) =>
       event.replyApproved &&
-      !!event.replyDraft?.trim() &&
+      hasRunnableBridgeReply(event) &&
       (!event.replyClaimedAt || isBridgeReplyClaimExpired(event, nowIso)) &&
       !event.replyDeliveredAt,
   ).length;
   const claimedReplies = activeBridgeEvents.filter(
-    (event) => event.replyApproved && !!event.replyClaimedAt && !isBridgeReplyClaimExpired(event, nowIso) && !event.replyDeliveredAt,
+    (event) => event.replyApproved && hasRunnableBridgeReply(event) && !!event.replyClaimedAt && !isBridgeReplyClaimExpired(event, nowIso) && !event.replyDeliveredAt,
   ).length;
   const pendingMassTasks = data.massSendJobs.reduce((sum, job) => {
     if (!isMassJobBridgeRunnable(job)) return sum;
@@ -779,6 +780,7 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
           updatedAt: now,
           lastPlannedAt: existing.lastPlannedAt,
           replyDraft: existing.replyDraft,
+          replySteps: existing.replySteps?.map((step) => ({ ...step })),
           replyApproved: existing.replyApproved,
           replyApprovedAt: existing.replyApprovedAt,
           replyClaimedAt: existing.replyClaimedAt,
@@ -826,42 +828,33 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
   if (typeof raw?.replyDraft === 'string') {
     const previousDraft = event.replyDraft || '';
     event.replyDraft = str(raw.replyDraft, 1000).trim() || undefined;
+    if (raw?.replySteps === undefined) event.replySteps = undefined;
     if ((event.replyDraft || '') !== previousDraft) {
-      event.replyClaimedAt = undefined;
-      event.replyClaimedBy = undefined;
-      event.replyClaimExpiresAt = undefined;
-      event.replyFailedAt = undefined;
-      event.replyError = undefined;
-      event.replyDeliveredAt = undefined;
-    }
-    if (!event.replyDraft) {
-      event.replyApproved = false;
-      event.replyApprovedAt = undefined;
-      event.replyClaimedAt = undefined;
-      event.replyClaimedBy = undefined;
-      event.replyClaimExpiresAt = undefined;
-      event.replyFailedAt = undefined;
-      event.replyError = undefined;
-      event.replyDeliveredAt = undefined;
+      resetBridgeReplyDeliveryState(event);
     }
   }
+  if (raw?.replySteps !== undefined || raw?.steps !== undefined || raw?.responseSteps !== undefined) {
+    const previousSteps = JSON.stringify(event.replySteps || []);
+    const steps = normalizeBridgeReplySteps(raw?.replySteps ?? raw?.steps ?? raw?.responseSteps);
+    event.replySteps = steps.length ? steps : undefined;
+    if (event.replySteps) event.replyDraft = bridgeReplyTextFromSteps(event.replySteps) || event.replyDraft;
+    if (JSON.stringify(event.replySteps || []) !== previousSteps) resetBridgeReplyDeliveryState(event);
+  }
+  if (!hasRunnableBridgeReply(event)) {
+    event.replyApproved = false;
+    event.replyApprovedAt = undefined;
+    resetBridgeReplyDeliveryState(event);
+  }
   if (typeof raw?.replyApproved === 'boolean') {
-    if (raw.replyApproved && !event.replyDraft?.trim()) throw new Error('批准前需要先保存回复草稿');
+    if (raw.replyApproved && !hasRunnableBridgeReply(event)) throw new Error('批准前需要先保存可执行回复草稿');
     event.replyApproved = raw.replyApproved;
     event.replyApprovedAt = raw.replyApproved ? now : undefined;
-    if (!raw.replyApproved) {
-      event.replyClaimedAt = undefined;
-      event.replyClaimedBy = undefined;
-      event.replyClaimExpiresAt = undefined;
-      event.replyFailedAt = undefined;
-      event.replyError = undefined;
-      event.replyDeliveredAt = undefined;
-    }
+    if (!raw.replyApproved) resetBridgeReplyDeliveryState(event);
   }
   const deliveryStatus = normalizeBridgeReplyDeliveryStatus(raw?.deliveryStatus);
   if (raw?.deliveryStatus !== undefined && !deliveryStatus) throw new Error('Bridge 回复交付状态不合法');
   if (raw?.markClaimed === true || deliveryStatus === 'claimed') {
-    if (!event.replyApproved || !event.replyDraft?.trim()) throw new Error('未批准的回复不能领取');
+    if (!event.replyApproved || !hasRunnableBridgeReply(event)) throw new Error('未批准的回复不能领取');
     if (event.replyDeliveredAt) throw new Error('已交付的回复不能再次领取');
     const workerId = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
     if (event.replyClaimedAt && !isBridgeReplyClaimExpired(event, now) && event.replyClaimedBy && event.replyClaimedBy !== workerId) {
@@ -920,7 +913,7 @@ export function listApprovedWecomBridgeReplies(limit = 50): WecomBridgeEvent[] {
     .filter(
       (event) =>
         event.replyApproved &&
-        !!event.replyDraft?.trim() &&
+        hasRunnableBridgeReply(event) &&
         (!event.replyClaimedAt || isBridgeReplyClaimExpired(event, now)) &&
         !event.replyDeliveredAt &&
         event.status !== 'archived',
@@ -2294,7 +2287,9 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
   const senderName = str(raw?.senderName ?? raw?.sender ?? raw?.fromName ?? raw?.from ?? raw?.author, 120).trim();
   const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
   const receivedAt = normalizeIsoDate(raw?.receivedAt ?? raw?.messageTime ?? raw?.timestamp ?? raw?.time, now);
-  return {
+  const replySteps = normalizeBridgeReplySteps(raw?.replySteps ?? raw?.steps ?? raw?.responseSteps);
+  const replyDraft = str(raw?.replyDraft, 1000).trim() || bridgeReplyTextFromSteps(replySteps) || undefined;
+  const event: WecomBridgeEvent = {
     id,
     source: str(raw?.source || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge',
     externalId: str(raw?.externalId ?? raw?.messageId ?? raw?.msgId ?? raw?.eventId, 120).trim() || undefined,
@@ -2307,7 +2302,8 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
     lastPlannedAt: typeof raw?.lastPlannedAt === 'string' && raw.lastPlannedAt ? raw.lastPlannedAt : undefined,
-    replyDraft: str(raw?.replyDraft, 1000).trim() || undefined,
+    replyDraft,
+    replySteps: replySteps.length ? replySteps : undefined,
     replyApproved: typeof raw?.replyApproved === 'boolean' ? raw.replyApproved : false,
     replyApprovedAt: typeof raw?.replyApprovedAt === 'string' && raw.replyApprovedAt ? raw.replyApprovedAt : undefined,
     replyClaimedAt: typeof raw?.replyClaimedAt === 'string' && raw.replyClaimedAt ? raw.replyClaimedAt : undefined,
@@ -2317,6 +2313,11 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     replyError: str(raw?.replyError, 1000).trim() || undefined,
     replyDeliveredAt: typeof raw?.replyDeliveredAt === 'string' && raw.replyDeliveredAt ? raw.replyDeliveredAt : undefined,
   };
+  if (event.replyApproved && !hasRunnableBridgeReply(event)) {
+    event.replyApproved = false;
+    event.replyApprovedAt = undefined;
+  }
+  return event;
 }
 
 function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): WecomBridgeWorker {
@@ -2491,6 +2492,62 @@ function normalizeStep(raw: any): AutomationStep | null {
     return { type: 'wait', seconds: clampInt(raw.seconds, 0, 300, 1) };
   }
   return null;
+}
+
+function normalizeBridgeReplySteps(raw: any): AutomationStep[] {
+  const items = Array.isArray(raw) ? raw : [];
+  const steps: AutomationStep[] = [];
+  for (const item of items.slice(0, 20)) {
+    steps.push(...normalizeBridgeReplyStep(item));
+  }
+  return steps.slice(0, 30);
+}
+
+function normalizeBridgeReplyStep(raw: any): AutomationStep[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const steps: AutomationStep[] = [];
+  const delay = clampInt(raw.delayBeforeSendingSeconds ?? raw.delaySeconds ?? raw.waitSeconds, 0, 600, 0);
+  const type = String(raw.type ?? raw.contentType ?? '').trim().toLowerCase();
+  if (type === 'wait' || type === 'delay') {
+    const seconds = clampInt(raw.seconds ?? raw.delayBeforeSendingSeconds ?? raw.delaySeconds, 0, 600, 1);
+    return seconds > 0 ? [{ type: 'wait', seconds }] : [];
+  }
+  if (type === 'text' || raw.text !== undefined || raw.content !== undefined) {
+    const text = str(raw.text ?? raw.content ?? raw.message, 1000).trim();
+    if (!text) return [];
+    if (delay > 0) steps.push({ type: 'wait', seconds: delay });
+    steps.push({ type: 'text', text, sendEnter: raw.sendEnter !== false });
+    return steps;
+  }
+  return [];
+}
+
+function bridgeReplySteps(event: WecomBridgeEvent): AutomationStep[] {
+  if (event.replySteps?.length) return event.replySteps;
+  const text = event.replyDraft?.trim();
+  return text ? [{ type: 'text', text, sendEnter: true }] : [];
+}
+
+function bridgeReplyTextFromSteps(steps: AutomationStep[]): string {
+  return steps
+    .filter((step): step is Extract<AutomationStep, { type: 'text' }> => step.type === 'text')
+    .map((step) => step.text.trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .slice(0, 1000);
+}
+
+function hasRunnableBridgeReply(event: WecomBridgeEvent): boolean {
+  return bridgeReplySteps(event).some((step) => step.type === 'text' && !!step.text.trim());
+}
+
+function resetBridgeReplyDeliveryState(event: WecomBridgeEvent) {
+  event.replyClaimedAt = undefined;
+  event.replyClaimedBy = undefined;
+  event.replyClaimExpiresAt = undefined;
+  event.replyFailedAt = undefined;
+  event.replyError = undefined;
+  event.replyDeliveredAt = undefined;
 }
 
 function normalizeAuditEvent(raw: any): AutomationAuditEvent | null {
@@ -2806,7 +2863,7 @@ function cloneAudienceContact(contact: AutomationAudienceContact): AutomationAud
 }
 
 function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
-  return { ...event };
+  return { ...event, replySteps: event.replySteps?.map((step) => ({ ...step })) };
 }
 
 function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunReport {

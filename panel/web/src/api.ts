@@ -268,6 +268,7 @@ export interface WecomBridgeEvent {
   updatedAt: string;
   lastPlannedAt?: string;
   replyDraft?: string;
+  replySteps?: AutomationStep[];
   replyApproved: boolean;
   replyApprovedAt?: string;
   replyClaimedAt?: string;
@@ -533,6 +534,7 @@ export const api = {
     payload: {
       status?: WecomBridgeEvent['status'];
       replyDraft?: string;
+      replySteps?: AutomationStep[];
       replyApproved?: boolean;
       markDelivered?: boolean;
       markReleased?: boolean;

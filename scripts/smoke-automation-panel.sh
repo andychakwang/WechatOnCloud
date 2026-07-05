@@ -429,13 +429,16 @@ PY
   bridge_event_id="$(json_get result.events[0].id)"
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"planned"}'
   json_assert_eq event.status planned
-  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"replyDraft":"这是经过人工确认的 Bridge smoke 回复草稿。","replyApproved":true}'
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"replyDraft":"这是经过人工确认的 Bridge smoke 第一段回复。\n\n[wait 1]\n\n这是经过人工确认的 Bridge smoke 第二段回复。","replySteps":[{"type":"text","text":"这是经过人工确认的 Bridge smoke 第一段回复。","sendEnter":true},{"type":"wait","seconds":1},{"type":"text","text":"这是经过人工确认的 Bridge smoke 第二段回复。","sendEnter":true}],"replyApproved":true}'
   json_assert_path event.replyApproved
+  json_assert_eq event.replySteps[1].seconds 1
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_USE_REMOTE_POLICY=1 WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=mass "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   json_assert_path handled[0].dryRun
+  json_assert_eq handled[0].stepCount 3
   json_assert_path runReport.report.id
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_path replies[0].id
+  json_assert_eq replies[0].replySteps[1].seconds 1
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" claim-reply "$bridge_event_id" --worker-id smoke-worker > "$body_file"
   json_assert_path event.replyClaimedAt
   json_assert_eq event.replyClaimedBy smoke-worker
@@ -455,6 +458,25 @@ PY
   json_assert_path event.replyDeliveredAt
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
+
+  say "Check WeCom reply handler sequence dry-run"
+  reply_handler_payload="$(python3 <<'PY'
+import json
+print(json.dumps({
+    "id": "smoke-reply-sequence",
+    "conversationName": "Smoke Test Conversation",
+    "senderName": "Smoke Sender",
+    "replySteps": [
+        {"type": "text", "text": "第一段顺序回复。", "sendEnter": True},
+        {"type": "wait", "seconds": 1},
+        {"type": "text", "text": "第二段顺序回复。", "sendEnter": True},
+    ],
+}, ensure_ascii=False))
+PY
+)"
+  WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" <<<"$reply_handler_payload" > "$body_file"
+  json_assert_eq stepCount 3
+  json_assert_eq textStepCount 2
 
   say "Check WeCom mass handler dry-run"
   mass_handler_payload="$(python3 <<'PY'

@@ -33,13 +33,41 @@ fi
 parsed="$(REPLY_JSON="$reply_json" node <<'NODE'
 const payload = JSON.parse(process.env.REPLY_JSON || '{}');
 const conversationName = String(payload.conversationName || payload.senderName || '').trim();
-const replyDraft = String(payload.replyDraft || '').trim();
+const fallbackDraft = String(payload.replyDraft || '').trim();
+function clampInt(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+function normalizeStep(raw) {
+  if (!raw || typeof raw !== 'object') return [];
+  const type = String(raw.type || raw.contentType || '').trim().toLowerCase();
+  const delay = clampInt(raw.delayBeforeSendingSeconds ?? raw.delaySeconds ?? raw.waitSeconds, 0, 600, 0);
+  if (type === 'wait' || type === 'delay') {
+    const seconds = clampInt(raw.seconds ?? raw.delayBeforeSendingSeconds ?? raw.delaySeconds, 0, 600, 1);
+    return seconds > 0 ? [{ type: 'wait', seconds }] : [];
+  }
+  if (type === 'text' || raw.text !== undefined || raw.content !== undefined) {
+    const text = String(raw.text ?? raw.content ?? raw.message ?? '').trim();
+    if (!text) return [];
+    const steps = [];
+    if (delay > 0) steps.push({ type: 'wait', seconds: delay });
+    steps.push({ type: 'text', text, sendEnter: raw.sendEnter !== false });
+    return steps;
+  }
+  return [];
+}
+const rawSteps = Array.isArray(payload.replySteps) ? payload.replySteps : [];
+const steps = rawSteps.flatMap(normalizeStep).slice(0, 30);
+if (!steps.length && fallbackDraft) steps.push({ type: 'text', text: fallbackDraft, sendEnter: true });
+const textSteps = steps.filter((step) => step.type === 'text' && step.text.trim());
+const replyDraft = textSteps.map((step) => step.text.trim()).join('\n\n').slice(0, 4000);
 if (!conversationName) {
   console.error('ERROR: Bridge reply is missing conversationName/senderName.');
   process.exit(2);
 }
-if (!replyDraft) {
-  console.error('ERROR: Bridge reply is missing replyDraft.');
+if (!textSteps.length) {
+  console.error('ERROR: Bridge reply is missing executable text steps.');
   process.exit(2);
 }
 process.stdout.write(JSON.stringify({
@@ -48,6 +76,10 @@ process.stdout.write(JSON.stringify({
   senderName: payload.senderName || '',
   replyDraft,
   replyChars: [...replyDraft].length,
+  stepCount: steps.length,
+  textStepCount: textSteps.length,
+  waitSeconds: steps.reduce((sum, step) => step.type === 'wait' ? sum + step.seconds : sum, 0),
+  steps,
 }));
 NODE
 )"
@@ -55,6 +87,8 @@ NODE
 conversation_name="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.conversationName)' "$parsed")"
 reply_draft="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.replyDraft)' "$parsed")"
 reply_chars="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.replyChars))' "$parsed")"
+step_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.stepCount))' "$parsed")"
+text_step_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.textStepCount))' "$parsed")"
 
 if [[ "$MODE" == "dry-run" ]]; then
   node -e 'const p=JSON.parse(process.argv[1]); p.ok=true; p.mode="dry-run"; console.log(JSON.stringify(p, null, 2))' "$parsed"
@@ -66,13 +100,12 @@ if ! command -v osascript >/dev/null 2>&1; then
   exit 3
 fi
 
-osascript - "$APP_NAME" "$conversation_name" "$reply_draft" "$MODE" "$SEARCH_SHORTCUT" <<'APPLESCRIPT'
+focus_conversation() {
+  osascript - "$APP_NAME" "$conversation_name" "$SEARCH_SHORTCUT" <<'APPLESCRIPT'
 on run argv
   set appName to item 1 of argv
   set conversationName to item 2 of argv
-  set replyText to item 3 of argv
-  set handlerMode to item 4 of argv
-  set searchShortcut to item 5 of argv
+  set searchShortcut to item 3 of argv
 
   set originalClipboard to ""
   try
@@ -103,13 +136,41 @@ on run argv
         key code 36
         delay 0.8
       end if
+    end tell
+  end tell
 
+  try
+    set the clipboard to originalClipboard
+  end try
+end run
+APPLESCRIPT
+}
+
+paste_reply_text() {
+  local text="$1"
+  local send_enter="$2"
+  osascript - "$APP_NAME" "$text" "$send_enter" <<'APPLESCRIPT'
+on run argv
+  set appName to item 1 of argv
+  set replyText to item 2 of argv
+  set sendEnter to item 3 of argv
+
+  set originalClipboard to ""
+  try
+    set originalClipboard to the clipboard as text
+  end try
+
+  tell application "System Events"
+    if not (exists process appName) then error "WeCom app process not found: " & appName
+    tell process appName
+      set frontmost to true
+      delay 0.1
       set the clipboard to replyText
       keystroke "v" using command down
       delay 0.2
-
-      if handlerMode is "send" then
+      if sendEnter is "1" then
         key code 36
+        delay 0.4
       end if
     end tell
   end tell
@@ -119,6 +180,32 @@ on run argv
   end try
 end run
 APPLESCRIPT
+}
 
-node -e 'console.log(JSON.stringify({ok:true, mode:process.argv[1], appName:process.argv[2], conversationName:process.argv[3], replyChars:Number(process.argv[4])}, null, 2))' \
-  "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars"
+focus_conversation
+
+if [[ "$MODE" == "prepare" ]]; then
+  paste_reply_text "$reply_draft" 0
+else
+  while IFS=$'\t' read -r step_type seconds send_enter encoded_text; do
+    if [[ "$step_type" == "wait" ]]; then
+      sleep "$seconds"
+      continue
+    fi
+    step_text="$(node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64").toString("utf8"))' "$encoded_text")"
+    paste_reply_text "$step_text" "$send_enter"
+  done < <(node -e '
+const p = JSON.parse(process.argv[1]);
+for (const step of p.steps || []) {
+  if (step.type === "wait") {
+    console.log(["wait", Math.max(0, Number(step.seconds) || 0), "0", ""].join("\t"));
+  } else if (step.type === "text") {
+    const text = Buffer.from(String(step.text || ""), "utf8").toString("base64");
+    console.log(["text", "0", step.sendEnter === false ? "0" : "1", text].join("\t"));
+  }
+}
+' "$parsed")
+fi
+
+node -e 'console.log(JSON.stringify({ok:true, mode:process.argv[1], appName:process.argv[2], conversationName:process.argv[3], replyChars:Number(process.argv[4]), stepCount:Number(process.argv[5]), textStepCount:Number(process.argv[6])}, null, 2))' \
+  "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars" "$step_count" "$text_step_count"

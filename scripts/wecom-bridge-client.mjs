@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r26-runner-policy';
+const CLIENT_VERSION = 'automation-lab-r27-reply-sequence';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -238,6 +238,8 @@ async function runHandler(command, reply) {
         WECOM_BRIDGE_CONVERSATION_NAME: reply.conversationName || '',
         WECOM_BRIDGE_SENDER_NAME: reply.senderName || '',
         WECOM_BRIDGE_REPLY_DRAFT: reply.replyDraft || '',
+        WECOM_BRIDGE_REPLY_STEPS: JSON.stringify(Array.isArray(reply.replySteps) ? reply.replySteps : []),
+        WECOM_BRIDGE_REPLY_STEP_COUNT: String(Array.isArray(reply.replySteps) ? reply.replySteps.length : reply.replyDraft ? 1 : 0),
       },
     });
     child.on('error', reject);
@@ -558,7 +560,12 @@ async function main() {
     const handled = [];
     for (const reply of replies) {
       if (dryRun) {
-        handled.push({ id: reply.id, conversationName: reply.conversationName, dryRun: true });
+        handled.push({
+          id: reply.id,
+          conversationName: reply.conversationName,
+          stepCount: Array.isArray(reply.replySteps) && reply.replySteps.length ? reply.replySteps.length : reply.replyDraft ? 1 : 0,
+          dryRun: true,
+        });
         continue;
       }
       let runnable = reply;
