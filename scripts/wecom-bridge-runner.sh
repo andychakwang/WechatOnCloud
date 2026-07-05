@@ -51,6 +51,7 @@ Optional:
   WECOM_HANDLER_MODE=dry-run|prepare|send
   WECOM_MATERIAL_MAP_FILE=~/.config/wechat-on-cloud/wecom-materials.json
   WECOM_SYNC_MATERIAL_MAP=1                 set 0 to disable material-map refresh
+  WECOM_REQUIRE_TARGET_MATCH=1              abort reply/mass before paste if target title mismatches
   WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
   WECOM_MOMENT_HANDLER=./scripts/wecom-mac-moment-handler.sh
   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input

@@ -10,6 +10,7 @@ set -euo pipefail
 #   WECOM_APP_NAME='企业微信'                  macOS app name
 #   WECOM_SEARCH_SHORTCUT=command+k|command+f|none
 #   WECOM_VERIFY_TARGET=1                     include window-title verification in handler JSON
+#   WECOM_REQUIRE_TARGET_MATCH=1              abort before paste/send unless window title matches target
 #   WECOM_MATERIAL_MAP='{"poster":"/Users/me/Pictures/poster.png"}'
 #   WECOM_MATERIAL_MAP_FILE=/path/to/wecom-materials.json
 
@@ -206,7 +207,24 @@ target_verification() {
   local required="${2:-1}"
   local enabled="${WECOM_VERIFY_TARGET:-1}"
   if [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "off" ]]; then
-    printf ''
+    if target_match_required; then
+      node - "$expected_name" "$APP_NAME" <<'NODE'
+const expectedName = String(process.argv[2] || '').trim();
+const appName = String(process.argv[3] || '').trim();
+console.log(JSON.stringify({
+  required: true,
+  verified: false,
+  expectedName,
+  activeApp: appName,
+  conversationMatched: false,
+  inputReady: false,
+  error: 'WECOM_VERIFY_TARGET is disabled while WECOM_REQUIRE_TARGET_MATCH=1',
+  checkedAt: new Date().toISOString(),
+}));
+NODE
+    else
+      printf ''
+    fi
     return
   fi
 
@@ -277,6 +295,52 @@ console.log(JSON.stringify({
   checkedAt: new Date().toISOString(),
 }));
 NODE
+}
+
+target_match_required() {
+  case "$(printf '%s' "${WECOM_REQUIRE_TARGET_MATCH:-0}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+emit_target_gate_failure() {
+  local verification_json="$1"
+  node - "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars" "$step_count" "$text_step_count" "$image_step_count" "$verification_json" <<'NODE'
+const verification = process.argv[9] ? JSON.parse(process.argv[9]) : undefined;
+console.log(JSON.stringify({
+  ok: false,
+  mode: process.argv[2],
+  appName: process.argv[3],
+  conversationName: process.argv[4],
+  replyChars: Number(process.argv[5]),
+  stepCount: Number(process.argv[6]),
+  textStepCount: Number(process.argv[7]),
+  imageStepCount: Number(process.argv[8]),
+  error: 'Target verification failed before writing reply',
+  verificationRequired: true,
+  ...(verification ? { verification } : {}),
+}, null, 2));
+NODE
+}
+
+enforce_target_match() {
+  local verification_json="$1"
+  local verified
+  verified="$(node - "$verification_json" <<'NODE'
+try {
+  const verification = JSON.parse(process.argv[2] || '{}');
+  process.stdout.write(verification && verification.verified === true ? '1' : '0');
+} catch {
+  process.stdout.write('0');
+}
+NODE
+)"
+  if [[ "$verified" != "1" ]]; then
+    echo "ERROR: Target verification failed before writing reply: $conversation_name" >&2
+    emit_target_gate_failure "$verification_json"
+    exit 5
+  fi
 }
 
 focus_conversation() {
@@ -403,6 +467,12 @@ APPLESCRIPT
 
 focus_conversation
 
+preflight_verification_json=""
+if target_match_required; then
+  preflight_verification_json="$(target_verification "$conversation_name" 1)"
+  enforce_target_match "$preflight_verification_json"
+fi
+
 if [[ "$MODE" == "prepare" ]]; then
   if [[ -n "$reply_draft" ]]; then
     paste_reply_text "$reply_draft" 0
@@ -451,7 +521,11 @@ for (const step of p.steps || []) {
 ' "$parsed")
 fi
 
-verification_json="$(target_verification "$conversation_name" 1)"
+if [[ -n "$preflight_verification_json" ]]; then
+  verification_json="$preflight_verification_json"
+else
+  verification_json="$(target_verification "$conversation_name" 1)"
+fi
 node -e '
 const verification = process.argv[8] ? JSON.parse(process.argv[8]) : undefined;
 console.log(JSON.stringify({

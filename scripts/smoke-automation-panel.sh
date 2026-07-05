@@ -18,12 +18,14 @@ body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
 material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
 verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
+handler_error_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-handler-error.XXXXXX.log")"
+fake_osascript_log_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX.log")"
 fake_osascript_dir="$(mktemp -d "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX")"
 reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$verification_handler_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
   rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
@@ -298,6 +300,11 @@ if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MATERIAL_MAP_FILE="* ]
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_REQUIRE_TARGET_MATCH="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_REQUIRE_TARGET_MATCH" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && grep -qF "$AUTOMATION_BRIDGE_TOKEN" "$body_file"; then
   echo "ERROR: Bridge runner guide leaked the real AUTOMATION_BRIDGE_TOKEN" >&2
   exit 1
@@ -554,18 +561,21 @@ if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
   say "Check WeCom Mac handler verification output"
   cat > "$fake_osascript_dir/osascript" <<'SH'
 #!/usr/bin/env bash
+if [[ -n "${WECOM_FAKE_OSASCRIPT_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "$WECOM_FAKE_OSASCRIPT_LOG"
+fi
 if [[ "${1:-}" == "-" && "$#" -eq 2 ]]; then
   printf '企业微信\n企业微信 - %s\n' "${WECOM_FAKE_WINDOW_TITLE:-Smoke Verify Conversation}"
 fi
 exit 0
 SH
   chmod +x "$fake_osascript_dir/osascript"
-  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_SEARCH_SHORTCUT=none WECOM_FAKE_WINDOW_TITLE="Smoke Verify Conversation" "$WECOM_REPLY_HANDLER" <<'JSON' > "$body_file"
+  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_SEARCH_SHORTCUT=none WECOM_REQUIRE_TARGET_MATCH=1 WECOM_FAKE_WINDOW_TITLE="Smoke Verify Conversation" "$WECOM_REPLY_HANDLER" <<'JSON' > "$body_file"
 {"id":"evt","conversationName":"Smoke Verify Conversation","replyDraft":"hello"}
 JSON
   json_assert_path verification.verified
   json_assert_eq verification.matchedName "Smoke Verify Conversation"
-  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_SEARCH_SHORTCUT=none WECOM_FAKE_WINDOW_TITLE="Smoke Verify Mass" "$WECOM_MASS_HANDLER" <<'JSON' > "$body_file"
+  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_SEARCH_SHORTCUT=none WECOM_REQUIRE_TARGET_MATCH=1 WECOM_FAKE_WINDOW_TITLE="Smoke Verify Mass" "$WECOM_MASS_HANDLER" <<'JSON' > "$body_file"
 {"id":"task","recipientName":"Smoke Verify Mass","message":"hello"}
 JSON
   json_assert_path verification.verified
@@ -575,6 +585,89 @@ JSON
 JSON
   json_assert_path verification.verified
   json_assert_eq verification.windowTitle "企业微信 - Smoke Verify Moment"
+
+  say "Check WeCom Mac handler target gate"
+  : > "$fake_osascript_log_file"
+  set +e
+  PATH="$fake_osascript_dir:$PATH" \
+    WECOM_HANDLER_MODE=prepare \
+    WECOM_SEARCH_SHORTCUT=none \
+    WECOM_REQUIRE_TARGET_MATCH=1 \
+    WECOM_FAKE_WINDOW_TITLE="Wrong Conversation" \
+    WECOM_FAKE_OSASCRIPT_LOG="$fake_osascript_log_file" \
+    "$WECOM_REPLY_HANDLER" <<'JSON' > "$body_file" 2> "$handler_error_file"
+{"id":"evt","conversationName":"Smoke Required Reply","replyDraft":"should-not-paste-reply"}
+JSON
+  reply_gate_status=$?
+  set -e
+  if [[ "$reply_gate_status" -eq 0 ]]; then
+    echo "ERROR: reply handler target gate should have failed" >&2
+    sed -n '1,120p' "$body_file" >&2
+    exit 1
+  fi
+  python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+verification = payload.get("verification") or {}
+if payload.get("ok") is not False:
+    raise SystemExit("reply gate payload ok should be false")
+if payload.get("verificationRequired") is not True:
+    raise SystemExit("reply gate should mark verificationRequired")
+if verification.get("verified") is not False:
+    raise SystemExit("reply gate verification should be false")
+if verification.get("matchedName"):
+    raise SystemExit("reply gate should not have matchedName on mismatch")
+PY
+  grep -q "Target verification failed before writing reply" "$handler_error_file"
+  if grep -q "should-not-paste-reply" "$fake_osascript_log_file"; then
+    echo "ERROR: reply handler pasted text after target gate failure" >&2
+    cat "$fake_osascript_log_file" >&2
+    exit 1
+  fi
+
+  : > "$fake_osascript_log_file"
+  set +e
+  PATH="$fake_osascript_dir:$PATH" \
+    WECOM_HANDLER_MODE=prepare \
+    WECOM_SEARCH_SHORTCUT=none \
+    WECOM_REQUIRE_TARGET_MATCH=1 \
+    WECOM_FAKE_WINDOW_TITLE="Wrong Mass" \
+    WECOM_FAKE_OSASCRIPT_LOG="$fake_osascript_log_file" \
+    "$WECOM_MASS_HANDLER" <<'JSON' > "$body_file" 2> "$handler_error_file"
+{"id":"task","recipientName":"Smoke Required Mass","message":"should-not-paste-mass"}
+JSON
+  mass_gate_status=$?
+  set -e
+  if [[ "$mass_gate_status" -eq 0 ]]; then
+    echo "ERROR: mass handler target gate should have failed" >&2
+    sed -n '1,120p' "$body_file" >&2
+    exit 1
+  fi
+  python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+verification = payload.get("verification") or {}
+if payload.get("ok") is not False:
+    raise SystemExit("mass gate payload ok should be false")
+if payload.get("verificationRequired") is not True:
+    raise SystemExit("mass gate should mark verificationRequired")
+if verification.get("verified") is not False:
+    raise SystemExit("mass gate verification should be false")
+if verification.get("matchedName"):
+    raise SystemExit("mass gate should not have matchedName on mismatch")
+PY
+  grep -q "Target verification failed before writing mass message" "$handler_error_file"
+  if grep -q "should-not-paste-mass" "$fake_osascript_log_file"; then
+    echo "ERROR: mass handler pasted text after target gate failure" >&2
+    cat "$fake_osascript_log_file" >&2
+    exit 1
+  fi
 
   say "Import WeCom knowledge through Bridge"
   bridge_title="smoke-bridge-$stamp"
