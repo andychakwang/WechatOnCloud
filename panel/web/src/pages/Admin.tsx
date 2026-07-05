@@ -22,7 +22,11 @@ import {
   type AppType,
   type VersionInfo,
   type WecomBridgeEvent,
+  type WecomBridgeMomentPasteMode,
   type WecomBridgeRunReport,
+  type WecomBridgeRunnerMode,
+  type WecomBridgeRunnerPolicy,
+  type WecomBridgeRunnerTarget,
 } from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
 import { useUI, PasswordInput } from '../ui';
@@ -167,6 +171,19 @@ const BRIDGE_RUN_TARGET_LABEL: Record<string, string> = {
   unknown: '未知',
 };
 
+const BRIDGE_RUNNER_MODE_LABEL: Record<WecomBridgeRunnerMode, string> = {
+  'dry-run': '只预览',
+  prepare: '领取并准备',
+  send: '受控发送',
+};
+
+const BRIDGE_RUNNER_TARGET_LABEL: Record<WecomBridgeRunnerTarget, string> = {
+  replies: 'AI 回复',
+  mass: '群发',
+  moments: '朋友圈',
+  all: '全队列',
+};
+
 const AUTOMATION_RISK_LABEL: Record<string, string> = {
   automation_off: '总开关关闭',
   bridge_workers_offline: 'Mac 离线',
@@ -218,6 +235,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
+  const [runnerPolicy, setRunnerPolicy] = useState<WecomBridgeRunnerPolicy | null>(null);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
@@ -264,7 +282,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { overview }, { contacts }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }] = await Promise.all([
+      const [{ config }, { overview }, { contacts }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }, { policy }] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
         api.listAutomationAudience(200),
@@ -273,6 +291,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.automationAudit(30),
         api.listWecomBridgeEvents(20),
         api.listWecomBridgeRunReports(20),
+        api.getWecomBridgeRunnerPolicy(),
       ]);
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
@@ -283,6 +302,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setAudit(events);
       setBridgeEvents(bridgeEvents.filter((event) => event.status !== 'archived'));
       setBridgeRuns(reports);
+      setRunnerPolicy(policy);
       setBridgeReplyDrafts(
         Object.fromEntries(bridgeEvents.filter((event) => event.status !== 'archived').map((event) => [event.id, event.replyDraft || ''])),
       );
@@ -326,6 +346,21 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       toast('自动化配置已保存', 'ok');
     } catch (e: any) {
       toast(e.message || '保存失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const saveRunnerPolicy = async () => {
+    if (!runnerPolicy) return;
+    setBusy('runner-policy');
+    try {
+      const { policy } = await api.updateWecomBridgeRunnerPolicy(runnerPolicy);
+      setRunnerPolicy(policy);
+      toast('Mac Runner 策略已保存', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '保存 Runner 策略失败', 'error');
     } finally {
       setBusy('');
     }
@@ -1063,11 +1098,108 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <div className="muted small">
                   运行报告 <code>{location.origin + bridge.runReportEndpoint}</code>
                 </div>
+                <div className="muted small">
+                  Runner 策略 <code>{location.origin + bridge.runnerPolicyEndpoint}</code>
+                </div>
                 <div className="chip-row">
                   <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
                   <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
                   <span className="chip chip-static">Bearer / X-Automation-Token</span>
                 </div>
+                {runnerPolicy && (
+                  <div className="bridge-runner-guide">
+                    <div className="bridge-runner-head">
+                      <div>
+                        <b>云端 Runner 策略</b>
+                        <div className="muted small">
+                          {BRIDGE_RUNNER_TARGET_LABEL[runnerPolicy.target]} · {BRIDGE_RUNNER_MODE_LABEL[runnerPolicy.mode]} · 每轮 {runnerPolicy.limit}
+                        </div>
+                      </div>
+                      <button className="btn-text" disabled={busy === 'runner-policy'} onClick={saveRunnerPolicy}>
+                        保存策略
+                      </button>
+                    </div>
+                    <div className="auto-grid three compact">
+                      <label>
+                        <span className="field-label">模式</span>
+                        <select
+                          className="input"
+                          value={runnerPolicy.mode}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, mode: e.target.value as WecomBridgeRunnerMode })}
+                        >
+                          <option value="dry-run">只预览</option>
+                          <option value="prepare">领取并准备</option>
+                          <option value="send">受控发送</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span className="field-label">目标</span>
+                        <select
+                          className="input"
+                          value={runnerPolicy.target}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, target: e.target.value as WecomBridgeRunnerTarget })}
+                        >
+                          <option value="replies">AI 回复</option>
+                          <option value="mass">群发</option>
+                          <option value="moments">朋友圈</option>
+                          <option value="all">全队列</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span className="field-label">每轮数量</span>
+                        <input
+                          className="input"
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={runnerPolicy.limit}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, limit: Number(e.target.value) || 1 })}
+                        />
+                      </label>
+                      <label>
+                        <span className="field-label">领取 TTL 秒</span>
+                        <input
+                          className="input"
+                          type="number"
+                          min={30}
+                          max={86400}
+                          value={runnerPolicy.claimTtlSeconds}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, claimTtlSeconds: Number(e.target.value) || 300 })}
+                        />
+                      </label>
+                      <label>
+                        <span className="field-label">心跳间隔秒</span>
+                        <input
+                          className="input"
+                          type="number"
+                          min={15}
+                          max={86400}
+                          value={runnerPolicy.heartbeatIntervalSeconds}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, heartbeatIntervalSeconds: Number(e.target.value) || 60 })}
+                        />
+                      </label>
+                      <label>
+                        <span className="field-label">朋友圈模式</span>
+                        <select
+                          className="input"
+                          value={runnerPolicy.momentPasteMode}
+                          onChange={(e) => setRunnerPolicy({ ...runnerPolicy, momentPasteMode: e.target.value as WecomBridgeMomentPasteMode })}
+                        >
+                          <option value="clipboard-only">复制到剪贴板</option>
+                          <option value="current-input">填入当前输入框</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label className="auto-check">
+                      <input
+                        type="checkbox"
+                        checked={runnerPolicy.allowSend}
+                        onChange={(e) => setRunnerPolicy({ ...runnerPolicy, allowSend: e.target.checked })}
+                      />
+                      <span>云端策略允许 send 模式，本机仍需显式授权真实发送</span>
+                    </label>
+                  </div>
+                )}
                 {bridgeGuide && (
                   <div className="bridge-runner-guide">
                     <div className="bridge-runner-head">

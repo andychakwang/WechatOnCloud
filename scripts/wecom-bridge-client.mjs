@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r25-run-report';
+const CLIENT_VERSION = 'automation-lab-r26-runner-policy';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -18,6 +18,7 @@ Commands:
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
+  runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--status completed|failed]
   pull-replies [--limit 50]
   claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
@@ -44,6 +45,7 @@ Examples:
   node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
+  node scripts/wecom-bridge-client.mjs runner-policy --worker-id mac-mini-01
   node scripts/wecom-bridge-client.mjs report-run --target all --mode dry-run --handled-replies 2
   node scripts/wecom-bridge-client.mjs pull-replies --limit 20
   node scripts/wecom-bridge-client.mjs release-reply <eventId> --reason "window not ready"
@@ -350,6 +352,12 @@ async function main() {
       summary: String(options.summary || ''),
     });
     printJson(report);
+    return;
+  }
+
+  if (command === 'runner-policy') {
+    const id = encodeURIComponent(workerId(options));
+    printJson(await requestJson(options, 'GET', `/api/automation/bridge/wecom/runner-policy?workerId=${id}`));
     return;
   }
 

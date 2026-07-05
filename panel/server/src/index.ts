@@ -92,6 +92,8 @@ import {
   deleteAutomationAudienceContact,
   listWecomBridgeWorkers,
   listWecomBridgeRunReports,
+  getWecomBridgeRunnerPolicy,
+  updateWecomBridgeRunnerPolicy,
   listApprovedWecomBridgeReplies,
   listApprovedWecomBridgeMassTasks,
   listApprovedWecomBridgeMomentTasks,
@@ -136,6 +138,7 @@ const AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT = '/api/automation/bridge/wecom/mass-
 const AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT = '/api/automation/bridge/wecom/moment-tasks';
 const AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT = '/api/automation/bridge/wecom/heartbeat';
 const AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT = '/api/automation/bridge/wecom/run-report';
+const AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT = '/api/automation/bridge/wecom/runner-policy';
 const AUTOMATION_BRIDGE_TOKEN = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
 const AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH = 16;
 // Public hostnames the panel will accept Host headers for, in addition to the
@@ -220,6 +223,7 @@ function shellSingle(value: string): string {
 
 function automationBridgeRunnerGuide(req?: FastifyRequest) {
   const panelUrl = requestPublicOrigin(req) || 'http://nasbot.cloud:36081';
+  const policy = getWecomBridgeRunnerPolicy();
   const configPath = '~/.config/wechat-on-cloud/wecom-bridge.env';
   const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
   const defaultWorkerId = 'mac-bridge-01';
@@ -228,11 +232,13 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     '# chmod 600; contains the Bridge token.',
     `WOC_PANEL_URL=${shellSingle(panelUrl)}`,
     `AUTOMATION_BRIDGE_TOKEN=${shellSingle(tokenPlaceholder)}`,
-    "WECOM_RUNNER_MODE='dry-run'",
-    "WECOM_RUNNER_TARGET='all'",
-    "WECOM_RUNNER_LIMIT='5'",
-    "WECOM_CLAIM_TTL_SECONDS='300'",
-    "WECOM_MOMENT_PASTE_MODE='clipboard-only'",
+    "WECOM_USE_REMOTE_POLICY='1'",
+    `WECOM_RUNNER_MODE=${shellSingle(policy.mode)}`,
+    `WECOM_RUNNER_TARGET=${shellSingle(policy.target)}`,
+    `WECOM_RUNNER_LIMIT=${shellSingle(String(policy.limit))}`,
+    `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
+    `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
+    `WECOM_BRIDGE_INTERVAL_SEC=${shellSingle(String(policy.heartbeatIntervalSeconds))}`,
     `WECOM_BRIDGE_WORKER_ID=${shellSingle(defaultWorkerId)}`,
   ].join('\n');
   return {
@@ -278,6 +284,7 @@ function automationBridgeStatus(req?: FastifyRequest) {
     momentTaskEndpoint: AUTOMATION_BRIDGE_MOMENT_TASK_ENDPOINT,
     heartbeatEndpoint: AUTOMATION_BRIDGE_HEARTBEAT_ENDPOINT,
     runReportEndpoint: AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT,
+    runnerPolicyEndpoint: AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT,
     workers: listWecomBridgeWorkers(20),
     authHeaders: ['Authorization: Bearer <token>', 'X-Automation-Token: <token>'],
     runnerGuide: automationBridgeRunnerGuide(req),
@@ -412,6 +419,23 @@ app.get('/api/admin/automation/bridge-runs', async (req, reply) => {
   return { reports: listWecomBridgeRunReports(Number(query?.limit || 50), String(query?.workerId || '')) };
 });
 
+app.get('/api/admin/automation/runner-policy', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { policy: getWecomBridgeRunnerPolicy() };
+});
+
+app.put('/api/admin/automation/runner-policy', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const policy = updateWecomBridgeRunnerPolicy(admin, req.body as any);
+    appendPanelLog('INFO', `更新 Mac Runner 策略 by ${admin.username}：${policy.target}/${policy.mode}，limit=${policy.limit}`);
+    return { policy };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '更新 Mac Runner 策略失败' });
+  }
+});
+
 app.patch('/api/admin/automation/bridge-events/:eventId', async (req, reply) => {
   const admin = requireAdmin(req, reply);
   if (!admin) return;
@@ -531,6 +555,26 @@ app.post(AUTOMATION_BRIDGE_RUN_REPORT_ENDPOINT, async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 运行报告写入失败' });
   }
+});
+
+app.get(AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  const query = req.query as any;
+  const policy = getWecomBridgeRunnerPolicy();
+  return {
+    policy,
+    workerId: String(query?.workerId || ''),
+    env: {
+      WECOM_RUNNER_MODE: policy.mode,
+      WECOM_RUNNER_TARGET: policy.target,
+      WECOM_RUNNER_LIMIT: String(policy.limit),
+      WECOM_CLAIM_TTL_SECONDS: String(policy.claimTtlSeconds),
+      WECOM_BRIDGE_INTERVAL_SEC: String(policy.heartbeatIntervalSeconds),
+      WECOM_MOMENT_PASTE_MODE: policy.momentPasteMode,
+      WECOM_ALLOW_SEND: policy.allowSend ? '1' : '',
+    },
+    serverTime: new Date().toISOString(),
+  };
 });
 
 app.get(AUTOMATION_BRIDGE_REPLY_ENDPOINT, async (req, reply) => {

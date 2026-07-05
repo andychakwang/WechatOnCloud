@@ -124,6 +124,9 @@ export interface WecomBridgeWorkerStatus extends WecomBridgeWorker {
 
 export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'unknown';
 export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
+export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
+export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
+export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 
 export interface WecomBridgeRunReport {
   id: string;
@@ -145,6 +148,18 @@ export interface WecomBridgeRunReport {
   summary?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WecomBridgeRunnerPolicy {
+  mode: WecomBridgeRunnerMode;
+  target: WecomBridgeRunnerTarget;
+  limit: number;
+  claimTtlSeconds: number;
+  heartbeatIntervalSeconds: number;
+  momentPasteMode: WecomBridgeMomentPasteMode;
+  allowSend: boolean;
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface WecomBridgeEventIngestResult {
@@ -217,6 +232,7 @@ export interface AutomationOverview {
       lastRunStatus?: WecomBridgeRunStatus;
       lastRunTarget?: WecomBridgeRunTarget;
     };
+    runnerPolicy: WecomBridgeRunnerPolicy;
   };
   mass: {
     jobsTotal: number;
@@ -383,6 +399,7 @@ interface AutomationData extends AutomationConfig {
   bridgeEvents: WecomBridgeEvent[];
   bridgeWorkers: WecomBridgeWorker[];
   bridgeRunReports: WecomBridgeRunReport[];
+  runnerPolicy: WecomBridgeRunnerPolicy;
   massSendJobs: MassSendJob[];
   momentDrafts: MomentDraft[];
   auditEvents: AutomationAuditEvent[];
@@ -396,6 +413,18 @@ const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
+
+const DEFAULT_RUNNER_POLICY: WecomBridgeRunnerPolicy = {
+  mode: 'dry-run',
+  target: 'all',
+  limit: 5,
+  claimTtlSeconds: 300,
+  heartbeatIntervalSeconds: 60,
+  momentPasteMode: 'clipboard-only',
+  allowSend: false,
+  updatedAt: '',
+  updatedBy: 'system',
+};
 
 const DEFAULT_SETTINGS: AutomationSettings = {
   enabled: false,
@@ -418,6 +447,7 @@ const DEFAULT_DATA: AutomationData = {
   bridgeEvents: [],
   bridgeWorkers: [],
   bridgeRunReports: [],
+  runnerPolicy: DEFAULT_RUNNER_POLICY,
   massSendJobs: [],
   momentDrafts: [],
   auditEvents: [],
@@ -535,6 +565,7 @@ export function getAutomationOverview(): AutomationOverview {
         lastRunStatus: lastRun?.status,
         lastRunTarget: lastRun?.target,
       },
+      runnerPolicy: cloneRunnerPolicy(data.runnerPolicy),
     },
     mass: {
       jobsTotal: data.massSendJobs.length,
@@ -583,6 +614,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       bridgeEvents: data.bridgeEvents,
       bridgeWorkers: data.bridgeWorkers,
       bridgeRunReports: data.bridgeRunReports,
+      runnerPolicy: data.runnerPolicy,
       massSendJobs: data.massSendJobs,
       momentDrafts: data.momentDrafts,
       auditEvents: data.auditEvents,
@@ -622,6 +654,29 @@ export function listWecomBridgeRunReports(limit = 50, workerId = ''): WecomBridg
     .slice(-n)
     .reverse()
     .map(cloneBridgeRunReport);
+}
+
+export function getWecomBridgeRunnerPolicy(): WecomBridgeRunnerPolicy {
+  return cloneRunnerPolicy(data.runnerPolicy);
+}
+
+export function updateWecomBridgeRunnerPolicy(actor: User, raw: any): WecomBridgeRunnerPolicy {
+  data.runnerPolicy = normalizeRunnerPolicy(
+    {
+      ...data.runnerPolicy,
+      ...(raw && typeof raw === 'object' ? raw : {}),
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor.username,
+    },
+    new Date().toISOString(),
+  );
+  persist();
+  addAutomationAudit({
+    action: 'bridge_runner_policy_updated',
+    actor: actor.username,
+    message: `更新 Mac Runner 策略：${data.runnerPolicy.target}/${data.runnerPolicy.mode}，limit=${data.runnerPolicy.limit}`,
+  });
+  return cloneRunnerPolicy(data.runnerPolicy);
 }
 
 export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWorkerStatus {
@@ -2137,6 +2192,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
     bridgeRunReports: bridgeRunReportsRaw.slice(-MAX_BRIDGE_RUN_REPORTS).map((report: any) => normalizeBridgeRunReport(report, preserveIds, now)),
+    runnerPolicy: normalizeRunnerPolicy(raw?.runnerPolicy, now),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
     auditEvents: Array.isArray(raw?.auditEvents) ? raw.auditEvents.slice(-MAX_AUDIT_EVENTS).map(normalizeAuditEvent).filter(Boolean) : [],
@@ -2312,6 +2368,29 @@ function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): 
     summary: str(raw?.summary ?? raw?.note, 1000).trim() || undefined,
     createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+  };
+}
+
+function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
+  const base = raw && typeof raw === 'object' ? raw : {};
+  let mode = normalizeBridgeRunnerMode(base.mode ?? base.runnerMode) || DEFAULT_RUNNER_POLICY.mode;
+  let target = normalizeBridgeRunnerTarget(base.target ?? base.runnerTarget) || DEFAULT_RUNNER_POLICY.target;
+  if (mode === 'send' && target === 'moments') mode = 'prepare';
+  return {
+    mode,
+    target,
+    limit: clampInt(base.limit ?? base.runnerLimit, 1, 50, DEFAULT_RUNNER_POLICY.limit),
+    claimTtlSeconds: clampInt(base.claimTtlSeconds ?? base.claimTtl ?? base.ttlSeconds, 30, 86400, DEFAULT_RUNNER_POLICY.claimTtlSeconds),
+    heartbeatIntervalSeconds: clampInt(
+      base.heartbeatIntervalSeconds ?? base.intervalSeconds ?? base.intervalSec,
+      15,
+      24 * 60 * 60,
+      DEFAULT_RUNNER_POLICY.heartbeatIntervalSeconds,
+    ),
+    momentPasteMode: normalizeMomentPasteMode(base.momentPasteMode ?? base.pasteMode) || DEFAULT_RUNNER_POLICY.momentPasteMode,
+    allowSend: base.allowSend === true,
+    updatedAt: typeof base.updatedAt === 'string' && base.updatedAt ? base.updatedAt : now,
+    updatedBy: str(base.updatedBy || 'system', 80).trim() || 'system',
   };
 }
 
@@ -2734,6 +2813,10 @@ function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunRepor
   return { ...report };
 }
 
+function cloneRunnerPolicy(policy: WecomBridgeRunnerPolicy): WecomBridgeRunnerPolicy {
+  return { ...policy };
+}
+
 function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offlineAfterSeconds = 180): WecomBridgeWorkerStatus {
   const lastSeenMs = Date.parse(worker.lastSeenAt || worker.updatedAt);
   const staleSeconds = Number.isFinite(lastSeenMs) ? Math.max(0, Math.round((now - lastSeenMs) / 1000)) : offlineAfterSeconds + 1;
@@ -2804,6 +2887,30 @@ function normalizeBridgeRunStatus(value: unknown): WecomBridgeRunStatus {
   if (raw === 'started' || raw === 'running') return 'started';
   if (raw === 'failed' || raw === 'error') return 'failed';
   return 'completed';
+}
+
+function normalizeBridgeRunnerMode(value: unknown): WecomBridgeRunnerMode | null {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'dry-run' || raw === 'dryrun' || raw === 'dry_run') return 'dry-run';
+  if (raw === 'prepare') return 'prepare';
+  if (raw === 'send') return 'send';
+  return null;
+}
+
+function normalizeBridgeRunnerTarget(value: unknown): WecomBridgeRunnerTarget | null {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'replies' || raw === 'reply') return 'replies';
+  if (raw === 'mass' || raw === 'mass-tasks' || raw === 'mass_tasks') return 'mass';
+  if (raw === 'moments' || raw === 'moment') return 'moments';
+  if (raw === 'all') return 'all';
+  return null;
+}
+
+function normalizeMomentPasteMode(value: unknown): WecomBridgeMomentPasteMode | null {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'clipboard-only' || raw === 'clipboard' || raw === 'clipboard_only') return 'clipboard-only';
+  if (raw === 'current-input' || raw === 'current_input' || raw === 'input') return 'current-input';
+  return null;
 }
 
 function normalizeBridgeReplyDeliveryStatus(value: unknown): WecomBridgeReplyDeliveryStatus | null {

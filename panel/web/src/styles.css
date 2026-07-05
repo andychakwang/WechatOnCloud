@@ -1277,6 +1277,9 @@ button {
 .auto-grid.two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.auto-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .auto-grid.compact {
   gap: 8px;
   margin-top: 4px;
@@ -1431,7 +1434,8 @@ button {
 }
 @media (max-width: 720px) {
   .auto-toolbar,
-  .auto-grid.two {
+  .auto-grid.two,
+  .auto-grid.three {
     grid-template-columns: 1fr;
   }
   .auto-list-item {

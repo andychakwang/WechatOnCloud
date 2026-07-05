@@ -11,6 +11,8 @@ MODE="${WECOM_RUNNER_MODE:-dry-run}"
 TARGET="${WECOM_RUNNER_TARGET:-replies}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
 CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
+USE_REMOTE_POLICY="${WECOM_USE_REMOTE_POLICY:-}"
+ACCEPT_REMOTE_SEND="${WECOM_ACCEPT_REMOTE_SEND:-}"
 DRY_RUN=0
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -62,6 +64,8 @@ env_text() {
     [[ -n "${WECHATONCLOUD_PANEL_URL:-}" ]] && printf 'WECHATONCLOUD_PANEL_URL=%s\n' "$(quote "$WECHATONCLOUD_PANEL_URL")"
     [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && printf 'AUTOMATION_BRIDGE_TOKEN=%s\n' "$(quote "$AUTOMATION_BRIDGE_TOKEN")"
     [[ -n "${WECOM_BRIDGE_TOKEN:-}" ]] && printf 'WECOM_BRIDGE_TOKEN=%s\n' "$(quote "$WECOM_BRIDGE_TOKEN")"
+    [[ -n "$USE_REMOTE_POLICY" ]] && printf 'WECOM_USE_REMOTE_POLICY=%s\n' "$(quote "$USE_REMOTE_POLICY")"
+    [[ -n "$ACCEPT_REMOTE_SEND" ]] && printf 'WECOM_ACCEPT_REMOTE_SEND=%s\n' "$(quote "$ACCEPT_REMOTE_SEND")"
     printf 'WECOM_RUNNER_MODE=%s\n' "$(quote "$MODE")"
     printf 'WECOM_RUNNER_TARGET=%s\n' "$(quote "$TARGET")"
     printf 'WECOM_RUNNER_LIMIT=%s\n' "$(quote "$LIMIT")"

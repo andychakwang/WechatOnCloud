@@ -242,6 +242,7 @@ json_assert_path overview.generatedAt
 json_assert_path overview.settings
 json_assert_path overview.audience.total
 json_assert_path overview.bridge.pendingReplies
+json_assert_path overview.bridge.runnerPolicy.mode
 json_assert_path overview.mass.itemsPending
 json_assert_path overview.moments.draftsTotal
 request_json GET /api/admin/automation/bridge
@@ -250,6 +251,7 @@ json_assert_path bridge.runnerGuide.commands.writeEnv
 json_assert_path bridge.runnerGuide.commands.dryRunAll
 json_assert_path bridge.audienceEndpoint
 json_assert_path bridge.runReportEndpoint
+json_assert_path bridge.runnerPolicyEndpoint
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -380,6 +382,17 @@ PY
   json_assert_path worker.lastSeenAt
   json_assert_path pendingReplies
 
+  say "Update and fetch WeCom Bridge runner policy"
+  request_json GET /api/admin/automation/runner-policy
+  json_assert_path policy.mode
+  runner_policy_payload='{"mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false}'
+  request_json PUT /api/admin/automation/runner-policy "$runner_policy_payload"
+  json_assert_eq policy.target replies
+  json_assert_eq policy.limit 3
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" runner-policy --worker-id smoke-worker > "$body_file"
+  json_assert_eq policy.target replies
+  json_assert_eq env.WECOM_RUNNER_TARGET replies
+
   say "Report WeCom Bridge runner result"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" report-run \
     --worker-id smoke-worker \
@@ -418,7 +431,7 @@ PY
   json_assert_eq event.status planned
   request_json PATCH "/api/admin/automation/bridge-events/$bridge_event_id" '{"replyDraft":"这是经过人工确认的 Bridge smoke 回复草稿。","replyApproved":true}'
   json_assert_path event.replyApproved
-  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_USE_REMOTE_POLICY=1 WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=mass "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   json_assert_path handled[0].dryRun
   json_assert_path runReport.report.id
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"

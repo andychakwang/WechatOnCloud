@@ -39,6 +39,8 @@ Optional:
   WECOM_RUNNER_TARGET=replies|mass|moments|all
                                             default: replies
   WECOM_RUNNER_LIMIT=5
+  WECOM_USE_REMOTE_POLICY=1               pull mode/target/limits from panel
+  WECOM_ACCEPT_REMOTE_SEND=1              allow remote policy to enable send
   WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
@@ -77,20 +79,24 @@ case "$cmd" in
     ;;
 esac
 
-if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
-  echo "ERROR: WECOM_RUNNER_MODE must be dry-run, prepare, or send." >&2
-  exit 2
-fi
+validate_runner_config() {
+  if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
+    echo "ERROR: WECOM_RUNNER_MODE must be dry-run, prepare, or send." >&2
+    exit 2
+  fi
 
-if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" && "$TARGET" != "all" ]]; then
-  echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, moments, or all." >&2
-  exit 2
-fi
+  if [[ "$TARGET" != "replies" && "$TARGET" != "mass" && "$TARGET" != "moments" && "$TARGET" != "all" ]]; then
+    echo "ERROR: WECOM_RUNNER_TARGET must be replies, mass, moments, or all." >&2
+    exit 2
+  fi
 
-if [[ "$TARGET" == "moments" && "$MODE" == "send" ]]; then
-  echo "ERROR: WECOM_RUNNER_TARGET=moments does not support send mode; run prepare, review manually, then use mark-moment-published." >&2
-  exit 2
-fi
+  if [[ "$TARGET" == "moments" && "$MODE" == "send" ]]; then
+    echo "ERROR: WECOM_RUNNER_TARGET=moments does not support send mode; run prepare, review manually, then use mark-moment-published." >&2
+    exit 2
+  fi
+}
+
+validate_runner_config
 
 if [[ -z "${WOC_PANEL_URL:-}" && -z "${PANEL_URL:-}" && -z "${WECHATONCLOUD_PANEL_URL:-}" ]]; then
   echo "ERROR: set WOC_PANEL_URL in env or $ENV_FILE." >&2
@@ -101,6 +107,55 @@ if [[ -z "${AUTOMATION_BRIDGE_TOKEN:-}" && -z "${WECOM_BRIDGE_TOKEN:-}" ]]; then
   echo "ERROR: set AUTOMATION_BRIDGE_TOKEN in env or $ENV_FILE." >&2
   exit 2
 fi
+
+if [[ "${WECOM_USE_REMOTE_POLICY:-}" == "1" || "${WECOM_USE_REMOTE_POLICY:-}" == "true" ]]; then
+  policy_file="$(mktemp "${TMPDIR:-/tmp}/woc-runner-policy.XXXXXX.json")"
+  if node "$CLIENT" runner-policy --worker-id "${WECOM_BRIDGE_WORKER_ID:-}" > "$policy_file"; then
+    remote_allow_send=""
+    while IFS='=' read -r key value; do
+      case "$key" in
+        MODE) MODE="$value" ;;
+        TARGET) TARGET="$value" ;;
+        LIMIT) LIMIT="$value" ;;
+        CLAIM_TTL_SECONDS) CLAIM_TTL_SECONDS="$value" ;;
+        MOMENT_PASTE_MODE) export WECOM_MOMENT_PASTE_MODE="$value" ;;
+        BRIDGE_INTERVAL_SEC) export WECOM_BRIDGE_INTERVAL_SEC="$value" ;;
+        ALLOW_SEND) remote_allow_send="$value" ;;
+      esac
+    done < <(node - "$policy_file" <<'NODE'
+const fs = require('node:fs');
+const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const policy = payload.policy || {};
+const out = {
+  MODE: policy.mode,
+  TARGET: policy.target,
+  LIMIT: policy.limit,
+  CLAIM_TTL_SECONDS: policy.claimTtlSeconds,
+  MOMENT_PASTE_MODE: policy.momentPasteMode,
+  BRIDGE_INTERVAL_SEC: policy.heartbeatIntervalSeconds,
+  ALLOW_SEND: policy.allowSend ? '1' : '',
+};
+for (const [key, value] of Object.entries(out)) {
+  if (value !== undefined && value !== null && String(value).length > 0) {
+    process.stdout.write(`${key}=${String(value).replace(/[\r\n=]/g, '')}\n`);
+  }
+}
+NODE
+)
+    rm -f "$policy_file"
+    if [[ "$remote_allow_send" == "1" && "${WECOM_ACCEPT_REMOTE_SEND:-}" == "1" ]]; then
+      export WECOM_ALLOW_SEND=1
+    elif [[ "$MODE" == "send" && "${WECOM_ALLOW_SEND:-}" != "1" ]]; then
+      echo "WARN: remote runner policy requested send; downgrading to prepare because WECOM_ACCEPT_REMOTE_SEND/WECOM_ALLOW_SEND is not set." >&2
+      MODE="prepare"
+    fi
+  else
+    rm -f "$policy_file"
+    echo "WARN: failed to fetch remote runner policy; using local runner config." >&2
+  fi
+fi
+
+validate_runner_config
 
 node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
 

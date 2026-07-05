@@ -173,6 +173,9 @@ export interface WecomBridgeWorkerStatus {
 
 export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'unknown';
 export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
+export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
+export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
+export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 
 export interface WecomBridgeRunReport {
   id: string;
@@ -194,6 +197,18 @@ export interface WecomBridgeRunReport {
   summary?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WecomBridgeRunnerPolicy {
+  mode: WecomBridgeRunnerMode;
+  target: WecomBridgeRunnerTarget;
+  limit: number;
+  claimTtlSeconds: number;
+  heartbeatIntervalSeconds: number;
+  momentPasteMode: WecomBridgeMomentPasteMode;
+  allowSend: boolean;
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface AutomationBridgeRunnerGuide {
@@ -233,6 +248,7 @@ export interface AutomationBridgeStatus {
   momentTaskEndpoint: string;
   heartbeatEndpoint: string;
   runReportEndpoint: string;
+  runnerPolicyEndpoint: string;
   workers: WecomBridgeWorkerStatus[];
   authHeaders: string[];
   runnerGuide?: AutomationBridgeRunnerGuide;
@@ -324,6 +340,7 @@ export interface AutomationOverview {
       lastRunStatus?: WecomBridgeRunStatus;
       lastRunTarget?: WecomBridgeRunTarget;
     };
+    runnerPolicy: WecomBridgeRunnerPolicy;
   };
   mass: {
     jobsTotal: number;
@@ -505,6 +522,12 @@ export const api = {
     req<{ reports: WecomBridgeRunReport[] }>(
       `/api/admin/automation/bridge-runs?limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,
     ),
+  getWecomBridgeRunnerPolicy: () => req<{ policy: WecomBridgeRunnerPolicy }>('/api/admin/automation/runner-policy'),
+  updateWecomBridgeRunnerPolicy: (policy: Partial<WecomBridgeRunnerPolicy>) =>
+    req<{ policy: WecomBridgeRunnerPolicy }>('/api/admin/automation/runner-policy', {
+      method: 'PUT',
+      body: JSON.stringify(policy),
+    }),
   patchWecomBridgeEvent: (
     eventId: string,
     payload: {
