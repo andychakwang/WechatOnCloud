@@ -5,7 +5,7 @@ import type { Instance, User } from './store.js';
 
 export type AutomationStep =
   | { type: 'text'; text: string; sendEnter?: boolean }
-  | { type: 'image'; imagePath: string; sendEnter?: boolean }
+  | { type: 'image'; imagePath?: string; imageKey?: string; sendEnter?: boolean }
   | { type: 'key'; key: string }
   | { type: 'wait'; seconds: number };
 
@@ -2486,8 +2486,9 @@ function normalizeStep(raw: any): AutomationStep | null {
   }
   if (raw.type === 'image') {
     const imagePath = str(raw.imagePath ?? raw.path ?? raw.filePath, 1000).trim();
-    if (!imagePath) return null;
-    return { type: 'image', imagePath, sendEnter: raw.sendEnter !== false };
+    const imageKey = normalizeMaterialKey(raw.imageKey ?? raw.materialKey ?? raw.assetKey ?? raw.key);
+    if (!imagePath && !imageKey) return null;
+    return { type: 'image', ...(imagePath ? { imagePath } : {}), ...(imageKey ? { imageKey } : {}), sendEnter: raw.sendEnter !== false };
   }
   if (raw.type === 'key') {
     const key = str(raw.key, 20).trim();
@@ -2525,14 +2526,28 @@ function normalizeBridgeReplyStep(raw: any): AutomationStep[] {
     steps.push({ type: 'text', text, sendEnter: raw.sendEnter !== false });
     return steps;
   }
-  if (type === 'image' || raw.imagePath !== undefined || raw.path !== undefined || raw.filePath !== undefined) {
+  if (
+    type === 'image' ||
+    raw.imagePath !== undefined ||
+    raw.path !== undefined ||
+    raw.filePath !== undefined ||
+    raw.imageKey !== undefined ||
+    raw.materialKey !== undefined ||
+    raw.assetKey !== undefined
+  ) {
     const imagePath = str(raw.imagePath ?? raw.path ?? raw.filePath, 1000).trim();
-    if (!imagePath) return [];
+    const imageKey = normalizeMaterialKey(raw.imageKey ?? raw.materialKey ?? raw.assetKey ?? raw.key);
+    if (!imagePath && !imageKey) return [];
     if (delay > 0) steps.push({ type: 'wait', seconds: delay });
-    steps.push({ type: 'image', imagePath, sendEnter: raw.sendEnter !== false });
+    steps.push({ type: 'image', ...(imagePath ? { imagePath } : {}), ...(imageKey ? { imageKey } : {}), sendEnter: raw.sendEnter !== false });
     return steps;
   }
   return [];
+}
+
+function normalizeMaterialKey(value: unknown): string | undefined {
+  const key = str(value, 120).trim();
+  return key ? key : undefined;
 }
 
 function bridgeReplySteps(event: WecomBridgeEvent): AutomationStep[] {
@@ -2552,7 +2567,7 @@ function bridgeReplyTextFromSteps(steps: AutomationStep[]): string {
 
 function hasRunnableBridgeReply(event: WecomBridgeEvent): boolean {
   return bridgeReplySteps(event).some(
-    (step) => (step.type === 'text' && !!step.text.trim()) || (step.type === 'image' && !!step.imagePath.trim()),
+    (step) => (step.type === 'text' && !!step.text.trim()) || (step.type === 'image' && !!(step.imagePath?.trim() || step.imageKey?.trim())),
   );
 }
 

@@ -9,6 +9,8 @@ set -euo pipefail
 #   WECOM_ALLOW_SEND=1                        required when mode=send
 #   WECOM_APP_NAME='企业微信'                  macOS app name
 #   WECOM_SEARCH_SHORTCUT=command+k|command+f|none
+#   WECOM_MATERIAL_MAP='{"poster":"/Users/me/Pictures/poster.png"}'
+#   WECOM_MATERIAL_MAP_FILE=/path/to/wecom-materials.json
 
 APP_NAME="${WECOM_APP_NAME:-企业微信}"
 MODE="${WECOM_HANDLER_MODE:-prepare}"
@@ -35,6 +37,60 @@ const payload = JSON.parse(process.env.REPLY_JSON || '{}');
 const fs = require('node:fs');
 const conversationName = String(payload.conversationName || payload.senderName || '').trim();
 const fallbackDraft = String(payload.replyDraft || '').trim();
+function normalizeKey(value) {
+  return String(value ?? '').trim();
+}
+function imagePathFromItem(item) {
+  return String(item?.imagePath ?? item?.path ?? item?.filePath ?? item?.localPath ?? '').trim();
+}
+function imageKeyFromItem(item, fallback = '') {
+  return normalizeKey(item?.imageKey ?? item?.materialKey ?? item?.assetKey ?? item?.key ?? item?.id ?? item?.name ?? fallback);
+}
+function readMaterialMap() {
+  const map = new Map();
+  const add = (key, path) => {
+    const k = normalizeKey(key);
+    const p = String(path ?? '').trim();
+    if (!k || !p) return;
+    map.set(k, p);
+    map.set(k.toLowerCase(), p);
+  };
+  const absorb = (value) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string') continue;
+        add(imageKeyFromItem(item), imagePathFromItem(item));
+      }
+      return;
+    }
+    if (typeof value !== 'object') return;
+    if (Array.isArray(value.assets)) absorb(value.assets);
+    if (Array.isArray(value.materials)) absorb(value.materials);
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'assets' || key === 'materials') continue;
+      if (typeof item === 'string') {
+        add(key, item);
+      } else if (item && typeof item === 'object') {
+        add(imageKeyFromItem(item, key), imagePathFromItem(item));
+      }
+    }
+  };
+  const parse = (raw, source) => {
+    const text = String(raw || '').trim();
+    if (!text) return;
+    try {
+      absorb(JSON.parse(text));
+    } catch (error) {
+      throw new Error(`Invalid material map JSON from ${source}: ${error.message}`);
+    }
+  };
+  parse(process.env.WECOM_MATERIAL_MAP, 'WECOM_MATERIAL_MAP');
+  const file = String(process.env.WECOM_MATERIAL_MAP_FILE || '').trim();
+  if (file) parse(fs.readFileSync(file, 'utf8'), file);
+  return map;
+}
+const materialMap = readMaterialMap();
 function clampInt(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -56,16 +112,29 @@ function normalizeStep(raw) {
     steps.push({ type: 'text', text, sendEnter: raw.sendEnter !== false });
     return steps;
   }
-  if (type === 'image' || raw.imagePath !== undefined || raw.path !== undefined || raw.filePath !== undefined) {
-    const imagePath = String(raw.imagePath ?? raw.path ?? raw.filePath ?? '').trim();
-    if (!imagePath) return [];
+  if (
+    type === 'image' ||
+    raw.imagePath !== undefined ||
+    raw.path !== undefined ||
+    raw.filePath !== undefined ||
+    raw.imageKey !== undefined ||
+    raw.materialKey !== undefined ||
+    raw.assetKey !== undefined
+  ) {
+    const directPath = imagePathFromItem(raw);
+    const imageKey = imageKeyFromItem(raw);
+    const mappedPath = imageKey ? (materialMap.get(imageKey) || materialMap.get(imageKey.toLowerCase()) || '') : '';
+    const imagePath = directPath || mappedPath;
+    if (!imagePath && !imageKey) return [];
     const steps = [];
     if (delay > 0) steps.push({ type: 'wait', seconds: delay });
     steps.push({
       type: 'image',
-      imagePath,
+      ...(imagePath ? { imagePath } : {}),
+      ...(imageKey ? { imageKey } : {}),
+      resolvedFromMap: !!mappedPath && !directPath,
       sendEnter: raw.sendEnter !== false,
-      exists: fs.existsSync(imagePath),
+      exists: !!imagePath && fs.existsSync(imagePath),
     });
     return steps;
   }
@@ -75,7 +144,7 @@ const rawSteps = Array.isArray(payload.replySteps) ? payload.replySteps : [];
 const steps = rawSteps.flatMap(normalizeStep).slice(0, 30);
 if (!steps.length && fallbackDraft) steps.push({ type: 'text', text: fallbackDraft, sendEnter: true });
 const textSteps = steps.filter((step) => step.type === 'text' && step.text.trim());
-const imageSteps = steps.filter((step) => step.type === 'image' && step.imagePath.trim());
+const imageSteps = steps.filter((step) => step.type === 'image' && (String(step.imagePath || '').trim() || String(step.imageKey || '').trim()));
 const replyDraft = textSteps.map((step) => step.text.trim()).join('\n\n').slice(0, 4000);
 if (!conversationName) {
   console.error('ERROR: Bridge reply is missing conversationName/senderName.');
@@ -94,7 +163,8 @@ process.stdout.write(JSON.stringify({
   stepCount: steps.length,
   textStepCount: textSteps.length,
   imageStepCount: imageSteps.length,
-  missingImagePaths: imageSteps.filter((step) => !step.exists).map((step) => step.imagePath),
+  missingImagePaths: imageSteps.filter((step) => step.imagePath && !step.exists).map((step) => step.imagePath),
+  missingImageRefs: imageSteps.filter((step) => !step.imagePath).map((step) => step.imageKey),
   waitSeconds: steps.reduce((sum, step) => step.type === 'wait' ? sum + step.seconds : sum, 0),
   steps,
 }));
@@ -111,6 +181,18 @@ image_step_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout
 if [[ "$MODE" == "dry-run" ]]; then
   node -e 'const p=JSON.parse(process.argv[1]); p.ok=true; p.mode="dry-run"; console.log(JSON.stringify(p, null, 2))' "$parsed"
   exit 0
+fi
+
+image_errors="$(node -e '
+const p = JSON.parse(process.argv[1]);
+const refs = (p.missingImageRefs || []).filter(Boolean).map((key) => `unmapped material key: ${key}`);
+const paths = (p.missingImagePaths || []).filter(Boolean).map((path) => `missing image file: ${path}`);
+process.stdout.write([...refs, ...paths].join("\n"));
+' "$parsed")"
+if [[ -n "$image_errors" ]]; then
+  echo "ERROR: Bridge reply image assets are not ready:" >&2
+  echo "$image_errors" >&2
+  exit 4
 fi
 
 if ! command -v osascript >/dev/null 2>&1; then

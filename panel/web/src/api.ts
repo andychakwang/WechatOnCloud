@@ -86,7 +86,7 @@ export interface VersionInfo {
 
 export type AutomationStep =
   | { type: 'text'; text: string; sendEnter?: boolean }
-  | { type: 'image'; imagePath: string; sendEnter?: boolean }
+  | { type: 'image'; imagePath?: string; imageKey?: string; sendEnter?: boolean }
   | { type: 'key'; key: string }
   | { type: 'wait'; seconds: number };
 

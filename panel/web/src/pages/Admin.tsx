@@ -221,6 +221,13 @@ function replyStepsFromDraft(draft: string): AutomationStep[] {
       if (imagePath) steps.push({ type: 'image', imagePath, sendEnter: true });
       continue;
     }
+    const imageKey = line.match(/^(?:\[\s*(?:image-key|material|asset)\s+(.+?)\s*\]|素材\s*[:：]\s*(.+)|(?:image-key|material|asset)\s*[:：]\s*(.+))$/i);
+    if (imageKey) {
+      flushText();
+      const key = (imageKey[1] || imageKey[2] || imageKey[3] || '').trim();
+      if (key) steps.push({ type: 'image', imageKey: key, sendEnter: true });
+      continue;
+    }
     if (!line) {
       flushText();
       continue;
@@ -234,10 +241,11 @@ function replyStepsFromDraft(draft: string): AutomationStep[] {
 function replyStepSummary(steps?: AutomationStep[]): string {
   const items = steps || [];
   const textCount = items.filter((step) => step.type === 'text').length;
-  const imageCount = items.filter((step) => step.type === 'image').length;
+  const imagePathCount = items.filter((step) => step.type === 'image' && !!step.imagePath).length;
+  const imageKeyCount = items.filter((step) => step.type === 'image' && !!step.imageKey && !step.imagePath).length;
   const waitSeconds = items.reduce((sum, step) => (step.type === 'wait' ? sum + step.seconds : sum), 0);
   if (!items.length) return '单段回复';
-  return `${textCount} 段文本${imageCount ? ` · ${imageCount} 张图片` : ''}${waitSeconds ? ` · 等待 ${waitSeconds} 秒` : ''}`;
+  return `${textCount} 段文本${imagePathCount ? ` · ${imagePathCount} 张本机图片` : ''}${imageKeyCount ? ` · ${imageKeyCount} 个素材 key` : ''}${waitSeconds ? ` · 等待 ${waitSeconds} 秒` : ''}`;
 }
 
 function defaultAutomationConfig(): AutomationConfig {
@@ -1499,7 +1507,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   <div className="auto-targets">
                     <textarea
                       className="input textarea"
-                      placeholder="人工确认后的回复草稿。空行分段；写 [wait 3] 等待，写 [image /本机路径/a.png] 添加图片。批准后，企微 Mac 工具可以通过 Bridge 拉取。"
+                      placeholder="人工确认后的回复草稿。空行分段；写 [wait 3] 等待，写 [image /本机路径/a.png] 添加图片，写 [image-key poster] 引用 Mac 本机素材映射。"
                       value={bridgeReplyDrafts[event.id] ?? event.replyDraft ?? ''}
                       onChange={(e) => setBridgeReplyDrafts((map) => ({ ...map, [event.id]: e.target.value }))}
                     />

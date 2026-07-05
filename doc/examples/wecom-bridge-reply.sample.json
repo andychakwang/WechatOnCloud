@@ -21,6 +21,11 @@
       "sendEnter": true
     },
     {
+      "type": "image",
+      "imageKey": "demo-poster",
+      "sendEnter": true
+    },
+    {
       "type": "wait",
       "seconds": 2
     },
