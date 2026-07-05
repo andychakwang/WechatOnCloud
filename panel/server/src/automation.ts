@@ -291,6 +291,65 @@ export interface WecomBridgeRunReport {
   updatedAt: string;
 }
 
+export interface WecomBridgeRunWorkerSummary {
+  workerId: string;
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  handled: number;
+  failed: number;
+  rpaPackageRuns: number;
+  lastRunAt?: string;
+  lastStatus?: WecomBridgeRunStatus;
+  lastMode?: string;
+  lastTarget?: WecomBridgeRunTarget;
+}
+
+export interface WecomBridgeRunErrorSummary {
+  error: string;
+  count: number;
+  latestAt?: string;
+  workerId?: string;
+}
+
+export interface WecomBridgeRunReportsSummary {
+  generatedAt: string;
+  windowHours: number;
+  limit: number;
+  workerId?: string;
+  totalRuns: number;
+  successRate: number;
+  status: Record<WecomBridgeRunStatus, number>;
+  target: Record<WecomBridgeRunTarget, number>;
+  modes: Record<string, number>;
+  totals: {
+    handled: number;
+    failed: number;
+    handledReplies: number;
+    handledMassTasks: number;
+    handledMomentTasks: number;
+    failedReplies: number;
+    failedMassTasks: number;
+    failedMomentTasks: number;
+    reportItems: number;
+    failedItems: number;
+    verificationRequired: number;
+    verificationPassed: number;
+    verificationFailed: number;
+    rpaPackageRuns: number;
+    blockedRpaPackageRuns: number;
+  };
+  rpaPackage: {
+    runs: number;
+    blockedByPreflight: number;
+    preflightLevel: Record<AutomationPreflightLevel, number>;
+    recommendedMode: Record<WecomBridgeRunnerMode, number>;
+    packageTarget: Record<WecomRpaPackageTarget, number>;
+  };
+  workers: WecomBridgeRunWorkerSummary[];
+  topErrors: WecomBridgeRunErrorSummary[];
+}
+
 export interface AutomationBridgeRecoveryChange {
   target: 'reply' | 'mass' | 'moment';
   id: string;
@@ -1868,6 +1927,140 @@ export function listWecomBridgeRunReports(limit = 50, workerId = ''): WecomBridg
     .map(cloneBridgeRunReport);
 }
 
+export function summarizeWecomBridgeRunReports(raw: any = {}): WecomBridgeRunReportsSummary {
+  const generatedAt = new Date().toISOString();
+  const windowHours = clampInt(raw?.windowHours ?? raw?.hours, 1, 24 * 30, 24);
+  const limit = clampInt(raw?.limit, 1, MAX_BRIDGE_RUN_REPORTS, MAX_BRIDGE_RUN_REPORTS);
+  const wantedWorkerId = str(raw?.workerId, 120).trim();
+  const now = Date.now();
+  const sinceMs = now - windowHours * 60 * 60 * 1000;
+  const reports = data.bridgeRunReports
+    .filter((report) => !wantedWorkerId || report.workerId === wantedWorkerId)
+    .filter((report) => {
+      const ms = bridgeRunReportTimestampMs(report);
+      return Number.isFinite(ms) && ms >= sinceMs;
+    })
+    .slice(-limit);
+  const status: Record<WecomBridgeRunStatus, number> = { started: 0, completed: 0, failed: 0 };
+  const target: Record<WecomBridgeRunTarget, number> = { replies: 0, mass: 0, moments: 0, all: 0, doctor: 0, unknown: 0 };
+  const modes: Record<string, number> = {};
+  const rpaPackage = {
+    runs: 0,
+    blockedByPreflight: 0,
+    preflightLevel: { ok: 0, warn: 0, block: 0 } as Record<AutomationPreflightLevel, number>,
+    recommendedMode: { 'dry-run': 0, prepare: 0, send: 0 } as Record<WecomBridgeRunnerMode, number>,
+    packageTarget: { replies: 0, mass: 0, moments: 0, all: 0 } as Record<WecomRpaPackageTarget, number>,
+  };
+  const totals = {
+    handled: 0,
+    failed: 0,
+    handledReplies: 0,
+    handledMassTasks: 0,
+    handledMomentTasks: 0,
+    failedReplies: 0,
+    failedMassTasks: 0,
+    failedMomentTasks: 0,
+    reportItems: 0,
+    failedItems: 0,
+    verificationRequired: 0,
+    verificationPassed: 0,
+    verificationFailed: 0,
+    rpaPackageRuns: 0,
+    blockedRpaPackageRuns: 0,
+  };
+  const workers = new Map<string, WecomBridgeRunWorkerSummary>();
+  const errors = new Map<string, WecomBridgeRunErrorSummary>();
+
+  for (const report of reports) {
+    const mode = str(report.mode, 60).trim() || 'unknown';
+    const reportAt = bridgeRunReportTimestampIso(report) || report.updatedAt || report.createdAt;
+    const reportAtMs = bridgeRunReportTimestampMs(report);
+    status[report.status] = (status[report.status] || 0) + 1;
+    target[report.target] = (target[report.target] || 0) + 1;
+    modes[mode] = (modes[mode] || 0) + 1;
+
+    totals.handledReplies += report.handledReplies;
+    totals.handledMassTasks += report.handledMassTasks;
+    totals.handledMomentTasks += report.handledMomentTasks;
+    totals.failedReplies += report.failedReplies;
+    totals.failedMassTasks += report.failedMassTasks;
+    totals.failedMomentTasks += report.failedMomentTasks;
+    totals.reportItems += report.items.length;
+    totals.failedItems += report.items.filter((item) => item.ok === false || !!item.error).length;
+    totals.verificationRequired += report.items.filter((item) => item.verification?.required).length;
+    totals.verificationPassed += report.items.filter((item) => item.verification?.verified === true).length;
+    totals.verificationFailed += report.items.filter((item) => item.verification?.verified === false).length;
+
+    const worker = workers.get(report.workerId) || {
+      workerId: report.workerId,
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      handled: 0,
+      failed: 0,
+      rpaPackageRuns: 0,
+    };
+    const handled = report.handledReplies + report.handledMassTasks + report.handledMomentTasks;
+    const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
+    worker.totalRuns += 1;
+    if (report.status === 'completed') worker.completedRuns += 1;
+    if (report.status === 'failed') worker.failedRuns += 1;
+    worker.handled += handled;
+    worker.failed += failed;
+    if (report.packageHandoff) worker.rpaPackageRuns += 1;
+    if (!worker.lastRunAt || reportAtMs >= Date.parse(worker.lastRunAt)) {
+      worker.lastRunAt = reportAt;
+      worker.lastStatus = report.status;
+      worker.lastMode = mode;
+      worker.lastTarget = report.target;
+    }
+    workers.set(report.workerId, worker);
+
+    if (report.packageHandoff) {
+      rpaPackage.runs += 1;
+      rpaPackage.preflightLevel[report.packageHandoff.preflightLevel] += 1;
+      rpaPackage.recommendedMode[report.packageHandoff.recommendedMode] += 1;
+      rpaPackage.packageTarget[report.packageHandoff.packageTarget] += 1;
+      if (report.packageHandoff.blockedByPreflight) rpaPackage.blockedByPreflight += 1;
+    }
+
+    for (const error of bridgeRunReportErrors(report)) {
+      const current = errors.get(error) || { error, count: 0 };
+      current.count += 1;
+      if (!current.latestAt || reportAtMs >= Date.parse(current.latestAt)) {
+        current.latestAt = reportAt;
+        current.workerId = report.workerId;
+      }
+      errors.set(error, current);
+    }
+  }
+
+  totals.handled = totals.handledReplies + totals.handledMassTasks + totals.handledMomentTasks;
+  totals.failed = totals.failedReplies + totals.failedMassTasks + totals.failedMomentTasks;
+  totals.rpaPackageRuns = rpaPackage.runs;
+  totals.blockedRpaPackageRuns = rpaPackage.blockedByPreflight;
+  const terminalRuns = status.completed + status.failed;
+  const successRate = terminalRuns ? Math.round((status.completed / terminalRuns) * 1000) / 10 : 0;
+
+  return {
+    generatedAt,
+    windowHours,
+    limit,
+    workerId: wantedWorkerId || undefined,
+    totalRuns: reports.length,
+    successRate,
+    status,
+    target,
+    modes,
+    totals,
+    rpaPackage,
+    workers: [...workers.values()].sort((a, b) => sortableIsoMs(b.lastRunAt) - sortableIsoMs(a.lastRunAt)),
+    topErrors: [...errors.values()]
+      .sort((a, b) => b.count - a.count || sortableIsoMs(b.latestAt) - sortableIsoMs(a.latestAt))
+      .slice(0, 5),
+  };
+}
+
 export function getWecomBridgeRunnerPolicy(): WecomBridgeRunnerPolicy {
   return cloneRunnerPolicy(data.runnerPolicy);
 }
@@ -2042,6 +2235,37 @@ function bridgeRunReportItemError(item: WecomBridgeRunReportItem): string | unde
   }
   if (item.ok === false) return 'Runner item failed';
   return undefined;
+}
+
+function bridgeRunReportTimestampIso(report: WecomBridgeRunReport): string | undefined {
+  return report.finishedAt || report.startedAt || report.updatedAt || report.createdAt;
+}
+
+function bridgeRunReportTimestampMs(report: WecomBridgeRunReport): number {
+  const ms = Date.parse(bridgeRunReportTimestampIso(report) || '');
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function sortableIsoMs(value?: string): number {
+  const ms = Date.parse(value || '');
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function bridgeRunReportErrors(report: WecomBridgeRunReport): string[] {
+  const errors = new Set<string>();
+  const push = (value?: string) => {
+    const text = str(value, 240).replace(/\s+/g, ' ').trim();
+    if (text) errors.add(text);
+  };
+  push(report.error);
+  for (const item of report.items) {
+    push(bridgeRunReportItemError(item));
+    push(item.verification?.error);
+  }
+  if (report.status === 'failed' && errors.size === 0) {
+    push(report.summary || 'Bridge runner failed');
+  }
+  return [...errors];
 }
 
 export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEventIngestResult {

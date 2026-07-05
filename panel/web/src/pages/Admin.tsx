@@ -34,6 +34,7 @@ import {
   type WecomBridgeEvent,
   type WecomBridgeMomentPasteMode,
   type WecomBridgeRunReport,
+  type WecomBridgeRunReportsSummary,
   type WecomBridgeWorkerCapability,
   type WecomBridgeRunnerEngine,
   type WecomBridgeRunnerMode,
@@ -218,6 +219,18 @@ function bridgeRunVerificationSummary(item: { verification?: WecomBridgeRunRepor
   if (verification.inputReady === false) parts.push('输入框未就绪');
   if (verification.error) parts.push(verification.error);
   return parts.slice(0, 4).join(' · ');
+}
+
+function bridgeRunHealthTag(summary: WecomBridgeRunReportsSummary): string {
+  if (summary.totalRuns === 0) return 'tag-warn';
+  if (summary.status.failed > 0 || summary.totals.failed > 0 || summary.totals.failedItems > 0) return 'tag-warn';
+  return 'tag-on';
+}
+
+function bridgeRunHealthLabel(summary: WecomBridgeRunReportsSummary): string {
+  if (summary.totalRuns === 0) return '无运行';
+  if (summary.status.failed > 0 || summary.totals.failed > 0 || summary.totals.failedItems > 0) return '需关注';
+  return '稳定';
 }
 
 const BRIDGE_RUNNER_MODE_LABEL: Record<WecomBridgeRunnerMode, string> = {
@@ -460,6 +473,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
+  const [bridgeRunSummary, setBridgeRunSummary] = useState<WecomBridgeRunReportsSummary | null>(null);
   const [runnerPolicy, setRunnerPolicy] = useState<WecomBridgeRunnerPolicy | null>(null);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
   const [recoveryReleaseClaims, setRecoveryReleaseClaims] = useState<BridgeRecoveryReleaseMode>('expired');
@@ -548,6 +562,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         { events },
         { events: bridgeEvents },
         { reports },
+        { summary: bridgeRunSummary },
         { policy },
       ] = await Promise.all([
         api.getAutomationConfig(),
@@ -561,6 +576,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.automationAudit(30),
         api.listWecomBridgeEvents(20),
         api.listWecomBridgeRunReports(20),
+        api.getWecomBridgeRunReportsSummary(24, 300),
         api.getWecomBridgeRunnerPolicy(),
       ]);
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
@@ -575,6 +591,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setAudit(events);
       setBridgeEvents(bridgeEvents.filter((event) => event.status !== 'archived'));
       setBridgeRuns(reports);
+      setBridgeRunSummary(bridgeRunSummary);
       setRunnerPolicy(policy);
       setBridgeReplyDrafts(
         Object.fromEntries(bridgeEvents.filter((event) => event.status !== 'archived').map((event) => [event.id, event.replyDraft || ''])),
@@ -2279,6 +2296,71 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>
                       </div>
                     ))}
+                  </div>
+                )}
+                {bridgeRunSummary && (
+                  <div className="bridge-runner-guide">
+                    <div className="bridge-runner-head">
+                      <div>
+                        <b>运行健康</b>
+                        <div className="muted small">
+                          最近 {bridgeRunSummary.windowHours} 小时 · {bridgeRunSummary.totalRuns} 次运行 · 成功率 {bridgeRunSummary.successRate}%
+                        </div>
+                      </div>
+                      <span className={'tag ' + bridgeRunHealthTag(bridgeRunSummary)}>{bridgeRunHealthLabel(bridgeRunSummary)}</span>
+                    </div>
+                    <div className="bridge-health-grid">
+                      <div className="bridge-health-metric">
+                        <span>已处理</span>
+                        <b>{bridgeRunSummary.totals.handled}</b>
+                        <small>
+                          回复 {bridgeRunSummary.totals.handledReplies} · 群发 {bridgeRunSummary.totals.handledMassTasks} · 朋友圈 {bridgeRunSummary.totals.handledMomentTasks}
+                        </small>
+                      </div>
+                      <div className="bridge-health-metric">
+                        <span>失败</span>
+                        <b>{bridgeRunSummary.totals.failed + bridgeRunSummary.totals.failedItems}</b>
+                        <small>
+                          运行 {bridgeRunSummary.status.failed} · 明细 {bridgeRunSummary.totals.failedItems} · 校验失败 {bridgeRunSummary.totals.verificationFailed}
+                        </small>
+                      </div>
+                      <div className="bridge-health-metric">
+                        <span>RPA 包</span>
+                        <b>{bridgeRunSummary.rpaPackage.runs}</b>
+                        <small>
+                          预检阻断 {bridgeRunSummary.rpaPackage.blockedByPreflight} · dry-run {bridgeRunSummary.rpaPackage.recommendedMode['dry-run']} · prepare{' '}
+                          {bridgeRunSummary.rpaPackage.recommendedMode.prepare}
+                        </small>
+                      </div>
+                    </div>
+                    {bridgeRunSummary.workers.length > 0 && (
+                      <div className="chip-row">
+                        {bridgeRunSummary.workers.slice(0, 4).map((worker) => (
+                          <span className="chip chip-static" key={worker.workerId}>
+                            {worker.workerId} · {worker.totalRuns} 次 · 处理 {worker.handled} · 失败 {worker.failed}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {bridgeRunSummary.topErrors.length > 0 && (
+                      <div className="auto-list compact">
+                        {bridgeRunSummary.topErrors.map((item) => {
+                          const at = Date.parse(item.latestAt || '');
+                          return (
+                            <div className="auto-list-item" key={item.error}>
+                              <div>
+                                <b>{item.error}</b>
+                                <div className="muted small">
+                                  {item.count} 次{item.workerId ? ` · ${item.workerId}` : ''}
+                                  {Number.isFinite(at) ? ` · 最近 ${fmtDate(at)}` : ''}
+                                </div>
+                              </div>
+                              <span className="tag tag-warn">失败原因</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
                 {bridgeRuns.length > 0 && (

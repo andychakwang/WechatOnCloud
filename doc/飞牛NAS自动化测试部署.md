@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r64-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r65-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,9 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r64-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r64-2026-07-06`
-- 本版新增：Bridge 运行报告可留存 RPA 包级 `packageHandoff`，Web 最近运行列表可展示 RPA 包目标、建议执行模式和预检等级，便于 SaaS 运维回看某次 Mac/RPA 执行为什么 dry-run、prepare 或被预检阻断。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r65-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r65-2026-07-06`
+- 本版新增：Bridge 运行健康汇总接口 `GET /api/admin/automation/bridge-runs/summary`，Web「Mac Bridge」区域展示最近 24 小时运行次数、成功率、处理/失败量、RPA 包次数、预检阻断次数、worker 汇总和 Top 失败原因，便于 SaaS 运维排查 Mac/RPA 执行稳定性。
 
 ## 2026-07-06 运行验收
 

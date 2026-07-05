@@ -105,6 +105,7 @@ import {
   deleteAutomationAudienceContact,
   listWecomBridgeWorkers,
   listWecomBridgeRunReports,
+  summarizeWecomBridgeRunReports,
   getWecomBridgeRunnerPolicy,
   updateWecomBridgeRunnerPolicy,
   recoverAutomationBridgeOutbox,
@@ -543,6 +544,19 @@ app.get('/api/admin/automation/bridge-runs', async (req, reply) => {
   return { reports: listWecomBridgeRunReports(Number(query?.limit || 50), String(query?.workerId || '')) };
 });
 
+app.get('/api/admin/automation/bridge-runs/summary', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return {
+    summary: summarizeWecomBridgeRunReports({
+      limit: query?.limit,
+      hours: query?.hours,
+      windowHours: query?.windowHours,
+      workerId: query?.workerId,
+    }),
+  };
+});
+
 app.get('/api/admin/automation/runner-policy', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { policy: getWecomBridgeRunnerPolicy() };
@@ -764,8 +778,10 @@ app.get(AUTOMATION_BRIDGE_RUNNER_POLICY_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   const query = req.query as any;
   const policy = getWecomBridgeRunnerPolicy();
+  const preflight = getAutomationPreflightReport();
   return {
     policy,
+    preflight,
     workerId: String(query?.workerId || ''),
     env: {
       WECOM_RUNNER_MODE: policy.mode,

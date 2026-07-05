@@ -312,6 +312,65 @@ export interface WecomBridgeRunReport {
   updatedAt: string;
 }
 
+export interface WecomBridgeRunWorkerSummary {
+  workerId: string;
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  handled: number;
+  failed: number;
+  rpaPackageRuns: number;
+  lastRunAt?: string;
+  lastStatus?: WecomBridgeRunStatus;
+  lastMode?: string;
+  lastTarget?: WecomBridgeRunTarget;
+}
+
+export interface WecomBridgeRunErrorSummary {
+  error: string;
+  count: number;
+  latestAt?: string;
+  workerId?: string;
+}
+
+export interface WecomBridgeRunReportsSummary {
+  generatedAt: string;
+  windowHours: number;
+  limit: number;
+  workerId?: string;
+  totalRuns: number;
+  successRate: number;
+  status: Record<WecomBridgeRunStatus, number>;
+  target: Record<WecomBridgeRunTarget, number>;
+  modes: Record<string, number>;
+  totals: {
+    handled: number;
+    failed: number;
+    handledReplies: number;
+    handledMassTasks: number;
+    handledMomentTasks: number;
+    failedReplies: number;
+    failedMassTasks: number;
+    failedMomentTasks: number;
+    reportItems: number;
+    failedItems: number;
+    verificationRequired: number;
+    verificationPassed: number;
+    verificationFailed: number;
+    rpaPackageRuns: number;
+    blockedRpaPackageRuns: number;
+  };
+  rpaPackage: {
+    runs: number;
+    blockedByPreflight: number;
+    preflightLevel: Record<AutomationPreflightLevel, number>;
+    recommendedMode: Record<WecomBridgeRunnerMode, number>;
+    packageTarget: Record<WecomRpaPackageTarget, number>;
+  };
+  workers: WecomBridgeRunWorkerSummary[];
+  topErrors: WecomBridgeRunErrorSummary[];
+}
+
 export type WecomRpaPackageFormat = 'json' | 'jsonl';
 export type WecomRpaTaskTarget = 'reply' | 'mass' | 'moment';
 
@@ -892,6 +951,10 @@ export const api = {
   listWecomBridgeRunReports: (limit = 50, workerId = '') =>
     req<{ reports: WecomBridgeRunReport[] }>(
       `/api/admin/automation/bridge-runs?limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,
+    ),
+  getWecomBridgeRunReportsSummary: (hours = 24, limit = 300, workerId = '') =>
+    req<{ summary: WecomBridgeRunReportsSummary }>(
+      `/api/admin/automation/bridge-runs/summary?hours=${encodeURIComponent(hours)}&limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,
     ),
   getWecomBridgeRunnerPolicy: () => req<{ policy: WecomBridgeRunnerPolicy }>('/api/admin/automation/runner-policy'),
   updateWecomBridgeRunnerPolicy: (policy: Partial<WecomBridgeRunnerPolicy>) =>

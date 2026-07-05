@@ -1864,7 +1864,9 @@ PY
     --mode dry-run \
     --handler-reply "$WECOM_REPLY_HANDLER" \
     --handler-mass "$WECOM_MASS_HANDLER" \
-    --handler-moment "$WECOM_MOMENT_HANDLER" > "$body_file"
+    --handler-moment "$WECOM_MOMENT_HANDLER" \
+    --report-run > "$body_file"
+  json_assert_path runReport.report.packageHandoff.generatedFrom
   python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
 import json
 import sys
@@ -1881,6 +1883,27 @@ if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id and
     raise SystemExit("mass RPA package task was not handled")
 if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
     raise SystemExit("moment RPA package task was not handled")
+PY
+
+  request_json GET "/api/admin/automation/bridge-runs/summary?hours=24&limit=300"
+  python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    summary = json.load(fh)["summary"]
+if summary.get("totalRuns", 0) < 4:
+    raise SystemExit("Bridge run summary should include recent smoke reports")
+if summary.get("rpaPackage", {}).get("runs", 0) < 1:
+    raise SystemExit("Bridge run summary missing RPA package run count")
+if summary.get("rpaPackage", {}).get("packageTarget", {}).get("all", 0) < 1:
+    raise SystemExit("Bridge run summary missing all-target RPA package count")
+if summary.get("totals", {}).get("verificationFailed", 0) < 1:
+    raise SystemExit("Bridge run summary missing verification failure count")
+if not summary.get("workers"):
+    raise SystemExit("Bridge run summary missing worker breakdown")
+if not summary.get("topErrors"):
+    raise SystemExit("Bridge run summary missing top errors")
 PY
 
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" run-cloud-rpa-package \

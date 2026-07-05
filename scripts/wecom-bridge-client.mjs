@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r60-action-queue';
+const CLIENT_VERSION = 'automation-lab-r65-rpa-handoff-summary';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const BOOLEAN_OPTIONS = new Set([
@@ -557,6 +557,98 @@ function rpaExportTargets(target) {
   return target === 'all' ? ['replies', 'mass', 'moments'] : [target];
 }
 
+function normalizeEnum(value, allowed, fallback) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  return allowed.includes(raw) ? raw : fallback;
+}
+
+function normalizePackageTarget(value) {
+  const raw = String(value || 'all').trim().toLowerCase().replace(/_/g, '-');
+  if (['reply', 'replies', 'ai-reply', 'ai-replies'].includes(raw)) return 'replies';
+  if (['mass', 'mass-task', 'mass-tasks', 'group-send', 'broadcast'].includes(raw)) return 'mass';
+  if (['moment', 'moments', 'moment-task', 'moment-tasks', 'moment-draft', 'moment-drafts'].includes(raw)) return 'moments';
+  return 'all';
+}
+
+function normalizePreflightSummary(value) {
+  const raw = isRecord(value) ? value : {};
+  return {
+    ok: intOpt(raw.ok, 0, 0, 100000),
+    warn: intOpt(raw.warn, 0, 0, 100000),
+    block: intOpt(raw.block, 0, 0, 100000),
+  };
+}
+
+function normalizePreflightLevel(value, summary) {
+  const level = normalizeEnum(value, ['ok', 'warn', 'block'], '');
+  if (level) return level;
+  if (summary.block > 0) return 'block';
+  if (summary.warn > 0) return 'warn';
+  return 'ok';
+}
+
+function localRunnerPolicy(options) {
+  const mode = normalizeEnum(runnerMode(options, process.env.WECOM_RUNNER_MODE || 'dry-run'), ['dry-run', 'prepare', 'send'], 'dry-run');
+  const target = normalizeEnum(process.env.WECOM_RUNNER_TARGET || options.target || options.queue || 'all', ['replies', 'mass', 'moments', 'all'], 'all');
+  const runnerEngine = normalizeEnum(process.env.WECOM_RUNNER_ENGINE, ['bridge', 'rpa-package'], envBool('WECOM_USE_RPA_PACKAGE') ? 'rpa-package' : 'bridge');
+  return {
+    runnerEngine,
+    mode: mode === 'send' && target === 'moments' ? 'prepare' : mode,
+    target,
+    momentPasteMode: normalizeEnum(process.env.WECOM_MOMENT_PASTE_MODE, ['clipboard-only', 'open-draft', 'rpa'], 'clipboard-only'),
+    allowSend: envBool('WECOM_ALLOW_SEND', 'WECOM_ACCEPT_REMOTE_SEND'),
+    requireTargetMatch: envBool('WECOM_REQUIRE_TARGET_MATCH'),
+    requireHandlerVerification: envBool('WECOM_REQUIRE_HANDLER_VERIFICATION', 'WECOM_REQUIRE_VERIFICATION', 'WECOM_REQUIRE_POSITIVE_VERIFICATION'),
+  };
+}
+
+async function fetchRunnerPolicySnapshot(options) {
+  try {
+    const id = encodeURIComponent(workerId(options));
+    return await requestJson(options, 'GET', `/api/automation/bridge/wecom/runner-policy?workerId=${id}`);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRpaPackageHandoff(options, packageTarget, tasks, snapshot) {
+  const remote = snapshot === undefined ? await fetchRunnerPolicySnapshot(options) : snapshot;
+  const policy = { ...localRunnerPolicy(options), ...(isRecord(remote?.policy) ? remote.policy : {}) };
+  const preflight = isRecord(remote?.preflight) ? remote.preflight : {};
+  const preflightSummary = normalizePreflightSummary(preflight.summary);
+  const preflightLevel = normalizePreflightLevel(preflight.level, preflightSummary);
+  const target = normalizePackageTarget(packageTarget);
+  const recommendedMode =
+    policy.mode === 'send' && (!policy.allowSend || target === 'moments')
+      ? 'prepare'
+      : normalizeEnum(policy.mode, ['dry-run', 'prepare', 'send'], 'dry-run');
+  const includesMoments = tasks.some((task) => normalizeRpaTaskTarget(task?.target) === 'moment');
+  const notes = [
+    preflightSummary.block > 0 ? `预检存在 ${preflightSummary.block} 个阻断项；执行前建议先处理。` : '',
+    policy.mode === 'send' && !policy.allowSend ? '云端策略为 send，但 allowSend 未开启；Mac Runner 应降级为 prepare。' : '',
+    includesMoments ? '朋友圈任务始终是半自动 prepare，不应无人值守点击发布。' : '',
+    policy.requireTargetMatch ? '云端策略要求目标窗口匹配，Mac handler 应在粘贴/发送前校验会话。' : '',
+    policy.requireHandlerVerification ? '云端策略要求 handler 回传正向校验后才标记成功。' : '',
+  ].filter(Boolean);
+
+  return {
+    generatedFrom: 'automation-rpa-package',
+    packageTarget: target,
+    recommendedMode,
+    runnerEngine: normalizeEnum(policy.runnerEngine, ['bridge', 'rpa-package'], 'bridge'),
+    runnerTarget: normalizeEnum(policy.target, ['replies', 'mass', 'moments', 'all'], 'all'),
+    runnerMode: normalizeEnum(policy.mode, ['dry-run', 'prepare', 'send'], recommendedMode),
+    allowSend: policy.allowSend === true,
+    requireTargetMatch: policy.requireTargetMatch === true,
+    requireHandlerVerification: policy.requireHandlerVerification === true,
+    momentPasteMode: normalizeEnum(policy.momentPasteMode, ['clipboard-only', 'open-draft', 'rpa'], 'clipboard-only'),
+    preflightLevel,
+    preflightSummary,
+    blockedByPreflight: preflightLevel === 'block' || preflightSummary.block > 0,
+    notes: notes.slice(0, 5),
+  };
+}
+
 function taskTextLength(text) {
   return [...String(text || '')].length;
 }
@@ -691,6 +783,7 @@ async function buildCloudRpaPackage(options) {
   }
 
   const tasks = pulled.map((item) => buildRpaTask(item.target, item.task, pkgMeta, includeSource));
+  const handoff = await resolveRpaPackageHandoff(options, target, tasks);
   const pkg = {
     schema: RPA_PACKAGE_SCHEMA,
     ...pkgMeta,
@@ -703,6 +796,7 @@ async function buildCloudRpaPackage(options) {
       mass: tasks.filter((task) => task.target === 'mass').length,
       moments: tasks.filter((task) => task.target === 'moment').length,
     },
+    handoff,
     tasks,
   };
 
@@ -908,6 +1002,10 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
     .filter((item) => selectedTargets.has(item.target))
     .slice(0, limit);
   const handled = [];
+  const packageTarget = packageMeta?.target ? normalizePackageTarget(packageMeta.target) : normalizePackageTarget(selectedTarget);
+  const packageHandoff = isRecord(packageMeta?.handoff)
+    ? packageMeta.handoff
+    : await resolveRpaPackageHandoff(options, packageTarget, rawTasks);
 
   for (const { target, task } of tasks) {
     const handler = rpaHandlerForTarget(options, target).trim();
@@ -958,7 +1056,7 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
     packageId: packageMeta?.packageId || '',
     packageSchema: packageMeta?.schema || '',
     packageCounts: packageMeta?.counts || { total: rawTasks.length },
-    packageHandoff: packageMeta?.handoff || null,
+    packageHandoff,
     mode,
     target: selectedTarget,
     total: tasks.length,
@@ -980,7 +1078,7 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
       failedReplies: handled.filter((item) => item.target === 'reply' && item.ok === false).length,
       failedMassTasks: handled.filter((item) => item.target === 'mass' && item.ok === false).length,
       failedMomentTasks: handled.filter((item) => item.target === 'moment' && item.ok === false).length,
-      packageHandoff: packageMeta?.handoff || null,
+      packageHandoff,
       items: handled,
       summary: runSummary(`rpa-package/${selectedTarget}`, handled, tasks.length),
     });
