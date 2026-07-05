@@ -2002,6 +2002,30 @@ PY
   request_json PATCH "/api/admin/automation/moment-drafts/$all_moment_draft_id" '{"approved":true,"status":"ready"}'
   json_assert_eq draft.status ready
 
+  request_json GET "/api/admin/automation/action-queue?limit=20"
+  python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    handoff = json.load(fh)["queue"]["handoff"]["rpa"]
+if handoff.get("total", 0) < 3:
+    raise SystemExit("action queue RPA handoff should count all target tasks")
+if handoff.get("blockedByWorker") is not False:
+    raise SystemExit("action queue RPA handoff should not be worker-blocked")
+readiness = handoff.get("workerReadiness") or {}
+for target in ("replies", "mass", "moments"):
+    state = readiness.get(target)
+    if not state:
+        raise SystemExit(f"missing worker readiness for {target}")
+    if state.get("tasks", 0) < 1:
+        raise SystemExit(f"worker readiness should count tasks for {target}")
+    if state.get("capableWorkers", 0) < 1:
+        raise SystemExit(f"worker readiness should include capable workers for {target}")
+    if state.get("blocked") is not False:
+        raise SystemExit(f"worker readiness should not block {target}")
+PY
+
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" export-rpa-package \
     --target all \
     --limit 20 \

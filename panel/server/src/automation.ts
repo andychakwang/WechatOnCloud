@@ -598,6 +598,7 @@ export type AutomationActionQueueItemKind =
   | 'runner-report';
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
+export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
 
 export interface AutomationActionQueueItem {
   id: string;
@@ -629,7 +630,22 @@ export interface AutomationActionQueue {
       limit: number;
       ready: boolean;
       blockedByPreflight: boolean;
+      blockedByWorker: boolean;
       reason: string;
+      workerReadiness: Record<
+        AutomationActionQueueRpaWorkerTarget,
+        {
+          target: AutomationActionQueueRpaWorkerTarget;
+          label: string;
+          capability: WecomBridgeWorkerCapability;
+          tasks: number;
+          onlineWorkers: number;
+          capableWorkers: number;
+          unknownWorkers: number;
+          blocked: boolean;
+          reason: string;
+        }
+      >;
     };
   };
   items: AutomationActionQueueItem[];
@@ -1769,6 +1785,13 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   ].filter((item) => item.count > 0);
   const rpaTarget = rpaActiveTargets.length === 1 ? rpaActiveTargets[0].target : 'all';
   const rpaBlocked = preflight.summary.block > 0;
+  const bridgeWorkers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
+  const workerReadiness = {
+    replies: actionQueueRpaWorkerReadiness(bridgeWorkers, 'replies', 'AI 回复', 'reply', rpaCounts.replies),
+    mass: actionQueueRpaWorkerReadiness(bridgeWorkers, 'mass', '群发', 'mass', rpaCounts.mass),
+    moments: actionQueueRpaWorkerReadiness(bridgeWorkers, 'moments', '朋友圈', 'moment', rpaCounts.moments),
+  };
+  const rpaWorkerBlocked = Object.values(workerReadiness).some((item) => item.blocked);
   const handoff: AutomationActionQueue['handoff'] = {
     rpa: {
       target: rpaTarget,
@@ -1776,14 +1799,18 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
       total: rpaTotal,
       ...rpaCounts,
       limit: Math.min(200, Math.max(50, rpaTotal || 50)),
-      ready: rpaTotal > 0 && !rpaBlocked,
+      ready: rpaTotal > 0 && !rpaBlocked && !rpaWorkerBlocked,
       blockedByPreflight: rpaBlocked,
+      blockedByWorker: rpaWorkerBlocked,
       reason:
         rpaTotal <= 0
           ? '暂无可交给 Mac/RPA 的回复、群发或朋友圈任务。'
+          : rpaWorkerBlocked
+            ? '存在待办队列没有匹配能力的在线 Runner；可先补启动对应 Mac worker。'
           : rpaBlocked
             ? '存在预检阻断；可以先导出预览包排查，但执行前应处理阻断项。'
             : '可生成 RPA 运行包交给 Mac 企业微信工具预览或执行。',
+      workerReadiness,
     },
   };
   const selected = items
@@ -1804,6 +1831,38 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   );
 
   return { generatedAt, summary, handoff, items: selected };
+}
+
+function actionQueueRpaWorkerReadiness(
+  workers: WecomBridgeWorkerStatus[],
+  target: AutomationActionQueueRpaWorkerTarget,
+  label: string,
+  capability: WecomBridgeWorkerCapability,
+  tasks: number,
+): NonNullable<AutomationActionQueue['handoff']>['rpa']['workerReadiness'][AutomationActionQueueRpaWorkerTarget] {
+  const state = bridgeWorkersCapabilityState(workers, capability);
+  const blocked = tasks > 0 && state.online.length > 0 && state.knownCapable.length === 0 && state.unknown === 0;
+  const reason =
+    tasks <= 0
+      ? `${label}暂无待交付任务。`
+      : state.online.length <= 0
+        ? `${label}有 ${tasks} 个待办，但没有在线可用 Runner。`
+        : state.knownCapable.length > 0
+          ? `${state.knownCapable.length} 个在线 Runner 可处理${label}。`
+          : state.unknown > 0
+            ? `${label}有 ${tasks} 个待办；${state.unknown} 个在线 Runner 未上报能力清单。`
+            : `${label}有 ${tasks} 个待办，但在线 Runner 缺少 ${capability} 能力。`;
+  return {
+    target,
+    label,
+    capability,
+    tasks,
+    onlineWorkers: state.online.length,
+    capableWorkers: state.knownCapable.length,
+    unknownWorkers: state.unknown,
+    blocked,
+    reason,
+  };
 }
 
 export function updateAutomationConfig(raw: any): AutomationConfig {

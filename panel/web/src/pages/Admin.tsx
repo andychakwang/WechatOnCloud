@@ -352,8 +352,10 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
   limit: number;
   ready: boolean;
   blockedByPreflight: boolean;
+  blockedByWorker: boolean;
   reason: string;
   label: string;
+  workerReadiness: NonNullable<AutomationActionQueue['handoff']>['rpa']['workerReadiness'];
 } {
   if (queue.handoff?.rpa) return queue.handoff.rpa;
   const replies = queue.items.filter((item) => item.target === 'reply').length;
@@ -375,8 +377,33 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
     limit: 50,
     ready: total > 0,
     blockedByPreflight: false,
+    blockedByWorker: false,
     reason: total > 0 ? '可生成 RPA 运行包预览。' : '暂无可交给 Mac/RPA 的任务。',
     label: active.length === 1 ? active[0].label : '全队列',
+    workerReadiness: {
+      replies: fallbackRpaWorkerReadiness('replies', 'AI 回复', 'reply', replies),
+      mass: fallbackRpaWorkerReadiness('mass', '群发', 'mass', mass),
+      moments: fallbackRpaWorkerReadiness('moments', '朋友圈', 'moment', moments),
+    },
+  };
+}
+
+function fallbackRpaWorkerReadiness(
+  target: 'replies' | 'mass' | 'moments',
+  label: string,
+  capability: WecomBridgeWorkerCapability,
+  tasks: number,
+): NonNullable<AutomationActionQueue['handoff']>['rpa']['workerReadiness']['replies' | 'mass' | 'moments'] {
+  return {
+    target,
+    label,
+    capability,
+    tasks,
+    onlineWorkers: 0,
+    capableWorkers: 0,
+    unknownWorkers: 0,
+    blocked: false,
+    reason: tasks > 0 ? '当前服务端未返回 worker readiness 详情。' : `${label}暂无待交付任务。`,
   };
 }
 
@@ -651,6 +678,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const bridgeWorkerOptions = Array.from(new Map(bridgeWorkersSorted.map((worker) => [worker.workerId, worker])).values());
   const selectedRpaPackageWorker = bridgeWorkersSorted.find((worker) => worker.id === rpaPackageWorkerRef) || null;
   const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue) : null;
+  const actionQueueRpaReadiness = actionQueueRpa
+    ? (['replies', 'mass', 'moments'] as const)
+        .map((target) => actionQueueRpa.workerReadiness[target])
+        .filter((item) => item.tasks > 0)
+    : [];
   const copyBridgeText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -1739,7 +1771,18 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <span className="muted small">
                   RPA {actionQueueRpa?.total || 0} · 回复 {actionQueueRpa?.replies || 0} · 群发 {actionQueueRpa?.mass || 0} · 朋友圈 {actionQueueRpa?.moments || 0}
                   {actionQueueRpa?.blockedByPreflight ? ' · 预检阻断' : ''}
+                  {actionQueueRpa?.blockedByWorker ? ' · Worker 能力阻断' : ''}
                 </span>
+                {actionQueueRpaReadiness.length > 0 && (
+                  <div className="chip-row">
+                    {actionQueueRpaReadiness.map((state) => (
+                      <span key={state.target} className={'chip chip-static' + (state.blocked ? ' chip-bad' : '')} title={state.reason}>
+                        {state.label} worker {state.capableWorkers}
+                        {state.unknownWorkers ? ` · 未知 ${state.unknownWorkers}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <button
                   className="btn-text"
                   disabled={busy === 'rpa-package' || !actionQueueRpa?.total}

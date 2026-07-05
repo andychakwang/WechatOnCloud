@@ -698,6 +698,7 @@ export interface AutomationPreflightReport {
 export type AutomationActionQueueItemKind = 'preflight-check' | 'bridge-reply' | 'mass-task' | 'moment-task' | 'runner-report';
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
+export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
 
 export interface AutomationActionQueueItem {
   id: string;
@@ -729,7 +730,22 @@ export interface AutomationActionQueue {
       limit: number;
       ready: boolean;
       blockedByPreflight: boolean;
+      blockedByWorker: boolean;
       reason: string;
+      workerReadiness: Record<
+        AutomationActionQueueRpaWorkerTarget,
+        {
+          target: AutomationActionQueueRpaWorkerTarget;
+          label: string;
+          capability: WecomBridgeWorkerCapability;
+          tasks: number;
+          onlineWorkers: number;
+          capableWorkers: number;
+          unknownWorkers: number;
+          blocked: boolean;
+          reason: string;
+        }
+      >;
     };
   };
   items: AutomationActionQueueItem[];
