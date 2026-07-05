@@ -43,6 +43,7 @@ import {
   type WecomBridgeRunnerTarget,
   type WecomRpaPackage,
   type WecomRpaPackageFormat,
+  type WecomRpaPackageIssue,
   type WecomRpaPackageTarget,
 } from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
@@ -273,6 +274,32 @@ const BRIDGE_RUNNER_TARGET_LABEL: Record<WecomBridgeRunnerTarget, string> = {
   moments: '朋友圈',
   all: '全队列',
 };
+
+const RPA_PACKAGE_ISSUE_STATUS_LABEL: Record<string, string> = {
+  issued: '已签发',
+  reported: '已回执',
+  expired: '已过期',
+};
+
+const RPA_PACKAGE_ISSUE_KIND_LABEL: Record<string, string> = {
+  preview: '预览',
+  download: '下载',
+  raw: '原始包',
+  'reported-only': '回执补录',
+};
+
+const RPA_PACKAGE_TARGET_LABEL: Record<string, string> = {
+  replies: 'AI 回复',
+  mass: '群发',
+  moments: '朋友圈',
+  all: '全队列',
+};
+
+function rpaPackageIssueTag(status: string): string {
+  if (status === 'reported') return 'tag-on';
+  if (status === 'expired') return 'tag-off';
+  return 'tag-warn';
+}
 
 const BRIDGE_WORKER_CAPABILITY_LABEL: Record<WecomBridgeWorkerCapability, string> = {
   reply: '回复',
@@ -532,6 +559,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
   const [bridgeRunSummary, setBridgeRunSummary] = useState<WecomBridgeRunReportsSummary | null>(null);
+  const [rpaPackageIssues, setRpaPackageIssues] = useState<WecomRpaPackageIssue[]>([]);
   const [runnerPolicy, setRunnerPolicy] = useState<WecomBridgeRunnerPolicy | null>(null);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
   const [recoveryReleaseClaims, setRecoveryReleaseClaims] = useState<BridgeRecoveryReleaseMode>('expired');
@@ -624,6 +652,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         { events },
         { events: bridgeEvents },
         { reports },
+        { packages: rpaPackageIssues },
         { summary: bridgeRunSummary },
         { policy },
       ] = await Promise.all([
@@ -638,6 +667,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.automationAudit(30),
         api.listWecomBridgeEvents(20),
         api.listWecomBridgeRunReports(20),
+        api.listWecomRpaPackageIssues(20),
         api.getWecomBridgeRunReportsSummary(24, 300),
         api.getWecomBridgeRunnerPolicy(),
       ]);
@@ -653,6 +683,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setAudit(events);
       setBridgeEvents(bridgeEvents.filter((event) => event.status !== 'archived'));
       setBridgeRuns(reports);
+      setRpaPackageIssues(rpaPackageIssues);
       setBridgeRunSummary(bridgeRunSummary);
       setRunnerPolicy(policy);
       setBridgeReplyDrafts(
@@ -809,6 +840,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         ...wecomRpaPackageOptions('json', target, limit),
       });
       setRpaPackagePreview(pkg);
+      api.listWecomRpaPackageIssues(20).then(({ packages }) => setRpaPackageIssues(packages)).catch(() => undefined);
       toast(`RPA 包已生成：${pkg.counts.total} 个任务`, 'ok');
     } catch (e: any) {
       toast(e.message || '生成 RPA 包失败', 'error');
@@ -2235,6 +2267,42 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <div className="muted small">{rpaPackagePreview.handoff.notes.slice(0, 3).join(' · ')}</div>
                       ) : null}
                     </>
+                  )}
+                  {rpaPackageIssues.length > 0 && (
+                    <div className="auto-list compact">
+                      {rpaPackageIssues.slice(0, 4).map((issue) => {
+                        const issuedAt = Date.parse(issue.issuedAt || issue.createdAt);
+                        const expiresAt = Date.parse(issue.expiresAt || '');
+                        const lastRunAt = Date.parse(issue.lastRunAt || '');
+                        return (
+                          <div className="auto-list-item" key={issue.id}>
+                            <div>
+                              <b>
+                                {RPA_PACKAGE_TARGET_LABEL[issue.target] || issue.target} ·{' '}
+                                {RPA_PACKAGE_ISSUE_KIND_LABEL[issue.requestKind] || issue.requestKind}
+                              </b>
+                              <div className="muted small">
+                                {issue.workerId} · {Number.isFinite(issuedAt) ? fmtDate(issuedAt) : '时间未知'} · {issue.counts.total} 项
+                                {issue.runCount ? ` · 回执 ${issue.runCount}` : ''}
+                                {issue.handled ? ` · 处理 ${issue.handled}` : ''}
+                                {issue.failed ? ` · 失败 ${issue.failed}` : ''}
+                              </div>
+                              <div className="chip-row">
+                                {issue.packageDigest && <span className="chip chip-static">包 {shortDigest(issue.packageDigest)}</span>}
+                                {issue.taskDigest && <span className="chip chip-static">任务 {shortDigest(issue.taskDigest)}</span>}
+                                {Number.isFinite(expiresAt) && (
+                                  <span className={'chip chip-static' + (expiresAt <= Date.now() ? ' chip-bad' : '')}>有效至 {fmtDate(expiresAt)}</span>
+                                )}
+                                {Number.isFinite(lastRunAt) && <span className="chip chip-static">最近回执 {fmtDate(lastRunAt)}</span>}
+                              </div>
+                            </div>
+                            <span className={'tag ' + rpaPackageIssueTag(issue.status)}>
+                              {RPA_PACKAGE_ISSUE_STATUS_LABEL[issue.status] || issue.status}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
                 <div className="bridge-runner-guide">

@@ -868,6 +868,44 @@ export interface WecomRpaPackageExportOptions {
   packageId?: unknown;
 }
 
+export type WecomRpaPackageIssueStatus = 'issued' | 'reported' | 'expired';
+export type WecomRpaPackageIssueKind = 'preview' | 'download' | 'raw' | 'reported-only';
+
+export interface WecomRpaPackageIssue {
+  id: string;
+  packageId: string;
+  packageDigest?: string;
+  taskDigest?: string;
+  issuedAt: string;
+  expiresAt?: string;
+  ttlMinutes?: number;
+  actor: string;
+  source: string;
+  workerId: string;
+  workerSource?: string;
+  target: WecomRpaPackageTarget;
+  format: WecomRpaPackageFormat | 'unknown';
+  requestKind: WecomRpaPackageIssueKind;
+  includeSource: boolean;
+  status: WecomRpaPackageIssueStatus;
+  counts: {
+    total: number;
+    replies: number;
+    mass: number;
+    moments: number;
+  };
+  runCount: number;
+  handled: number;
+  failed: number;
+  lastRunReportId?: string;
+  lastRunAt?: string;
+  lastRunStatus?: WecomBridgeRunStatus;
+  lastRunWorkerId?: string;
+  reportedOnly?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -908,6 +946,7 @@ export interface AutomationBundle {
   bridgeEvents?: WecomBridgeEvent[];
   bridgeWorkers?: WecomBridgeWorker[];
   bridgeRunReports?: WecomBridgeRunReport[];
+  rpaPackageIssues?: WecomRpaPackageIssue[];
   auditEvents?: AutomationAuditEvent[];
 }
 
@@ -930,6 +969,7 @@ interface AutomationData extends AutomationConfig {
   bridgeEvents: WecomBridgeEvent[];
   bridgeWorkers: WecomBridgeWorker[];
   bridgeRunReports: WecomBridgeRunReport[];
+  rpaPackageIssues: WecomRpaPackageIssue[];
   runnerPolicy: WecomBridgeRunnerPolicy;
   massSendJobs: MassSendJob[];
   momentDrafts: MomentDraft[];
@@ -945,6 +985,7 @@ const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
 const MAX_BRIDGE_RUN_REPORT_ITEMS = 100;
+const MAX_RPA_PACKAGE_ISSUES = 300;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
 const AUTOMATION_DAILY_ACTIONS = new Set([
@@ -1009,6 +1050,7 @@ const DEFAULT_DATA: AutomationData = {
   bridgeEvents: [],
   bridgeWorkers: [],
   bridgeRunReports: [],
+  rpaPackageIssues: [],
   runnerPolicy: DEFAULT_RUNNER_POLICY,
   massSendJobs: [],
   momentDrafts: [],
@@ -1895,6 +1937,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       bridgeEvents: data.bridgeEvents,
       bridgeWorkers: data.bridgeWorkers,
       bridgeRunReports: data.bridgeRunReports,
+      rpaPackageIssues: data.rpaPackageIssues,
       runnerPolicy: data.runnerPolicy,
       massSendJobs: data.massSendJobs,
       momentDrafts: data.momentDrafts,
@@ -1926,6 +1969,7 @@ export function exportAutomationBundle(raw: any = {}): AutomationBundle {
   if (includeOperational) {
     bundle.bridgeWorkers = data.bridgeWorkers.map((worker) => ({ ...worker }));
     bundle.bridgeRunReports = data.bridgeRunReports.map(cloneBridgeRunReport);
+    bundle.rpaPackageIssues = data.rpaPackageIssues.map(cloneRpaPackageIssue);
   }
   if (includeAudit) bundle.auditEvents = data.auditEvents.map((event) => ({ ...event }));
   return bundle;
@@ -2176,6 +2220,11 @@ export function listWecomBridgeRunReports(limit = 50, workerId = ''): WecomBridg
     .map(cloneBridgeRunReport);
 }
 
+export function listWecomRpaPackageIssues(limit = 50): WecomRpaPackageIssue[] {
+  const n = clampInt(limit, 1, MAX_RPA_PACKAGE_ISSUES, 50);
+  return data.rpaPackageIssues.slice(-n).reverse().map(cloneRpaPackageIssue);
+}
+
 export function summarizeWecomBridgeRunReports(raw: any = {}): WecomBridgeRunReportsSummary {
   const generatedAt = new Date().toISOString();
   const windowHours = clampInt(raw?.windowHours ?? raw?.hours, 1, 24 * 30, 24);
@@ -2394,6 +2443,7 @@ export function recordWecomBridgeRunReport(actor: User, raw: any): WecomBridgeRu
   if (data.bridgeRunReports.length > MAX_BRIDGE_RUN_REPORTS) {
     data.bridgeRunReports = data.bridgeRunReports.slice(-MAX_BRIDGE_RUN_REPORTS);
   }
+  reconcileRpaPackageIssueFromRun(actor, report, now);
   persist();
   const applied = applyBridgeRunReportItems(actor, report, raw);
 
@@ -2407,6 +2457,44 @@ export function recordWecomBridgeRunReport(actor: User, raw: any): WecomBridgeRu
     });
   }
   return cloneBridgeRunReport(report);
+}
+
+export function recordWecomRpaPackageIssue(actor: User, pkg: WecomRpaPackage, raw: any = {}): WecomRpaPackageIssue {
+  const now = new Date().toISOString();
+  const issue = normalizeRpaPackageIssue(
+    {
+      id: `rpa-issue-${pkg.packageId}`,
+      packageId: pkg.packageId,
+      packageDigest: pkg.packageDigest,
+      taskDigest: pkg.taskDigest,
+      issuedAt: pkg.exportedAt,
+      expiresAt: pkg.expiresAt,
+      ttlMinutes: pkg.ttlMinutes,
+      actor: actor.username,
+      source: pkg.source,
+      workerId: pkg.workerId,
+      workerSource: raw?.workerSource ?? raw?.bridgeSource ?? raw?.worker_source ?? raw?.bridge_source,
+      target: pkg.target,
+      format: pkg.format,
+      requestKind: rpaPackageIssueKind(raw),
+      includeSource: boolish(raw?.includeSource) || boolish(raw?.include_source) || boolish(raw?.sourceTask),
+      status: 'issued',
+      counts: pkg.counts,
+      runCount: 0,
+      handled: 0,
+      failed: 0,
+      createdAt: now,
+      updatedAt: now,
+    },
+    false,
+    now,
+  );
+  data.rpaPackageIssues.push(issue);
+  if (data.rpaPackageIssues.length > MAX_RPA_PACKAGE_ISSUES) {
+    data.rpaPackageIssues = data.rpaPackageIssues.slice(-MAX_RPA_PACKAGE_ISSUES);
+  }
+  persist();
+  return cloneRpaPackageIssue(issue);
 }
 
 function applyBridgeRunReportItems(
@@ -4800,6 +4888,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
   const bridgeWorkersRaw = Array.isArray(raw?.bridgeWorkers) ? raw.bridgeWorkers : [];
   const bridgeRunReportsRaw = Array.isArray(raw?.bridgeRunReports) ? raw.bridgeRunReports : [];
+  const rpaPackageIssuesRaw = Array.isArray(raw?.rpaPackageIssues) ? raw.rpaPackageIssues : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
   const momentDraftsRaw = Array.isArray(raw?.momentDrafts) ? raw.momentDrafts : [];
   return {
@@ -4813,6 +4902,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
     bridgeRunReports: bridgeRunReportsRaw.slice(-MAX_BRIDGE_RUN_REPORTS).map((report: any) => normalizeBridgeRunReport(report, preserveIds, now)),
+    rpaPackageIssues: rpaPackageIssuesRaw.slice(-MAX_RPA_PACKAGE_ISSUES).map((issue: any) => normalizeRpaPackageIssue(issue, preserveIds, now)),
     runnerPolicy: normalizeRunnerPolicy(raw?.runnerPolicy, now),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
@@ -5099,6 +5189,66 @@ function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): 
     summary: str(raw?.summary ?? raw?.note, 1000).trim() || undefined,
     packageHandoff: normalizeRpaPackageHandoff(raw?.packageHandoff ?? raw?.rpaPackageHandoff ?? raw?.handoff),
     items: rawItems.slice(0, MAX_BRIDGE_RUN_REPORT_ITEMS).map(normalizeBridgeRunReportItem),
+    createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+  };
+}
+
+function normalizeRpaPackageIssue(raw: any, preserveIds: boolean, now: string): WecomRpaPackageIssue {
+  let target: WecomRpaPackageTarget = 'all';
+  try {
+    target = normalizeRpaPackageTarget(raw?.target ?? raw?.packageTarget ?? 'all');
+  } catch {
+    target = 'all';
+  }
+  const rawCounts = raw?.counts && typeof raw.counts === 'object' ? raw.counts : {};
+  const issuedAt = normalizeIsoDate(raw?.issuedAt ?? raw?.exportedAt ?? raw?.createdAt, now);
+  const expiresAt =
+    typeof raw?.expiresAt === 'string' && Number.isFinite(Date.parse(raw.expiresAt))
+      ? new Date(Date.parse(raw.expiresAt)).toISOString()
+      : typeof raw?.packageExpiresAt === 'string' && Number.isFinite(Date.parse(raw.packageExpiresAt))
+        ? new Date(Date.parse(raw.packageExpiresAt)).toISOString()
+        : undefined;
+  const formatRaw = str(raw?.format, 20).trim().toLowerCase();
+  const format: WecomRpaPackageFormat | 'unknown' = formatRaw === 'json' || formatRaw === 'jsonl' ? formatRaw : 'unknown';
+  const requestKind = normalizeRpaPackageIssueKind(raw?.requestKind ?? raw?.kind ?? raw?.sourceKind);
+  const lastRunAt =
+    typeof raw?.lastRunAt === 'string' && Number.isFinite(Date.parse(raw.lastRunAt)) ? new Date(Date.parse(raw.lastRunAt)).toISOString() : undefined;
+  const runCount = clampInt(raw?.runCount ?? raw?.runs, 0, 100000, 0);
+  const baseStatus = normalizeRpaPackageIssueStatus(raw?.status) || (runCount > 0 ? 'reported' : 'issued');
+  const status: WecomRpaPackageIssueStatus = baseStatus !== 'reported' && expiresAt && Date.parse(expiresAt) <= Date.now() ? 'expired' : baseStatus;
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : str(raw?.id, 200).trim() || randomUUID(),
+    packageId: str(raw?.packageId ?? raw?.id, 160).trim() || `rpa-package-${issuedAt.replace(/[:.]/g, '-')}`,
+    packageDigest: normalizeRpaDigest(raw?.packageDigest ?? raw?.digest ?? raw?.checksum),
+    taskDigest: normalizeRpaDigest(raw?.taskDigest ?? raw?.tasksDigest ?? raw?.taskChecksum),
+    issuedAt,
+    expiresAt,
+    ttlMinutes:
+      raw?.ttlMinutes !== undefined || raw?.packageTtlMinutes !== undefined ? normalizeRpaPackageTtlMinutes(raw?.ttlMinutes ?? raw?.packageTtlMinutes) : undefined,
+    actor: str(raw?.actor ?? raw?.issuedBy ?? raw?.user, 120).trim() || 'system',
+    source: str(raw?.source ?? 'wechat-on-cloud-panel', 120).trim() || 'wechat-on-cloud-panel',
+    workerId: str(raw?.workerId ?? raw?.worker ?? raw?.clientId, 120).trim() || 'unknown-worker',
+    workerSource: str(raw?.workerSource ?? raw?.bridgeSource ?? raw?.sourceWorker, 120).trim() || undefined,
+    target,
+    format,
+    requestKind,
+    includeSource: raw?.includeSource === true || raw?.sourceTask === true,
+    status,
+    counts: {
+      total: clampInt(rawCounts.total ?? raw?.total ?? raw?.packageTaskCount, 0, 2000, 0),
+      replies: clampInt(rawCounts.replies ?? raw?.replies, 0, 2000, 0),
+      mass: clampInt(rawCounts.mass ?? raw?.mass, 0, 2000, 0),
+      moments: clampInt(rawCounts.moments ?? raw?.moments, 0, 2000, 0),
+    },
+    runCount,
+    handled: clampInt(raw?.handled, 0, 100000, 0),
+    failed: clampInt(raw?.failed, 0, 100000, 0),
+    lastRunReportId: str(raw?.lastRunReportId ?? raw?.runReportId, 160).trim() || undefined,
+    lastRunAt,
+    lastRunStatus: normalizeBridgeRunStatus(raw?.lastRunStatus ?? raw?.runStatus),
+    lastRunWorkerId: str(raw?.lastRunWorkerId ?? raw?.runWorkerId, 120).trim() || undefined,
+    reportedOnly: raw?.reportedOnly === true || requestKind === 'reported-only',
     createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
   };
@@ -6054,6 +6204,99 @@ function normalizeRpaPackageExpiresAt(value: unknown, exportedAt: string, ttlMin
   return new Date(Date.parse(exportedAt) + ttlMinutes * 60 * 1000).toISOString();
 }
 
+function normalizeRpaPackageIssueKind(value: unknown): WecomRpaPackageIssueKind {
+  const raw = str(value, 40).trim().toLowerCase().replace(/_/g, '-');
+  if (raw === 'download' || raw === 'attachment') return 'download';
+  if (raw === 'raw' || raw === 'jsonl') return 'raw';
+  if (raw === 'reported-only' || raw === 'report' || raw === 'run-report') return 'reported-only';
+  return 'preview';
+}
+
+function normalizeRpaPackageIssueStatus(value: unknown): WecomRpaPackageIssueStatus | undefined {
+  const raw = str(value, 40).trim().toLowerCase().replace(/_/g, '-');
+  if (raw === 'issued' || raw === 'created') return 'issued';
+  if (raw === 'reported' || raw === 'run' || raw === 'executed') return 'reported';
+  if (raw === 'expired') return 'expired';
+  return undefined;
+}
+
+function rpaPackageIssueKind(raw: any): WecomRpaPackageIssueKind {
+  if (boolish(raw?.download)) return 'download';
+  if (boolish(raw?.raw) || normalizeRpaPackageFormat(raw?.format) === 'jsonl') return 'raw';
+  return 'preview';
+}
+
+function reconcileRpaPackageIssueFromRun(actor: User, report: WecomBridgeRunReport, now: string): void {
+  const handoff = report.packageHandoff;
+  if (!handoff) return;
+  const issue = findRpaPackageIssueForHandoff(handoff) || createReportedOnlyRpaPackageIssue(actor, report, now);
+  const handled = report.handledReplies + report.handledMassTasks + report.handledMomentTasks;
+  const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
+  issue.runCount += 1;
+  issue.handled += handled;
+  issue.failed += failed;
+  issue.status = 'reported';
+  issue.lastRunReportId = report.id;
+  issue.lastRunAt = bridgeRunReportTimestampIso(report) || report.updatedAt || report.createdAt;
+  issue.lastRunStatus = report.status;
+  issue.lastRunWorkerId = report.workerId;
+  issue.updatedAt = now;
+}
+
+function findRpaPackageIssueForHandoff(handoff: WecomRpaPackageHandoff): WecomRpaPackageIssue | undefined {
+  if (handoff.packageDigest) {
+    const byPackageDigest = data.rpaPackageIssues.find((issue) => issue.packageDigest === handoff.packageDigest);
+    if (byPackageDigest) return byPackageDigest;
+  }
+  if (handoff.packageId && handoff.taskDigest) {
+    return data.rpaPackageIssues.find((issue) => issue.packageId === handoff.packageId && issue.taskDigest === handoff.taskDigest);
+  }
+  return undefined;
+}
+
+function createReportedOnlyRpaPackageIssue(actor: User, report: WecomBridgeRunReport, now: string): WecomRpaPackageIssue {
+  const handoff = report.packageHandoff!;
+  const total = handoff.packageTaskCount ?? report.items.length;
+  const issue = normalizeRpaPackageIssue(
+    {
+      id: `rpa-issue-report-${report.id}`,
+      packageId: handoff.packageId || `reported-${report.id}`,
+      packageDigest: handoff.packageDigest,
+      taskDigest: handoff.taskDigest,
+      issuedAt: bridgeRunReportTimestampIso(report) || report.createdAt || now,
+      expiresAt: handoff.packageExpiresAt,
+      ttlMinutes: handoff.packageTtlMinutes,
+      actor: actor.username,
+      source: report.source,
+      workerId: report.workerId,
+      target: handoff.packageTarget,
+      format: 'unknown',
+      requestKind: 'reported-only',
+      includeSource: false,
+      status: 'reported',
+      counts: {
+        total,
+        replies: report.items.filter((item) => item.target === 'reply').length,
+        mass: report.items.filter((item) => item.target === 'mass').length,
+        moments: report.items.filter((item) => item.target === 'moment').length,
+      },
+      runCount: 0,
+      handled: 0,
+      failed: 0,
+      reportedOnly: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+    false,
+    now,
+  );
+  data.rpaPackageIssues.push(issue);
+  if (data.rpaPackageIssues.length > MAX_RPA_PACKAGE_ISSUES) {
+    data.rpaPackageIssues = data.rpaPackageIssues.slice(-MAX_RPA_PACKAGE_ISSUES);
+  }
+  return issue;
+}
+
 function digestJson(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -6323,6 +6566,14 @@ function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunRepor
       ...item,
       verification: item.verification ? { ...item.verification } : undefined,
     })),
+  };
+}
+
+function cloneRpaPackageIssue(issue: WecomRpaPackageIssue): WecomRpaPackageIssue {
+  return {
+    ...issue,
+    status: issue.status !== 'reported' && issue.expiresAt && Date.parse(issue.expiresAt) <= Date.now() ? 'expired' : issue.status,
+    counts: { ...issue.counts },
   };
 }
 

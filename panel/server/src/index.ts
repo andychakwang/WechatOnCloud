@@ -88,6 +88,7 @@ import {
   updateAutomationConfig,
   exportAutomationBundle,
   exportWecomRpaPackage,
+  recordWecomRpaPackageIssue,
   serializeWecomRpaPackage,
   importAutomationBundle,
   ingestWecomBridgeEvents,
@@ -106,6 +107,7 @@ import {
   listWecomBridgeWorkers,
   patchWecomBridgeWorker,
   listWecomBridgeRunReports,
+  listWecomRpaPackageIssues,
   summarizeWecomBridgeRunReports,
   getWecomBridgeRunnerPolicy,
   updateWecomBridgeRunnerPolicy,
@@ -492,6 +494,7 @@ app.get('/api/admin/automation/rpa-package', async (req, reply) => {
     });
     const download = query?.download === '1' || query?.download === 'true';
     const raw = download || pkg.format === 'jsonl' || query?.raw === '1' || query?.raw === 'true';
+    recordWecomRpaPackageIssue(admin, pkg, { ...query, download, raw });
     if (raw) {
       const filename = `${pkg.packageId}.${pkg.format === 'json' ? 'json' : 'jsonl'}`;
       reply.header('content-type', pkg.format === 'json' ? 'application/json; charset=utf-8' : 'application/x-ndjson; charset=utf-8');
@@ -502,6 +505,12 @@ app.get('/api/admin/automation/rpa-package', async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '导出 RPA 运行包失败' });
   }
+});
+
+app.get('/api/admin/automation/rpa-package/issues', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return { packages: listWecomRpaPackageIssues(Number(query?.limit || 50)) };
 });
 
 app.post('/api/admin/automation/bundle/import', async (req, reply) => {

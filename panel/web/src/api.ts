@@ -440,6 +440,44 @@ export interface WecomRpaPackage {
   tasks: WecomRpaTask[];
 }
 
+export type WecomRpaPackageIssueStatus = 'issued' | 'reported' | 'expired';
+export type WecomRpaPackageIssueKind = 'preview' | 'download' | 'raw' | 'reported-only';
+
+export interface WecomRpaPackageIssue {
+  id: string;
+  packageId: string;
+  packageDigest?: string;
+  taskDigest?: string;
+  issuedAt: string;
+  expiresAt?: string;
+  ttlMinutes?: number;
+  actor: string;
+  source: string;
+  workerId: string;
+  workerSource?: string;
+  target: WecomRpaPackageTarget;
+  format: WecomRpaPackageFormat | 'unknown';
+  requestKind: WecomRpaPackageIssueKind;
+  includeSource: boolean;
+  status: WecomRpaPackageIssueStatus;
+  counts: {
+    total: number;
+    replies: number;
+    mass: number;
+    moments: number;
+  };
+  runCount: number;
+  handled: number;
+  failed: number;
+  lastRunReportId?: string;
+  lastRunAt?: string;
+  lastRunStatus?: WecomBridgeRunStatus;
+  lastRunWorkerId?: string;
+  reportedOnly?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AutomationBridgeRecoveryChange {
   target: 'reply' | 'mass' | 'moment';
   id: string;
@@ -1033,6 +1071,8 @@ export const api = {
     req<{ reports: WecomBridgeRunReport[] }>(
       `/api/admin/automation/bridge-runs?limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,
     ),
+  listWecomRpaPackageIssues: (limit = 50) =>
+    req<{ packages: WecomRpaPackageIssue[] }>(`/api/admin/automation/rpa-package/issues?limit=${encodeURIComponent(limit)}`),
   getWecomBridgeRunReportsSummary: (hours = 24, limit = 300, workerId = '') =>
     req<{ summary: WecomBridgeRunReportsSummary }>(
       `/api/admin/automation/bridge-runs/summary?hours=${encodeURIComponent(hours)}&limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,

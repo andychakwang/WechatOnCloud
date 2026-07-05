@@ -18,6 +18,8 @@ body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
 material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
 rpa_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-package.XXXXXX.json")"
+rpa_admin_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-admin-package.XXXXXX.json")"
+rpa_run_result_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-run.XXXXXX.json")"
 expired_rpa_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-expired-rpa-package.XXXXXX.json")"
 rpa_cloud_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-cloud-package.XXXXXX.jsonl")"
 verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
@@ -28,7 +30,7 @@ reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$expired_rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$rpa_admin_package_file" "$rpa_run_result_file" "$expired_rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
   rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
@@ -2079,6 +2081,7 @@ if any(t.get("taskDigest") != package.get("taskDigest") for t in tasks):
 PY
 
   request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=json"
+  cp "$body_file" "$rpa_admin_package_file"
   json_assert_eq package.schema woc.wecom.rpa.package.v1
   python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
 import json
@@ -2106,6 +2109,29 @@ if not any(t.get("target") == "mass" and t.get("jobId") == mass_job_id for t in 
     raise SystemExit("admin mass RPA task missing")
 if not any(t.get("target") == "moment" and t.get("draftId") == moment_draft_id for t in tasks):
     raise SystemExit("admin moment RPA task missing")
+PY
+  request_json GET "/api/admin/automation/rpa-package/issues?limit=100"
+  python3 - "$body_file" "$rpa_admin_package_file" <<'PY'
+import json
+import sys
+
+issues_file, package_file = sys.argv[1:3]
+with open(issues_file, "r", encoding="utf-8") as fh:
+    issues = json.load(fh).get("packages", [])
+with open(package_file, "r", encoding="utf-8") as fh:
+    package = json.load(fh)["package"]
+matches = [issue for issue in issues if issue.get("packageDigest") == package.get("packageDigest")]
+if not matches:
+    raise SystemExit("admin RPA package issue ledger missing issued package")
+issue = matches[0]
+if issue.get("status") != "issued":
+    raise SystemExit("admin RPA package issue should start as issued")
+if issue.get("requestKind") != "preview":
+    raise SystemExit("admin RPA package issue should record preview kind")
+if issue.get("taskDigest") != package.get("taskDigest"):
+    raise SystemExit("admin RPA package issue should preserve taskDigest")
+if issue.get("counts", {}).get("total") != package.get("counts", {}).get("total"):
+    raise SystemExit("admin RPA package issue should preserve package counts")
 PY
 
   request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=json&workerId=smoke-worker&capabilities=reply"
@@ -2202,6 +2228,7 @@ PY
     --handler-mass "$WECOM_MASS_HANDLER" \
     --handler-moment "$WECOM_MOMENT_HANDLER" \
     --report-run > "$body_file"
+  cp "$body_file" "$rpa_run_result_file"
   json_assert_path runReport.report.packageHandoff.generatedFrom
   python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
 import json
@@ -2226,6 +2253,36 @@ if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id and
     raise SystemExit("mass RPA package task was not handled")
 if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
     raise SystemExit("moment RPA package task was not handled")
+PY
+  request_json GET "/api/admin/automation/rpa-package/issues?limit=100"
+  python3 - "$body_file" "$rpa_run_result_file" <<'PY'
+import json
+import sys
+
+issues_file, run_file = sys.argv[1:3]
+with open(issues_file, "r", encoding="utf-8") as fh:
+    issues = json.load(fh).get("packages", [])
+with open(run_file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+report = payload.get("runReport", {}).get("report", {})
+matches = [issue for issue in issues if issue.get("packageDigest") == payload.get("packageDigest")]
+if not matches:
+    raise SystemExit("RPA package issue ledger missing reported package")
+issue = matches[0]
+if issue.get("status") != "reported":
+    raise SystemExit("RPA package issue should be marked reported after run-report")
+if issue.get("requestKind") != "reported-only":
+    raise SystemExit("client-exported RPA package should be reconciled as reported-only")
+if issue.get("taskDigest") != payload.get("taskDigest"):
+    raise SystemExit("reported RPA package issue should preserve taskDigest")
+if issue.get("runCount", 0) < 1:
+    raise SystemExit("reported RPA package issue should increment runCount")
+if issue.get("handled", 0) < len(payload.get("handled", [])):
+    raise SystemExit("reported RPA package issue should preserve handled count")
+if issue.get("lastRunReportId") != report.get("id"):
+    raise SystemExit("reported RPA package issue should link last run report")
+if issue.get("lastRunWorkerId") != report.get("workerId"):
+    raise SystemExit("reported RPA package issue should record last worker")
 PY
 
   request_json GET "/api/admin/automation/bridge-runs/summary?hours=24&limit=300"
