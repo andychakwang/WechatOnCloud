@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r63-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r64-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,20 +9,20 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r63-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r63-2026-07-06`
-- 本版新增：`/api/admin/automation/rpa-package` 返回包级 `handoff` 元数据，把云端 Runner 策略、建议执行模式、预检等级、阻断状态和交接提示直接写入 RPA 包；Web 预览和 Mac `run-rpa-package --report-run` 都可复用这份交接信息。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r64-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r64-2026-07-06`
+- 本版新增：Bridge 运行报告可留存 RPA 包级 `packageHandoff`，Web 最近运行列表可展示 RPA 包目标、建议执行模式和预检等级，便于 SaaS 运维回看某次 Mac/RPA 执行为什么 dry-run、prepare 或被预检阻断。
 
 ## 2026-07-06 运行验收
 
 - `36080` 原版面板保持不变，仍由 `woc-panel` 提供服务，镜像仍为 `ghcr.io/gloridust/woc-panel:1.1.7`。
 - `36081` 自动化测试面板已通过飞牛 Docker 项目 `woc-automation-test` 重建。
-- `36081` 当前运行容器 `woc-panel-automation-test` 已验证使用镜像 `ghcr.io/andychakwang/woc-panel:andy-automation-usable-r63-2026-07-06`。
+- `36081` 当前运行容器 `woc-panel-automation-test` 已验证使用镜像 `ghcr.io/andychakwang/woc-panel:andy-automation-usable-r64-2026-07-06`。
 - 测试面板 `/api/version` 已验证：
 
   ```json
   {
-    "current": "andy-automation-usable-r63-2026-07-06",
+    "current": "andy-automation-usable-r64-2026-07-06",
     "source": "ghcr"
   }
   ```
@@ -39,7 +39,7 @@
   GET /api/admin/automation/rpa-package?target=all&limit=5&format=json&includeSource=0 -> 200
   ```
 
-- RPA 包级 handoff 已验证：
+- RPA 包级 handoff 仍保持可用：
 
   ```text
   GET /api/admin/automation/rpa-package?target=all&limit=5&format=json&includeSource=0 -> 200
@@ -54,8 +54,18 @@
   GET /api/admin/automation/action-queue?limit=5 -> 200，返回 handoff.rpa
   ```
 
-- GitHub Actions release run `28747580228` 已成功构建并推送 panel / wechat 双镜像。
-- NAS 测试 compose 已在更新前备份为 `/vol1/1000/woc-automation-test/docker-compose.yml.bak-r63-20260705164349`。
+- Bridge 状态接口已验证：
+
+  ```text
+  GET /api/admin/automation/bridge -> 200
+  bridge.runReportEndpoint = /api/automation/bridge/wecom/run-report
+  bridge.enabled = false
+  ```
+
+  当前 NAS 测试面板尚未配置 `AUTOMATION_BRIDGE_TOKEN`，所以公网 Bridge 上报入口按设计关闭；带 token 的 `packageHandoff` run-report 保存/读取已在本地临时面板验证通过。
+
+- GitHub Actions release run `28747991729` 已成功构建并推送 panel / wechat 双镜像。
+- NAS 测试 compose 已在更新前备份为 `/vol1/1000/woc-automation-test/docker-compose.yml.bak-r64-20260705170248`。
 
 注意：只修改 NAS 上的 `docker-compose.yml` 不会替换正在运行的容器。飞牛 Docker 项目需要执行一次“构建/重建”（内部对应 `composeBuild`），或用等价的 `docker compose pull && docker compose up -d`，新镜像才会真正生效。仅点“重启”可能仍然使用旧镜像层。
 
