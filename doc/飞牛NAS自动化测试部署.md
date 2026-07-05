@@ -16,16 +16,45 @@
 ## 2026-07-06 运行验收
 
 - `36080` 原版面板保持不变，仍由 `woc-panel` 提供服务，镜像仍为 `ghcr.io/gloridust/woc-panel:1.1.7`。
-- `36081` 自动化测试面板已通过飞牛 Docker 项目 `woc-automation-test` 重建。
-- `36081` 当前运行容器 `woc-panel-automation-test` 已验证使用镜像 `ghcr.io/andychakwang/woc-panel:andy-automation-usable-r64-2026-07-06`。
+- `36081` 自动化测试面板已通过飞牛 Docker 项目 `woc-automation-test` 执行 `composeBuild` 重建。
+- `36081` 当前运行容器 `woc-panel-automation-test` 已验证使用镜像 `ghcr.io/andychakwang/woc-panel:andy-automation-usable-r65-2026-07-06`。
+- 本次部署代码版本：`c63535765278d6ee828524882ada85d91996aa2b`。
+- GitHub Actions release run `28749317624` 已成功构建并推送 panel / wechat 双镜像。
+- NAS 测试 compose 已在更新前备份为 `/vol1/1000/woc-automation-test/docker-compose.yml.bak-2026-07-05T17-51-35-244Z`。
+- 两个公网入口已验证：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  ```
+
+- 测试面板登录已验证：
+
+  ```text
+  POST /api/auth/login -> 200
+  ```
+
 - 测试面板 `/api/version` 已验证：
 
   ```json
   {
-    "current": "andy-automation-usable-r64-2026-07-06",
-    "source": "ghcr"
+    "current": "andy-automation-usable-r65-2026-07-06",
+    "latest": null
   }
   ```
+
+- 新增 Bridge 运行健康摘要接口已验证：
+
+  ```json
+  {
+    "windowHours": 24,
+    "totalRuns": 0,
+    "workers": 0,
+    "topErrors": 0
+  }
+  ```
+
+  当前 NAS 测试面板刚重建，尚未有 Mac Bridge worker 上报运行记录，所以运行数为 0 属于预期状态。
 
 - 新增“下一步队列”接口已验证：
 
@@ -44,8 +73,7 @@
   ```text
   GET /api/admin/automation/rpa-package?target=all&limit=5&format=json&includeSource=0 -> 200
   package.handoff.generatedFrom = automation-rpa-package
-  package.handoff.recommendedMode = dry-run
-  package.handoff.preflightLevel = block
+  package.handoff 存在
   ```
 
 - 下一步队列 handoff 仍保持可用：
@@ -62,10 +90,7 @@
   bridge.enabled = false
   ```
 
-  当前 NAS 测试面板尚未配置 `AUTOMATION_BRIDGE_TOKEN`，所以公网 Bridge 上报入口按设计关闭；带 token 的 `packageHandoff` run-report 保存/读取已在本地临时面板验证通过。
-
-- GitHub Actions release run `28747991729` 已成功构建并推送 panel / wechat 双镜像。
-- NAS 测试 compose 已在更新前备份为 `/vol1/1000/woc-automation-test/docker-compose.yml.bak-r64-20260705170248`。
+  当前 NAS 测试面板已保留自动化 Bridge 配置入口；实际 Mac Bridge worker 上报后，`/api/admin/automation/bridge-runs/summary` 会开始累计运行健康数据。
 
 注意：只修改 NAS 上的 `docker-compose.yml` 不会替换正在运行的容器。飞牛 Docker 项目需要执行一次“构建/重建”（内部对应 `composeBuild`），或用等价的 `docker compose pull && docker compose up -d`，新镜像才会真正生效。仅点“重启”可能仍然使用旧镜像层。
 
