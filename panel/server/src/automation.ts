@@ -483,6 +483,37 @@ export interface AutomationPreflightReport {
   checks: AutomationPreflightCheck[];
 }
 
+export type AutomationActionQueueItemKind =
+  | 'preflight-check'
+  | 'bridge-reply'
+  | 'mass-task'
+  | 'moment-task'
+  | 'runner-report';
+export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
+export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
+
+export interface AutomationActionQueueItem {
+  id: string;
+  kind: AutomationActionQueueItemKind;
+  priority: AutomationActionQueuePriority;
+  target: AutomationActionQueueTarget;
+  title: string;
+  detail: string;
+  action: string;
+  refId?: string;
+  secondaryRefId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  staleSeconds?: number;
+  tags: string[];
+}
+
+export interface AutomationActionQueue {
+  generatedAt: string;
+  summary: Record<AutomationActionQueuePriority, number> & { total: number };
+  items: AutomationActionQueueItem[];
+}
+
 export type RiskLevel = 'normal' | 'review' | 'block';
 
 export interface RiskAssessment {
@@ -1340,6 +1371,177 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
     summary,
     checks,
   };
+}
+
+export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
+  const n = clampInt(limit, 1, 100, 20);
+  const generatedAt = new Date().toISOString();
+  const nowMs = Date.parse(generatedAt);
+  const preflight = getAutomationPreflightReport();
+  const overview = getAutomationOverview();
+  const policy = getWecomBridgeRunnerPolicy();
+  const items: AutomationActionQueueItem[] = [];
+  const sendableReplyIds = new Set(listApprovedWecomBridgeReplies(200, { requireSendable: true }).map((event) => event.id));
+
+  const staleSeconds = (value?: string): number | undefined => {
+    if (!value) return undefined;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) && Number.isFinite(nowMs) ? Math.max(0, Math.round((nowMs - ms) / 1000)) : undefined;
+  };
+  const clip = (value: string, max = 180): string => {
+    const clean = value.replace(/\s+/g, ' ').trim();
+    return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+  };
+  const add = (item: AutomationActionQueueItem) => {
+    items.push({
+      ...item,
+      tags: uniqueStrings(item.tags.filter(Boolean)).slice(0, 8),
+    });
+  };
+
+  for (const check of preflight.checks) {
+    if (check.level === 'ok') continue;
+    const isBlock = check.level === 'block';
+    const isOperational =
+      check.id.includes('worker') ||
+      check.id.includes('failures') ||
+      check.id.includes('runner') ||
+      check.id.includes('content_risk') ||
+      check.id.includes('_off');
+    if (!isBlock && !isOperational) continue;
+    add({
+      id: `preflight:${check.id}`,
+      kind: 'preflight-check',
+      priority: isBlock ? 'block' : 'normal',
+      target: 'ops',
+      title: check.title,
+      detail: check.message,
+      action: check.action || '先处理该预检项，再运行 Mac Runner。',
+      refId: check.id,
+      updatedAt: preflight.generatedAt,
+      staleSeconds: staleSeconds(preflight.generatedAt),
+      tags: ['预检', check.count ? `${check.count}` : '', ...(check.refs || []).slice(0, 3)],
+    });
+  }
+
+  const replies = listApprovedWecomBridgeReplies(Math.min(20, n * 2));
+  for (const event of replies) {
+    const sendable = sendableReplyIds.has(event.id);
+    const replyText = event.replyDraft || bridgeReplyTextFromSteps(bridgeReplySteps(event));
+    add({
+      id: `reply:${event.id}`,
+      kind: 'bridge-reply',
+      priority: sendable ? 'high' : 'normal',
+      target: 'reply',
+      title: `AI 回复 · ${bridgeReplyConversationName(event) || event.id}`,
+      detail: clip(replyText || event.inboundText || '已批准回复待处理'),
+      action:
+        policy.mode === 'send' && sendable
+          ? 'Mac Runner 可按受控发送领取；发送前仍会经过目标和交付校验。'
+          : 'Mac Runner 可先准备输入框，或在面板继续人工复核。',
+      refId: event.id,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt,
+      staleSeconds: staleSeconds(event.updatedAt || event.createdAt),
+      tags: ['AI 回复', event.source, sendable ? '可发送' : '待准备'],
+    });
+  }
+
+  const massTasks: WecomBridgeMassSendTask[] = [];
+  if (data.settings.enabled && data.settings.massSendEnabled) {
+    for (const job of data.massSendJobs) {
+      if (massTasks.length >= Math.min(20, n * 2)) break;
+      if (!isMassJobBridgeRunnable(job)) continue;
+      const item = job.items.find((candidate) => candidate.status === 'pending');
+      if (!item || (item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, generatedAt))) continue;
+      try {
+        enforceRateLimits(item.recipientName);
+        enforceMassSendDelay(job);
+        const risk = assessRisk([job.message]);
+        if (risk.level !== 'normal') continue;
+      } catch {
+        continue;
+      }
+      massTasks.push(massTaskFrom(job, item));
+    }
+  }
+  for (const task of massTasks) {
+    const job = data.massSendJobs.find((candidate) => candidate.id === task.jobId);
+    const item = job?.items.find((candidate) => candidate.id === task.itemId);
+    add({
+      id: `mass:${task.id}`,
+      kind: 'mass-task',
+      priority: policy.mode === 'send' ? 'high' : 'normal',
+      target: 'mass',
+      title: `群发 · ${task.recipientName}`,
+      detail: clip(task.message || task.jobTitle),
+      action: policy.mode === 'send' ? '按队列顺序受控发送下一位目标。' : '先打开目标会话并准备文案，确认后再发送。',
+      refId: task.jobId,
+      secondaryRefId: task.itemId,
+      createdAt: job?.createdAt,
+      updatedAt: job?.updatedAt,
+      staleSeconds: staleSeconds(item?.bridgeFailedAt || job?.updatedAt || job?.createdAt),
+      tags: ['群发', task.jobTitle, policy.mode === 'send' ? '发送模式' : '准备模式'],
+    });
+  }
+
+  for (const task of listApprovedWecomBridgeMomentTasks(Math.min(20, n * 2))) {
+    const draft = data.momentDrafts.find((candidate) => candidate.id === task.draftId);
+    add({
+      id: `moment:${task.id}`,
+      kind: 'moment-task',
+      priority: 'normal',
+      target: 'moment',
+      title: `朋友圈 · ${task.title}`,
+      detail: clip(task.text || task.imageNotes || '朋友圈草稿待准备'),
+      action: '复制文案和素材说明到 Mac，人工确认后发布。',
+      refId: task.draftId,
+      createdAt: draft?.createdAt,
+      updatedAt: draft?.updatedAt,
+      staleSeconds: staleSeconds(draft?.updatedAt || draft?.createdAt),
+      tags: ['朋友圈', task.materials?.length ? `素材 ${task.materials.length}` : '半自动'],
+    });
+  }
+
+  const lastFailedRun = data.bridgeRunReports
+    .slice()
+    .reverse()
+    .find((report) => report.status === 'failed');
+  if (lastFailedRun && overview.bridge.runs.recentFailures > 0) {
+    add({
+      id: `runner:${lastFailedRun.id}`,
+      kind: 'runner-report',
+      priority: 'normal',
+      target: 'ops',
+      title: `Runner 失败 · ${lastFailedRun.workerId}`,
+      detail: clip(lastFailedRun.summary || lastFailedRun.error || `${lastFailedRun.target}/${lastFailedRun.mode}`),
+      action: '查看最近运行报告，修复窗口、权限、素材路径或目标校验问题。',
+      refId: lastFailedRun.id,
+      updatedAt: lastFailedRun.finishedAt || lastFailedRun.updatedAt,
+      staleSeconds: staleSeconds(lastFailedRun.finishedAt || lastFailedRun.updatedAt),
+      tags: ['运行报告', lastFailedRun.target, lastFailedRun.mode],
+    });
+  }
+
+  const priorityRank: Record<AutomationActionQueuePriority, number> = { block: 0, high: 1, normal: 2, low: 3 };
+  const selected = items
+    .sort(
+      (a, b) =>
+        priorityRank[a.priority] - priorityRank[b.priority] ||
+        (b.staleSeconds ?? -1) - (a.staleSeconds ?? -1) ||
+        a.title.localeCompare(b.title),
+    )
+    .slice(0, n);
+  const summary = selected.reduce(
+    (acc, item) => {
+      acc[item.priority] += 1;
+      acc.total += 1;
+      return acc;
+    },
+    { block: 0, high: 0, normal: 0, low: 0, total: 0 } as AutomationActionQueue['summary'],
+  );
+
+  return { generatedAt, summary, items: selected };
 }
 
 export function updateAutomationConfig(raw: any): AutomationConfig {

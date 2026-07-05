@@ -20,6 +20,7 @@ import {
   type AutomationMaterialKind,
   type AutomationOverview,
   type AutomationPreflightReport,
+  type AutomationActionQueue,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type MassSendJob,
@@ -279,9 +280,30 @@ const PREFLIGHT_LEVEL_LABEL: Record<string, string> = {
   block: '阻断',
 };
 
+const ACTION_QUEUE_PRIORITY_LABEL: Record<string, string> = {
+  block: '阻断',
+  high: '高优先',
+  normal: '普通',
+  low: '低',
+};
+
+const ACTION_QUEUE_TARGET_LABEL: Record<string, string> = {
+  ops: '运维',
+  reply: 'AI 回复',
+  mass: '群发',
+  moment: '朋友圈',
+};
+
 function preflightLevelClass(level: string): string {
   if (level === 'block') return 'tag-off';
   if (level === 'warn') return 'tag-warn';
+  return 'tag-on';
+}
+
+function actionQueuePriorityClass(priority: string): string {
+  if (priority === 'block') return 'tag-off';
+  if (priority === 'high') return 'tag-warn';
+  if (priority === 'low') return '';
   return 'tag-on';
 }
 
@@ -397,6 +419,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
   const [overview, setOverview] = useState<AutomationOverview | null>(null);
   const [preflight, setPreflight] = useState<AutomationPreflightReport | null>(null);
+  const [actionQueue, setActionQueue] = useState<AutomationActionQueue | null>(null);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
@@ -476,10 +499,24 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { overview }, { report }, { contacts }, { assets }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }, { policy }] = await Promise.all([
+      const [
+        { config },
+        { overview },
+        { report },
+        { queue },
+        { contacts },
+        { assets },
+        { jobs },
+        { drafts },
+        { events },
+        { events: bridgeEvents },
+        { reports },
+        { policy },
+      ] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
         api.getAutomationPreflight(),
+        api.getAutomationActionQueue(12),
         api.listAutomationAudience(200),
         api.listAutomationMaterials(200),
         api.listMassSendJobs(),
@@ -493,6 +530,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setConfig(config);
       setOverview(overview);
       setPreflight(report);
+      setActionQueue(queue);
       setAudienceContacts(contacts);
       setMaterialAssets(assets);
       setJobs(jobs);
@@ -1493,6 +1531,51 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {actionQueue && (
+          <div className="auto-action-queue">
+            <div className="auto-action-queue-head">
+              <div>
+                <b>下一步队列</b>
+                <div className="muted small">生成于 {fmtDate(Date.parse(actionQueue.generatedAt))}</div>
+              </div>
+              <div className="auto-preflight-summary">
+                <span className="tag tag-off">阻断 {actionQueue.summary.block}</span>
+                <span className="tag tag-warn">高优先 {actionQueue.summary.high}</span>
+                <span className="tag tag-on">普通 {actionQueue.summary.normal}</span>
+              </div>
+            </div>
+            <div className="auto-action-queue-list">
+              {actionQueue.items.slice(0, 8).map((item) => (
+                <div key={item.id} className="auto-action-queue-item">
+                  <div className="auto-action-main">
+                    <div className="auto-action-tags">
+                      <span className={'tag ' + actionQueuePriorityClass(item.priority)}>
+                        {ACTION_QUEUE_PRIORITY_LABEL[item.priority] || item.priority}
+                      </span>
+                      <span className="tag">{ACTION_QUEUE_TARGET_LABEL[item.target] || item.target}</span>
+                    </div>
+                    <div>
+                      <b>{item.title}</b>
+                      <div className="muted small">{item.detail}</div>
+                      <div className="auto-action-next">{item.action}</div>
+                      {item.tags.length > 0 && (
+                        <div className="chip-row auto-action-tag-row">
+                          {item.tags.slice(0, 5).map((tag) => (
+                            <span key={tag} className="chip chip-static">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="muted small auto-action-age">{item.staleSeconds !== undefined ? fmtStaleSeconds(item.staleSeconds) : ''}</div>
+                </div>
+              ))}
+              {actionQueue.items.length === 0 && <div className="muted small">暂无待处理动作</div>}
+            </div>
           </div>
         )}
         {preflight && (

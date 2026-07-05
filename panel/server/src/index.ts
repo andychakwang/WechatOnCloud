@@ -84,6 +84,7 @@ import {
   getAutomationConfig,
   getAutomationOverview,
   getAutomationPreflightReport,
+  getAutomationActionQueue,
   updateAutomationConfig,
   exportAutomationBundle,
   exportWecomRpaPackage,
@@ -434,6 +435,12 @@ app.get('/api/admin/automation/overview', async (req, reply) => {
 app.get('/api/admin/automation/preflight', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { report: getAutomationPreflightReport() };
+});
+
+app.get('/api/admin/automation/action-queue', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return { queue: getAutomationActionQueue(Number(query?.limit || 20)) };
 });
 
 app.put('/api/admin/automation/config', async (req, reply) => {
