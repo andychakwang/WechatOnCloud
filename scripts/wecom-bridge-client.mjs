@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r59-bridge-reply-send-guards';
+const CLIENT_VERSION = 'automation-lab-r60-action-queue';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const BOOLEAN_OPTIONS = new Set([
