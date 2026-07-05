@@ -544,6 +544,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [recoveryPreview, setRecoveryPreview] = useState<AutomationBridgeRecoveryResult | null>(null);
   const [rpaPackageTarget, setRpaPackageTarget] = useState<WecomRpaPackageTarget>('all');
   const [rpaPackageLimit, setRpaPackageLimit] = useState('50');
+  const [rpaPackageTtlMinutes, setRpaPackageTtlMinutes] = useState('720');
   const [rpaPackagePreview, setRpaPackagePreview] = useState<WecomRpaPackage | null>(null);
   const [rpaPackageIncludeSource, setRpaPackageIncludeSource] = useState(false);
   const [rpaPackageWorkerRef, setRpaPackageWorkerRef] = useState('');
@@ -760,9 +761,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!Number.isFinite(parsed)) return 50;
     return Math.max(1, Math.min(200, parsed));
   };
+  const wecomRpaPackageTtlMinutes = () => {
+    const parsed = Number.parseInt(rpaPackageTtlMinutes, 10);
+    if (!Number.isFinite(parsed)) return 720;
+    return Math.max(5, Math.min(7 * 24 * 60, parsed));
+  };
   const wecomRpaPackageOptions = (format: WecomRpaPackageFormat, targetOverride?: WecomRpaPackageTarget, limitOverride?: number) => ({
     target: targetOverride || rpaPackageTarget,
     limit: limitOverride ?? wecomRpaPackageLimit(),
+    ttlMinutes: wecomRpaPackageTtlMinutes(),
     format,
     includeSource: rpaPackageIncludeSource,
     mode: runnerPolicy?.mode,
@@ -775,6 +782,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     const params = new URLSearchParams({
       target: rpaPackageTarget,
       limit: String(wecomRpaPackageLimit()),
+      ttlMinutes: String(wecomRpaPackageTtlMinutes()),
       format,
       includeSource: rpaPackageIncludeSource ? '1' : '0',
     });
@@ -2165,6 +2173,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       />
                     </label>
                     <label>
+                      <span className="field-label">有效期分钟</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min={5}
+                        max={10080}
+                        value={rpaPackageTtlMinutes}
+                        onChange={(e) => setRpaPackageTtlMinutes(e.target.value.replace(/[^0-9]/g, ''))}
+                      />
+                    </label>
+                    <label>
                       <span className="field-label">Worker</span>
                       <select className="input" value={rpaPackageWorkerRef} onChange={(e) => setRpaPackageWorkerRef(e.target.value)}>
                         <option value="">不限定 worker</option>
@@ -2193,6 +2212,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <span className="chip chip-static">schema {rpaPackagePreview.schema}</span>
                         <span className="chip chip-static">target {rpaPackagePreview.target}</span>
                         <span className="chip chip-static">limit {rpaPackagePreview.limit}</span>
+                        <span className={'chip chip-static' + (isPastIso(rpaPackagePreview.expiresAt) ? ' chip-bad' : '')}>
+                          有效至 {fmtDate(Date.parse(rpaPackagePreview.expiresAt))}
+                        </span>
                         <span className="chip chip-static">worker {rpaPackagePreview.workerId}</span>
                         {rpaPackagePreview.handoff && (
                           <>

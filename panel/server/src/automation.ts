@@ -227,6 +227,8 @@ export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
 export interface WecomRpaPackageHandoff {
   generatedFrom: 'automation-rpa-package';
   packageTarget: WecomRpaPackageTarget;
+  packageTtlMinutes?: number;
+  packageExpiresAt?: string;
   recommendedMode: WecomBridgeRunnerMode;
   runnerEngine: WecomBridgeRunnerEngine;
   runnerTarget: WecomBridgeRunnerTarget;
@@ -779,6 +781,7 @@ export interface WecomRpaTask {
   schema: 'woc.wecom.rpa.task.v1';
   packageId: string;
   exportedAt: string;
+  expiresAt?: string;
   source: string;
   workerId: string;
   target: WecomRpaTaskTarget;
@@ -811,6 +814,8 @@ export interface WecomRpaPackage {
   schema: 'woc.wecom.rpa.package.v1';
   packageId: string;
   exportedAt: string;
+  expiresAt: string;
+  ttlMinutes: number;
   source: string;
   workerId: string;
   target: WecomRpaPackageTarget;
@@ -830,6 +835,10 @@ export interface WecomRpaPackageExportOptions {
   target?: unknown;
   queue?: unknown;
   limit?: unknown;
+  ttlMinutes?: unknown;
+  ttl?: unknown;
+  expiresInMinutes?: unknown;
+  expiresAt?: unknown;
   format?: unknown;
   mode?: unknown;
   includeSource?: unknown;
@@ -930,6 +939,7 @@ const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
 const MAX_BRIDGE_RUN_REPORT_ITEMS = 100;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
+const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
 const AUTOMATION_DAILY_ACTIONS = new Set([
   'rule_sent',
   'text_sent',
@@ -3648,13 +3658,15 @@ export function listAutomationAudit(limit = 200): AutomationAuditEvent[] {
 export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): WecomRpaPackage {
   const target = normalizeRpaPackageTarget(raw.target ?? raw.queue ?? 'all');
   const limit = clampInt(raw.limit, 1, 200, 50);
+  const ttlMinutes = normalizeRpaPackageTtlMinutes(raw.ttlMinutes ?? raw.expiresInMinutes ?? raw.ttl);
   const format = normalizeRpaPackageFormat(raw.format);
   const includeSource = boolish(raw.includeSource) || boolish(raw.include_source) || boolish(raw.sourceTask);
   const exportedAt = new Date().toISOString();
+  const expiresAt = normalizeRpaPackageExpiresAt(raw.expiresAt, exportedAt, ttlMinutes);
   const source = str(raw.source, 120).trim() || 'wechat-on-cloud-panel';
   const workerId = str(raw.workerId, 120).trim() || 'web-admin-export';
   const packageId = str(raw.packageId, 160).trim() || `woc-rpa-${exportedAt.replace(/[:.]/g, '-')}`;
-  const meta = { packageId, exportedAt, source, workerId };
+  const meta = { packageId, exportedAt, expiresAt, source, workerId };
   const pulled: Array<{ target: WecomRpaTaskTarget; task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask }> = [];
 
   for (const itemTarget of rpaPackageTargets(target)) {
@@ -3681,6 +3693,7 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
   return {
     schema: 'woc.wecom.rpa.package.v1',
     ...meta,
+    ttlMinutes,
     target,
     limit,
     format,
@@ -3693,6 +3706,8 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
     handoff: {
       generatedFrom: 'automation-rpa-package',
       packageTarget: target,
+      packageTtlMinutes: ttlMinutes,
+      packageExpiresAt: expiresAt,
       recommendedMode,
       runnerEngine: policy.runnerEngine,
       runnerTarget: policy.target,
@@ -5093,6 +5108,16 @@ function normalizeRpaPackageHandoff(raw: any): WecomRpaPackageHandoff | undefine
   return {
     generatedFrom: 'automation-rpa-package',
     packageTarget,
+    packageTtlMinutes:
+      raw.packageTtlMinutes !== undefined || raw.ttlMinutes !== undefined
+        ? normalizeRpaPackageTtlMinutes(raw.packageTtlMinutes ?? raw.ttlMinutes)
+        : undefined,
+    packageExpiresAt:
+      typeof raw.packageExpiresAt === 'string' && Number.isFinite(Date.parse(raw.packageExpiresAt))
+        ? new Date(Date.parse(raw.packageExpiresAt)).toISOString()
+        : typeof raw.expiresAt === 'string' && Number.isFinite(Date.parse(raw.expiresAt))
+          ? new Date(Date.parse(raw.expiresAt)).toISOString()
+          : undefined,
     recommendedMode,
     runnerEngine,
     runnerTarget,
@@ -5984,16 +6009,30 @@ function rpaTextLength(text: string): number {
   return [...String(text || '')].length;
 }
 
+function normalizeRpaPackageTtlMinutes(value: unknown): number {
+  return clampInt(value, 5, 7 * 24 * 60, DEFAULT_RPA_PACKAGE_TTL_MINUTES);
+}
+
+function normalizeRpaPackageExpiresAt(value: unknown, exportedAt: string, ttlMinutes: number): string {
+  const raw = str(value, 80).trim();
+  if (raw) {
+    const ms = Date.parse(raw);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return new Date(Date.parse(exportedAt) + ttlMinutes * 60 * 1000).toISOString();
+}
+
 function buildWecomRpaTask(
   target: WecomRpaTaskTarget,
   task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask,
-  meta: { packageId: string; exportedAt: string; source: string; workerId: string },
+  meta: { packageId: string; exportedAt: string; expiresAt: string; source: string; workerId: string },
   includeSource: boolean,
 ): WecomRpaTask {
   const base = {
     schema: 'woc.wecom.rpa.task.v1' as const,
     packageId: meta.packageId,
     exportedAt: meta.exportedAt,
+    expiresAt: meta.expiresAt,
     source: meta.source,
     workerId: meta.workerId,
     target,

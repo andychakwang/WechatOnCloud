@@ -5,15 +5,18 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r69-rpa-worker-gates';
+const CLIENT_VERSION = 'automation-lab-r73-rpa-package-ttl';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
+const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
 const BOOLEAN_OPTIONS = new Set([
   'ack',
   'ack-delivered',
   'ack-prepared',
   'ack-published',
   'ack-sent',
+  'allow-expired-package',
+  'allow-expired-rpa-package',
   'approve',
   'approve-imported',
   'approve-keyword-rules',
@@ -59,9 +62,9 @@ Commands:
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
   push-events <file|-> [--source name] [--plan-replies] [--approve-rule-replies] [--overwrite-reply-drafts]
-  export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source] [--worker-id name]
-  run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run]
-  run-cloud-rpa-package [--target replies|mass|moments|all] [--limit 50] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--save-package file|--save-package-dir dir]
+  export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--ttl-minutes 720] [--format json|jsonl] [--output file|--output-dir dir] [--include-source] [--worker-id name]
+  run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--allow-expired-rpa-package]
+  run-cloud-rpa-package [--target replies|mass|moments|all] [--limit 50] [--ttl-minutes 720] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--save-package file|--save-package-dir dir]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
   runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
@@ -599,6 +602,21 @@ function normalizePreflightLevel(value, summary) {
   return 'ok';
 }
 
+function normalizeRpaPackageTtlMinutes(value) {
+  return intOpt(value, DEFAULT_RPA_PACKAGE_TTL_MINUTES, 5, 7 * 24 * 60);
+}
+
+function normalizeIsoDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : '';
+}
+
+function rpaPackageExpiresAt(value, exportedAt, ttlMinutes) {
+  return normalizeIsoDate(value) || new Date(Date.parse(exportedAt) + ttlMinutes * 60 * 1000).toISOString();
+}
+
 function localRunnerPolicy(options) {
   const mode = normalizeEnum(runnerMode(options, process.env.WECOM_RUNNER_MODE || 'dry-run'), ['dry-run', 'prepare', 'send'], 'dry-run');
   const target = normalizeEnum(process.env.WECOM_RUNNER_TARGET || options.target || options.queue || 'all', ['replies', 'mass', 'moments', 'all'], 'all');
@@ -676,6 +694,7 @@ function buildRpaTask(target, task, meta, includeSource) {
     schema: RPA_TASK_SCHEMA,
     packageId: meta.packageId,
     exportedAt: meta.exportedAt,
+    expiresAt: meta.expiresAt,
     source: meta.source,
     workerId: meta.workerId,
     target,
@@ -778,13 +797,16 @@ async function writeRpaPackage(options, pkg, format) {
 async function buildCloudRpaPackage(options) {
   const target = normalizeRpaExportTarget(options.target || options.queue || 'all');
   const limit = intOpt(options.limit, 50, 1, 200);
+  const ttlMinutes = normalizeRpaPackageTtlMinutes(options['ttl-minutes'] || options.ttlMinutes || options.ttl || options['expires-in-minutes']);
   const format = String(options.format || 'jsonl').trim().toLowerCase() === 'json' ? 'json' : 'jsonl';
   const includeSource = boolOpt(options, 'include-source', 'includeSource', 'source-task');
   const exportedAt = new Date().toISOString();
+  const expiresAt = rpaPackageExpiresAt(options['expires-at'] || options.expiresAt, exportedAt, ttlMinutes);
   const source = bridgeSource(options);
   const pkgMeta = {
     packageId: String(options['package-id'] || options.packageId || `woc-rpa-${exportedAt.replace(/[:.]/g, '-')}`),
     exportedAt,
+    expiresAt,
     source,
     workerId: workerId(options),
   };
@@ -796,9 +818,12 @@ async function buildCloudRpaPackage(options) {
 
   const tasks = pulled.map((item) => buildRpaTask(item.target, item.task, pkgMeta, includeSource));
   const handoff = await resolveRpaPackageHandoff(options, target, tasks);
+  handoff.packageTtlMinutes = ttlMinutes;
+  handoff.packageExpiresAt = expiresAt;
   const pkg = {
     schema: RPA_PACKAGE_SCHEMA,
     ...pkgMeta,
+    ttlMinutes,
     target,
     limit,
     format,
@@ -998,6 +1023,39 @@ async function ackRpaTask(options, target, task, mode, ok, error) {
   });
 }
 
+function allowExpiredRpaPackage(options) {
+  return boolOpt(options, 'allow-expired-rpa-package', 'allow-expired-package') || envBool('WECOM_ALLOW_EXPIRED_RPA_PACKAGE');
+}
+
+function rpaPackageExpiry(packageMeta, rawTasks) {
+  const candidates = [];
+  const packageExpiresAt = normalizeIsoDate(packageMeta?.expiresAt || packageMeta?.packageExpiresAt);
+  if (packageExpiresAt) candidates.push({ source: 'package', expiresAt: packageExpiresAt, ms: Date.parse(packageExpiresAt) });
+  for (const task of rawTasks || []) {
+    const expiresAt = normalizeIsoDate(task?.expiresAt || task?.packageExpiresAt);
+    if (expiresAt) candidates.push({ source: `task:${task?.id || '<unknown>'}`, expiresAt, ms: Date.parse(expiresAt) });
+  }
+  const valid = candidates.filter((item) => Number.isFinite(item.ms));
+  if (!valid.length) return { expiresAt: '', expired: false, source: '' };
+  valid.sort((a, b) => a.ms - b.ms);
+  const earliest = valid[0];
+  return {
+    expiresAt: earliest.expiresAt,
+    expired: earliest.ms <= Date.now(),
+    source: earliest.source,
+  };
+}
+
+function assertRpaPackageNotExpired(options, packageMeta, rawTasks) {
+  const expiry = rpaPackageExpiry(packageMeta, rawTasks);
+  if (expiry.expired && !allowExpiredRpaPackage(options)) {
+    throw new BridgeError(
+      `RPA package expired at ${expiry.expiresAt} (${expiry.source}). Re-export a fresh package or pass --allow-expired-rpa-package for diagnostics.`,
+    );
+  }
+  return expiry;
+}
+
 async function runRpaPackageTasks(options, packageMeta, rawTasks) {
   const mode = runnerMode(options, 'dry-run');
   if (!['dry-run', 'prepare', 'send'].includes(mode)) throw new BridgeError('run-rpa-package --mode must be dry-run, prepare, or send.');
@@ -1007,6 +1065,7 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
   const ack = boolOpt(options, 'ack', 'mark-success', 'mark-delivered');
   const reportFailure = boolOpt(options, 'report-failure', 'mark-failed');
   const runHandlers = !boolOpt(options, 'no-handler', 'list-only');
+  const packageExpiryState = assertRpaPackageNotExpired(options, packageMeta, rawTasks);
   const startedMs = Date.now();
   const startedAt = new Date(startedMs).toISOString();
   const tasks = rawTasks
@@ -1067,6 +1126,8 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
   const output = {
     packageId: packageMeta?.packageId || '',
     packageSchema: packageMeta?.schema || '',
+    packageExpiresAt: packageExpiryState.expiresAt || packageMeta?.expiresAt || '',
+    packageExpired: packageExpiryState.expired,
     packageCounts: packageMeta?.counts || { total: rawTasks.length },
     packageHandoff,
     mode,

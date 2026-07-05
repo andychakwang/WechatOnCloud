@@ -248,6 +248,8 @@ export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
 export interface WecomRpaPackageHandoff {
   generatedFrom: 'automation-rpa-package';
   packageTarget: WecomRpaPackageTarget;
+  packageTtlMinutes?: number;
+  packageExpiresAt?: string;
   recommendedMode: WecomBridgeRunnerMode;
   runnerEngine: WecomBridgeRunnerEngine;
   runnerTarget: WecomBridgeRunnerTarget;
@@ -382,6 +384,7 @@ export interface WecomRpaTask {
   schema: 'woc.wecom.rpa.task.v1';
   packageId: string;
   exportedAt: string;
+  expiresAt?: string;
   source: string;
   workerId: string;
   target: WecomRpaTaskTarget;
@@ -413,6 +416,8 @@ export interface WecomRpaPackage {
   schema: 'woc.wecom.rpa.package.v1';
   packageId: string;
   exportedAt: string;
+  expiresAt: string;
+  ttlMinutes: number;
   source: string;
   workerId: string;
   target: WecomRpaPackageTarget;
@@ -934,6 +939,7 @@ async function req<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
 function wecomRpaPackageParams(options: {
   target?: WecomRpaPackageTarget;
   limit?: number;
+  ttlMinutes?: number;
   format?: WecomRpaPackageFormat;
   includeSource?: boolean;
   mode?: WecomBridgeRunnerMode;
@@ -949,6 +955,7 @@ function wecomRpaPackageParams(options: {
     includeSource: options.includeSource ? '1' : '0',
   });
   if (options.mode) params.set('mode', options.mode);
+  if (options.ttlMinutes) params.set('ttlMinutes', String(options.ttlMinutes));
   if (options.workerId) params.set('workerId', options.workerId);
   if (options.workerSource) params.set('workerSource', options.workerSource);
   if (options.capabilities?.length) params.set('capabilities', options.capabilities.join(','));
