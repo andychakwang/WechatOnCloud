@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r60-2026-07-05` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r61-2026-07-05` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,20 +9,20 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r60-2026-07-05`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r60-2026-07-05`
-- 本版新增：自动化工作台新增“下一步队列”，通过只读接口聚合预检阻断、AI 回复待办、受控群发目标、朋友圈半自动草稿和最近 Runner 失败，帮助 SaaS 面板按优先级推进运营任务。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r61-2026-07-05`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r61-2026-07-05`
+- 本版新增：自动化工作台的“下一步队列”会统计可交给 Mac/RPA 的回复、群发和朋友圈待办，并可一键生成对应目标的 RPA 运行包预览。
 
 ## 2026-07-05 运行验收
 
 - `36080` 原版面板保持不变，仍由 `woc-panel` 提供服务，镜像仍为 `ghcr.io/gloridust/woc-panel:1.1.7`。
 - `36081` 自动化测试面板已通过飞牛 Docker 项目 `woc-automation-test` 重建。
-- `36081` 当前运行容器 `woc-panel-automation-test` 已验证使用镜像 `ghcr.io/andychakwang/woc-panel:andy-automation-usable-r60-2026-07-05`。
+- `36081` 当前运行容器 `woc-panel-automation-test` 已验证使用镜像 `ghcr.io/andychakwang/woc-panel:andy-automation-usable-r61-2026-07-05`。
 - 测试面板 `/api/version` 已验证：
 
   ```json
   {
-    "current": "andy-automation-usable-r60-2026-07-05",
+    "current": "andy-automation-usable-r61-2026-07-05",
     "source": "ghcr"
   }
   ```
@@ -33,8 +33,14 @@
   GET /api/admin/automation/action-queue?limit=5 -> 200
   ```
 
-- GitHub Actions release run `28745663598` 已成功构建并推送 panel / wechat 双镜像。
-- NAS 测试 compose 已在更新前备份为 `/vol1/1000/woc-automation-test/docker-compose.yml.bak-r60-20260705153826`。
+- 新增 RPA 运行包接口已验证：
+
+  ```text
+  GET /api/admin/automation/rpa-package?target=all&limit=5&format=json&includeSource=0 -> 200
+  ```
+
+- GitHub Actions release run `28746383030` 已成功构建并推送 panel / wechat 双镜像。
+- NAS 测试 compose 已在更新前备份为 `/vol1/1000/woc-automation-test/docker-compose.yml.bak-r61-20260705160112`。
 
 注意：只修改 NAS 上的 `docker-compose.yml` 不会替换正在运行的容器。飞牛 Docker 项目需要执行一次“构建/重建”（内部对应 `composeBuild`），或用等价的 `docker compose pull && docker compose up -d`，新镜像才会真正生效。仅点“重启”可能仍然使用旧镜像层。
 
