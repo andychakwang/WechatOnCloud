@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r55-runner-engine-policy';
+const CLIENT_VERSION = 'automation-lab-r56-rpa-package-capability';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 
@@ -253,6 +253,7 @@ function normalizeCapability(value) {
   if (['reply', 'replies', 'ai-reply', 'ai-replies', 'auto-reply'].includes(raw)) return 'reply';
   if (['mass', 'mass-send', 'mass-task', 'group-send', 'broadcast'].includes(raw)) return 'mass';
   if (['moment', 'moments', 'moment-task', 'moment-draft'].includes(raw)) return 'moment';
+  if (['rpa-package', 'rpa', 'package', 'run-package', 'cloud-rpa-package', 'rpa-runner'].includes(raw)) return 'rpa-package';
   if (['prepare', 'paste', 'clipboard'].includes(raw)) return 'prepare';
   if (['send', 'sender', 'controlled-send'].includes(raw)) return 'send';
   if (['target-match', 'target-verify', 'target-verification', 'conversation-match', 'window-title'].includes(raw)) return 'target-match';
@@ -273,6 +274,7 @@ function workerCapabilities(options, mode) {
     if (capability) capabilities.add(capability);
   }
   if (explicit.length) return Array.from(capabilities);
+  if (envBool('WECOM_USE_RPA_PACKAGE') || String(process.env.WECOM_RUNNER_ENGINE || '').trim().toLowerCase() === 'rpa-package') capabilities.add('rpa-package');
   if (mode === 'send' || envBool('WECOM_ALLOW_SEND', 'WECOM_ACCEPT_REMOTE_SEND')) capabilities.add('send');
   if (!['0', 'false', 'no', 'off'].includes(String(process.env.WECOM_VERIFY_TARGET || '').trim().toLowerCase())) capabilities.add('target-match');
   if (envBool('WECOM_REQUIRE_TARGET_MATCH')) capabilities.add('target-match');

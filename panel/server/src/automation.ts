@@ -151,6 +151,7 @@ export type WecomBridgeWorkerCapability =
   | 'reply'
   | 'mass'
   | 'moment'
+  | 'rpa-package'
   | 'prepare'
   | 'send'
   | 'target-match'
@@ -717,6 +718,7 @@ const BRIDGE_WORKER_CAPABILITIES: WecomBridgeWorkerCapability[] = [
   'reply',
   'mass',
   'moment',
+  'rpa-package',
   'prepare',
   'send',
   'target-match',
@@ -848,6 +850,14 @@ export function getAutomationOverview(): AutomationOverview {
   if (pendingReplies > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'reply'))) riskFlags.push('worker_lacks_reply');
   if (pendingMassTasks > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'mass'))) riskFlags.push('worker_lacks_mass');
   if (pendingMomentTasks > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'moment'))) riskFlags.push('worker_lacks_moment');
+  if (
+    pendingReplies + pendingMassTasks + pendingMomentTasks > 0 &&
+    data.runnerPolicy.runnerEngine === 'rpa-package' &&
+    onlineWorkers.length > 0 &&
+    !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'rpa-package'))
+  ) {
+    riskFlags.push('worker_lacks_rpa_package');
+  }
   if (massItems.some((item) => item.status === 'failed')) riskFlags.push('mass_failures');
   if (data.momentDrafts.some((draft) => !!draft.bridgeFailedAt)) riskFlags.push('moment_failures');
 
@@ -1200,6 +1210,14 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
       ['handler-verification', 'visual-verification'],
       '交付结果校验',
       '远程策略要求 handler 回传正向交付校验，但当前在线 Runner 没有明确声明该能力。',
+    );
+  }
+  if (pendingTotal > 0 && policy.runnerEngine === 'rpa-package') {
+    addPolicyCapabilityCheck(
+      'worker_capability_rpa_package',
+      ['rpa-package'],
+      'RPA 运行包',
+      '远程策略要求使用 RPA 运行包引擎，但当前在线 Runner 没有明确声明该能力。',
     );
   }
 
@@ -3949,6 +3967,7 @@ function normalizeBridgeWorkerCapabilities(raw: any): WecomBridgeWorkerCapabilit
     if (['reply', 'replies', 'ai-reply', 'ai-replies', 'auto-reply'].includes(rawName)) name = 'reply';
     else if (['mass', 'mass-send', 'mass-send-task', 'mass-task', 'group-send', 'broadcast'].includes(rawName)) name = 'mass';
     else if (['moment', 'moments', 'moment-task', 'moment-draft', '朋友圈'].includes(rawName)) name = 'moment';
+    else if (['rpa-package', 'rpa', 'package', 'run-package', 'cloud-rpa-package', 'rpa-runner'].includes(rawName)) name = 'rpa-package';
     else if (['prepare', 'prepared', 'paste', 'clipboard'].includes(rawName)) name = 'prepare';
     else if (['send', 'sender', 'controlled-send'].includes(rawName)) name = 'send';
     else if (['target-match', 'target-verify', 'target-verification', 'conversation-match', 'window-title'].includes(rawName)) name = 'target-match';

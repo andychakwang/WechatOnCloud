@@ -241,6 +241,7 @@ const BRIDGE_WORKER_CAPABILITY_LABEL: Record<WecomBridgeWorkerCapability, string
   reply: '回复',
   mass: '群发',
   moment: '朋友圈',
+  'rpa-package': 'RPA 包',
   prepare: '准备',
   send: '发送',
   'target-match': '目标校验',
@@ -267,6 +268,7 @@ const AUTOMATION_RISK_LABEL: Record<string, string> = {
   worker_lacks_reply: 'Mac 缺回复能力',
   worker_lacks_mass: 'Mac 缺群发能力',
   worker_lacks_moment: 'Mac 缺朋友圈能力',
+  worker_lacks_rpa_package: 'Mac 缺 RPA 包能力',
   mass_failures: '群发失败',
   moment_failures: '朋友圈失败',
 };
@@ -1474,6 +1476,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </div>
               <div className="muted small">
                 能力 回复 {overview.bridge.capabilities.reply} · 群发 {overview.bridge.capabilities.mass} · 朋友圈 {overview.bridge.capabilities.moment}
+                {overview.bridge.capabilities['rpa-package'] ? ` · RPA 包 ${overview.bridge.capabilities['rpa-package']}` : ''}
                 {overview.bridge.capabilities.unknown ? ` · 未知 ${overview.bridge.capabilities.unknown}` : ''}
               </div>
             </div>

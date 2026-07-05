@@ -479,6 +479,9 @@ fi
 
 if [[ -z "${WECOM_BRIDGE_CAPABILITIES:-}" ]]; then
   WECOM_BRIDGE_CAPABILITIES="reply,mass,moment,prepare,material-map"
+  if [[ "$USE_RPA_PACKAGE" == "1" || "$USE_RPA_PACKAGE" == "true" || "$RUNNER_ENGINE" == "rpa-package" ]]; then
+    WECOM_BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES},rpa-package"
+  fi
   if [[ "$MODE" == "send" && "${WECOM_ALLOW_SEND:-}" == "1" ]]; then
     WECOM_BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES},send"
   fi

@@ -298,6 +298,7 @@ json_assert_path overview.materials.total
 json_assert_path overview.bridge.pendingReplies
 json_assert_path overview.bridge.runnerPolicy.mode
 json_assert_path overview.bridge.capabilities.reply
+json_assert_path overview.bridge.capabilities.rpa-package
 json_assert_path overview.bridge.capabilities.unknown
 json_assert_path overview.mass.itemsPending
 json_assert_path overview.moments.draftsTotal
@@ -825,6 +826,9 @@ PY
   json_assert_array_contains worker.capabilities moment
   json_assert_array_contains worker.capabilities target-match
   json_assert_path pendingReplies
+  WECOM_USE_RPA_PACKAGE=1 WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" heartbeat --worker-id smoke-rpa-worker --mode dry-run > "$body_file"
+  json_assert_eq worker.workerId smoke-rpa-worker
+  json_assert_array_contains worker.capabilities rpa-package
 
   say "Update and fetch WeCom Bridge runner policy"
   request_json GET /api/admin/automation/runner-policy
@@ -1665,6 +1669,8 @@ PY
   json_assert_eq env.WECOM_RUNNER_ENGINE rpa-package
   json_assert_eq env.WECOM_USE_RPA_PACKAGE 1
   json_assert_eq env.WECOM_RUNNER_TARGET all
+  request_json GET /api/admin/automation/preflight
+  json_assert_check_id worker_capability_rpa_package ok
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_USE_REMOTE_POLICY=1 WECOM_RPA_PACKAGE_SAVE_DIR="$(dirname "$rpa_cloud_package_file")" "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
   python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
 import json

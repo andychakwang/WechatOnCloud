@@ -202,6 +202,7 @@ export type WecomBridgeWorkerCapability =
   | 'reply'
   | 'mass'
   | 'moment'
+  | 'rpa-package'
   | 'prepare'
   | 'send'
   | 'target-match'
