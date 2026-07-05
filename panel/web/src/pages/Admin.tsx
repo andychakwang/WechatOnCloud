@@ -2504,6 +2504,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                               <code>{bridgeGuide.branch}</code>
                             </>
                           ) : null}
+                          {bridgeGuide.launchAgentLabel ? (
+                            <>
+                              {' · 定时 '}
+                              <code>{bridgeGuide.launchAgentLabel}</code>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                       <div className="auto-actions inline">
@@ -2512,6 +2518,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             初始化
                           </button>
                         )}
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.installLaunchAgent, '定时任务安装命令')}>
+                          定时
+                        </button>
                         <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.writeEnv, '配置模板')}>
                           配置
                         </button>
@@ -2595,13 +2604,55 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       </div>
                       <div className="bridge-command-row">
                         <div>
-                          <b>安装定时任务</b>
+                          <b>预览定时任务</b>
                           <code>{bridgeGuide.commands.dryRunLaunchAgent}</code>
                         </div>
                         <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.dryRunLaunchAgent, 'LaunchAgent 预览命令')}>
                           复制
                         </button>
                       </div>
+                      <div className="bridge-command-row">
+                        <div>
+                          <b>启用定时任务</b>
+                          <code>{bridgeGuide.commands.installLaunchAgent}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.installLaunchAgent, '定时任务安装命令')}>
+                          复制
+                        </button>
+                      </div>
+                      {bridgeGuide.commands.launchAgentStatus && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>查看定时状态</b>
+                            <code>{bridgeGuide.commands.launchAgentStatus}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.launchAgentStatus!, '定时任务状态命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
+                      {bridgeGuide.commands.tailLaunchAgentLog && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>查看运行日志</b>
+                            <code>{bridgeGuide.commands.tailLaunchAgentLog}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.tailLaunchAgentLog!, '定时任务日志命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
+                      {bridgeGuide.commands.unloadLaunchAgent && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>停用定时任务</b>
+                            <code>{bridgeGuide.commands.unloadLaunchAgent}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.unloadLaunchAgent!, '定时任务停用命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
                       <div className="bridge-command-row">
                         <div>
                           <b>受控发送</b>

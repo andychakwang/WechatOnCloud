@@ -556,6 +556,10 @@ export interface AutomationBridgeRunnerGuide {
   runnerScript: string;
   installScript: string;
   materialMapPath?: string;
+  launchAgentLabel?: string;
+  launchAgentPlistPath?: string;
+  launchAgentLogPath?: string;
+  launchAgentErrorLogPath?: string;
   modes: string[];
   targets: string[];
   envFile: string;
@@ -573,6 +577,9 @@ export interface AutomationBridgeRunnerGuide {
     sendAll: string;
     dryRunLaunchAgent: string;
     installLaunchAgent: string;
+    launchAgentStatus?: string;
+    tailLaunchAgentLog?: string;
+    unloadLaunchAgent?: string;
   };
 }
 

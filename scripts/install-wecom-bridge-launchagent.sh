@@ -2,9 +2,86 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${WECOM_BRIDGE_ENV_FILE:-$HOME/.config/wechat-on-cloud/wecom-bridge.env}"
+DRY_RUN=0
+REDACT_SECRETS="${WECOM_REDACT_SECRETS:-0}"
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      ;;
+    --redact-secrets)
+      REDACT_SECRETS=1
+      ;;
+    --help|-h)
+      cat <<'EOF'
+Usage: scripts/install-wecom-bridge-launchagent.sh [--dry-run] [--redact-secrets]
+
+Installs a macOS user LaunchAgent for scripts/wecom-bridge-runner.sh.
+
+The installer reads ~/.config/wechat-on-cloud/wecom-bridge.env when it exists,
+so the Web panel bootstrap command can write the config once and this installer
+can reuse it without putting the Bridge token on the command line.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -f "$ENV_FILE" ]]; then
+  PRESERVE_ENV_NAMES=(
+    WOC_PANEL_URL
+    PANEL_URL
+    WECHATONCLOUD_PANEL_URL
+    AUTOMATION_BRIDGE_TOKEN
+    WECOM_BRIDGE_TOKEN
+    WECOM_USE_REMOTE_POLICY
+    WECOM_ACCEPT_REMOTE_SEND
+    WECOM_RUNNER_ENGINE
+    WECOM_USE_RPA_PACKAGE
+    WECOM_RPA_PACKAGE_SAVE_DIR
+    WECOM_RPA_PACKAGE_ACK
+    WECOM_RUNNER_MODE
+    WECOM_RUNNER_TARGET
+    WECOM_RUNNER_LIMIT
+    WECOM_MASS_HANDLER
+    WECOM_MOMENT_HANDLER
+    WECOM_MOMENT_PASTE_MODE
+    WECOM_CLAIM_TTL_SECONDS
+    WECOM_BRIDGE_WORKER_ID
+    WECOM_APP_NAME
+    WECOM_SEARCH_SHORTCUT
+    WECOM_BRIDGE_CAPABILITIES
+    WECOM_REQUIRE_TARGET_MATCH
+    WECOM_REQUIRE_HANDLER_VERIFICATION
+    WECOM_ALLOW_SEND
+    WECOM_BRIDGE_LAUNCHD_LABEL
+    WECOM_BRIDGE_INTERVAL_SEC
+  )
+  for name in "${PRESERVE_ENV_NAMES[@]}"; do
+    eval "WOC_INSTALL_HAS_$name=\${$name+x}"
+    eval "WOC_INSTALL_VALUE_$name=\${$name-}"
+  done
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+  for name in "${PRESERVE_ENV_NAMES[@]}"; do
+    eval "has_value=\${WOC_INSTALL_HAS_$name-}"
+    if [[ -n "$has_value" ]]; then
+      eval "export $name=\"\${WOC_INSTALL_VALUE_$name}\""
+    fi
+  done
+fi
+
 LABEL="${WECOM_BRIDGE_LAUNCHD_LABEL:-com.wechatoncloud.wecom-bridge}"
 INTERVAL="${WECOM_BRIDGE_INTERVAL_SEC:-60}"
-ENV_FILE="${WECOM_BRIDGE_ENV_FILE:-$HOME/.config/wechat-on-cloud/wecom-bridge.env}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 RUNNER="$ROOT/scripts/wecom-bridge-runner.sh"
 MODE="${WECOM_RUNNER_MODE:-dry-run}"
@@ -20,15 +97,18 @@ RPA_PACKAGE_ACK="${WECOM_RPA_PACKAGE_ACK:-}"
 REQUIRE_TARGET_MATCH="${WECOM_REQUIRE_TARGET_MATCH:-}"
 REQUIRE_HANDLER_VERIFICATION="${WECOM_REQUIRE_HANDLER_VERIFICATION:-}"
 BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES:-}"
-DRY_RUN=0
-
-if [[ "${1:-}" == "--dry-run" ]]; then
-  DRY_RUN=1
-fi
 
 quote() {
   local value="${1//\'/\'\\\'\'}"
   printf "'%s'" "$value"
+}
+
+quote_secret() {
+  local value="$1"
+  if [[ "$DRY_RUN" == "1" && "$REDACT_SECRETS" == "1" ]]; then
+    value="[redacted]"
+  fi
+  quote "$value"
 }
 
 if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" && "$MODE" != "send" ]]; then
@@ -69,8 +149,8 @@ env_text() {
     [[ -n "${WOC_PANEL_URL:-}" ]] && printf 'WOC_PANEL_URL=%s\n' "$(quote "$WOC_PANEL_URL")"
     [[ -n "${PANEL_URL:-}" ]] && printf 'PANEL_URL=%s\n' "$(quote "$PANEL_URL")"
     [[ -n "${WECHATONCLOUD_PANEL_URL:-}" ]] && printf 'WECHATONCLOUD_PANEL_URL=%s\n' "$(quote "$WECHATONCLOUD_PANEL_URL")"
-    [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && printf 'AUTOMATION_BRIDGE_TOKEN=%s\n' "$(quote "$AUTOMATION_BRIDGE_TOKEN")"
-    [[ -n "${WECOM_BRIDGE_TOKEN:-}" ]] && printf 'WECOM_BRIDGE_TOKEN=%s\n' "$(quote "$WECOM_BRIDGE_TOKEN")"
+    [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && printf 'AUTOMATION_BRIDGE_TOKEN=%s\n' "$(quote_secret "$AUTOMATION_BRIDGE_TOKEN")"
+    [[ -n "${WECOM_BRIDGE_TOKEN:-}" ]] && printf 'WECOM_BRIDGE_TOKEN=%s\n' "$(quote_secret "$WECOM_BRIDGE_TOKEN")"
     [[ -n "$USE_REMOTE_POLICY" ]] && printf 'WECOM_USE_REMOTE_POLICY=%s\n' "$(quote "$USE_REMOTE_POLICY")"
     [[ -n "$ACCEPT_REMOTE_SEND" ]] && printf 'WECOM_ACCEPT_REMOTE_SEND=%s\n' "$(quote "$ACCEPT_REMOTE_SEND")"
     [[ -n "$RUNNER_ENGINE" ]] && printf 'WECOM_RUNNER_ENGINE=%s\n' "$(quote "$RUNNER_ENGINE")"

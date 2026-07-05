@@ -253,6 +253,10 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
   const branch = 'andy/automation-lab';
   const materialMapPath = '$HOME/.config/wechat-on-cloud/wecom-materials.json';
   const materialMapCommandPath = '~/.config/wechat-on-cloud/wecom-materials.json';
+  const launchAgentLabel = 'com.wechatoncloud.wecom-bridge';
+  const launchAgentPlistPath = `~/Library/LaunchAgents/${launchAgentLabel}.plist`;
+  const launchAgentLogPath = `~/Library/Logs/${launchAgentLabel}.log`;
+  const launchAgentErrorLogPath = `~/Library/Logs/${launchAgentLabel}.err.log`;
   const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
   const defaultWorkerId = 'mac-bridge-01';
   const envFile = [
@@ -318,6 +322,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     'echo "Edit AUTOMATION_BRIDGE_TOKEN in $config_file, then run:"',
     'echo "  scripts/wecom-bridge-runner.sh doctor"',
     'echo "  scripts/wecom-bridge-runner.sh run-once"',
+    'echo "  scripts/install-wecom-bridge-launchagent.sh --dry-run --redact-secrets"',
   ].join('\n');
   return {
     panelUrl,
@@ -331,6 +336,10 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     runnerScript: 'scripts/wecom-bridge-runner.sh',
     installScript: 'scripts/install-wecom-bridge-launchagent.sh',
     materialMapPath,
+    launchAgentLabel,
+    launchAgentPlistPath,
+    launchAgentLogPath,
+    launchAgentErrorLogPath,
     modes: ['dry-run', 'prepare', 'send'],
     targets: ['replies', 'mass', 'moments', 'all'],
     envFile,
@@ -348,9 +357,11 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       prepareAll: 'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       sendAll: 'WECOM_RUNNER_MODE=send WECOM_RUNNER_TARGET=all WECOM_ALLOW_SEND=1 scripts/wecom-bridge-runner.sh run-once',
       dryRunLaunchAgent:
-        "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh --dry-run",
-      installLaunchAgent:
-        "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh",
+        "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh --dry-run --redact-secrets",
+      installLaunchAgent: "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh",
+      launchAgentStatus: `launchctl list | grep ${launchAgentLabel} || true`,
+      tailLaunchAgentLog: `tail -n 80 -f ~/Library/Logs/${launchAgentLabel}.log ~/Library/Logs/${launchAgentLabel}.err.log`,
+      unloadLaunchAgent: `launchctl unload ~/Library/LaunchAgents/${launchAgentLabel}.plist || true`,
     },
   };
 }

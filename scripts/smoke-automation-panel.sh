@@ -327,12 +327,18 @@ json_assert_path bridge.runnerGuide.commands.bootstrap
 json_assert_path bridge.runnerGuide.commands.dryRunAll
 json_assert_path bridge.runnerGuide.commands.doctorReport
 json_assert_eq bridge.runnerGuide.branch andy/automation-lab
+json_assert_eq bridge.runnerGuide.launchAgentLabel com.wechatoncloud.wecom-bridge
 json_assert_path bridge.audienceEndpoint
 json_assert_path bridge.materialEndpoint
 json_assert_path bridge.materialMapEndpoint
 json_assert_path bridge.runReportEndpoint
 json_assert_path bridge.runnerPolicyEndpoint
 json_assert_path bridge.runnerGuide.commands.syncMaterialMap
+json_assert_path bridge.runnerGuide.commands.dryRunLaunchAgent
+json_assert_path bridge.runnerGuide.commands.installLaunchAgent
+json_assert_path bridge.runnerGuide.commands.launchAgentStatus
+json_assert_path bridge.runnerGuide.commands.tailLaunchAgentLog
+json_assert_path bridge.runnerGuide.commands.unloadLaunchAgent
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -345,6 +351,21 @@ if [[ "$(json_get bridge.runnerGuide.bootstrapScript)" != *"git clone"* || "$(js
 fi
 if [[ "$(json_get bridge.runnerGuide.commands.bootstrap)" != *"/tmp/woc-mac-runner-bootstrap.sh"* ]]; then
   echo "ERROR: Bridge runner guide bootstrap command is missing temp script handoff" >&2
+  sed -n '1,160p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.dryRunLaunchAgent)" != *"--redact-secrets"* ]]; then
+  echo "ERROR: Bridge runner guide LaunchAgent dry-run should redact secrets" >&2
+  sed -n '1,160p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.installLaunchAgent)" != *"install-wecom-bridge-launchagent.sh"* ]]; then
+  echo "ERROR: Bridge runner guide is missing LaunchAgent install command" >&2
+  sed -n '1,160p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.launchAgentStatus)" != *"com.wechatoncloud.wecom-bridge"* ]]; then
+  echo "ERROR: Bridge runner guide LaunchAgent status command is missing label" >&2
   sed -n '1,160p' "$body_file" >&2
   exit 1
 fi

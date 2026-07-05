@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r79-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r80-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,9 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r79-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r79-2026-07-06`
-- 本版新增：Web「Mac Runner 接入」会生成完整 bootstrap 脚本，帮助新 Mac Runner 拉取 `andy/automation-lab`、写入本机 env 模板、同步 doctor/run-once 入口，便于把企业微信自动化 Mac 工具接入 SaaS 面板。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r80-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r80-2026-07-06`
+- 本版新增：Web「Mac Runner 接入」补齐 LaunchAgent 定时运行闭环，支持复制脱敏 dry-run、实际安装、状态查看、日志跟踪和停用命令；安装脚本会读取 bootstrap 写入的本机 env 文件，不需要把 Bridge token 再放到命令行里。
 
 ## 2026-07-06 R79 更新验收
 
@@ -255,7 +255,7 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 推荐用提交哈希固定脚本来源：
 
 ```bash
-WOC_VERSION=andy-automation-usable-r79-2026-07-06 \
+WOC_VERSION=andy-automation-usable-r80-2026-07-06 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```
