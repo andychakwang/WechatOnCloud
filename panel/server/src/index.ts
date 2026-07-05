@@ -272,6 +272,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       syncMaterialMap: `node scripts/wecom-bridge-client.mjs material-map --kind image --output ${materialMapCommandPath}`,
       printConfig: 'scripts/wecom-bridge-runner.sh print-config',
       doctor: 'scripts/wecom-bridge-runner.sh doctor',
+      doctorReport: 'WECOM_DOCTOR_REPORT=1 scripts/wecom-bridge-runner.sh doctor',
       dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       prepareAll: 'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       sendAll: 'WECOM_RUNNER_MODE=send WECOM_RUNNER_TARGET=all WECOM_ALLOW_SEND=1 scripts/wecom-bridge-runner.sh run-once',

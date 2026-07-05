@@ -185,6 +185,7 @@ const BRIDGE_RUN_TARGET_LABEL: Record<string, string> = {
   mass: '群发',
   moments: '朋友圈',
   all: '全队列',
+  doctor: '接入体检',
   unknown: '未知',
 };
 
@@ -192,6 +193,7 @@ const BRIDGE_RUN_ITEM_TARGET_LABEL: Record<string, string> = {
   reply: '回复',
   mass: '群发',
   moment: '朋友圈',
+  doctor: '体检',
   unknown: '未知',
 };
 
@@ -1832,6 +1834,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           <code>{bridgeGuide.commands.doctor}</code>
                         </div>
                         <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.doctor, '接入体检命令')}>
+                          复制
+                        </button>
+                      </div>
+                      <div className="bridge-command-row">
+                        <div>
+                          <b>体检并回传</b>
+                          <code>{bridgeGuide.commands.doctorReport}</code>
+                        </div>
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.doctorReport, '体检回传命令')}>
                           复制
                         </button>
                       </div>

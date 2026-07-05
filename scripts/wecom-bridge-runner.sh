@@ -57,6 +57,7 @@ Optional:
   WECOM_ALLOW_SEND=1                       required for send
   WECOM_DOCTOR_REMOTE=0                    skip remote policy auth check in doctor
   WECOM_DOCTOR_APP=0                       skip WeCom AppleScript window check in doctor
+  WECOM_DOCTOR_REPORT=1                    report doctor result to the panel
 
 Modes:
   dry-run  - list target tasks only; no claim, no window automation
@@ -109,19 +110,29 @@ validate_runner_config() {
 
 DOCTOR_FAILURES=0
 DOCTOR_WARNINGS=0
+DOCTOR_ITEMS_FILE=""
 
 doctor_ok() {
   printf 'OK    %s\n' "$*"
+  if [[ -n "$DOCTOR_ITEMS_FILE" ]]; then
+    printf 'ok\t%s\n' "$*" >> "$DOCTOR_ITEMS_FILE"
+  fi
 }
 
 doctor_warn() {
   DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1))
   printf 'WARN  %s\n' "$*"
+  if [[ -n "$DOCTOR_ITEMS_FILE" ]]; then
+    printf 'warn\t%s\n' "$*" >> "$DOCTOR_ITEMS_FILE"
+  fi
 }
 
 doctor_fail() {
   DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1))
   printf 'FAIL  %s\n' "$*"
+  if [[ -n "$DOCTOR_ITEMS_FILE" ]]; then
+    printf 'fail\t%s\n' "$*" >> "$DOCTOR_ITEMS_FILE"
+  fi
 }
 
 doctor_is_disabled() {
@@ -269,6 +280,11 @@ APPLESCRIPT
 }
 
 run_doctor() {
+  local started_at finished_at duration_ms report_status summary report_tmp
+  local started_epoch
+  started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  started_epoch="$(date +%s)"
+  DOCTOR_ITEMS_FILE="$(mktemp "${TMPDIR:-/tmp}/woc-runner-doctor-items.XXXXXX.tsv")"
   printf 'WeCom Bridge runner doctor\n'
   printf 'ROOT=%s\nENV_FILE=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\n\n' "$ROOT" "$ENV_FILE" "$MODE" "$TARGET" "$LIMIT"
 
@@ -308,6 +324,59 @@ run_doctor() {
   doctor_wecom_app
 
   printf '\nSummary: %s failure(s), %s warning(s)\n' "$DOCTOR_FAILURES" "$DOCTOR_WARNINGS"
+  finished_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  duration_ms="$(( ( $(date +%s) - started_epoch ) * 1000 ))"
+  report_status="completed"
+  if [[ "$DOCTOR_FAILURES" -gt 0 ]]; then
+    report_status="failed"
+  fi
+  summary="doctor failures=$DOCTOR_FAILURES warnings=$DOCTOR_WARNINGS"
+
+  if [[ "${WECOM_DOCTOR_REPORT:-}" == "1" || "${WECOM_DOCTOR_REPORT:-}" == "true" ]]; then
+    if [[ -z "${WOC_PANEL_URL:-}" && -z "${PANEL_URL:-}" && -z "${WECHATONCLOUD_PANEL_URL:-}" ]]; then
+      printf 'WARN  doctor report skipped: missing panel URL\n'
+    elif [[ -z "${AUTOMATION_BRIDGE_TOKEN:-}" && -z "${WECOM_BRIDGE_TOKEN:-}" ]]; then
+      printf 'WARN  doctor report skipped: missing Bridge token\n'
+    else
+      report_tmp="$(mktemp "${TMPDIR:-/tmp}/woc-runner-doctor-report.XXXXXX.json")"
+      node - "$DOCTOR_ITEMS_FILE" > "$report_tmp" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const rows = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+const items = rows.map((row, index) => {
+  const [level, ...rest] = row.split('\t');
+  const message = rest.join('\t').trim();
+  return {
+    id: `doctor-${index + 1}`,
+    target: 'doctor',
+    name: message || level,
+    action: level,
+    ok: level === 'ok',
+    ...(level === 'warn' || level === 'fail' ? { error: message } : {}),
+  };
+});
+process.stdout.write(JSON.stringify(items));
+NODE
+      if node "$CLIENT" report-run \
+        --target doctor \
+        --mode doctor \
+        --status "$report_status" \
+        --started-at "$started_at" \
+        --finished-at "$finished_at" \
+        --duration-ms "$duration_ms" \
+        --worker-id "${WECOM_BRIDGE_WORKER_ID:-doctor}" \
+        --summary "$summary" \
+        --items-json "@$report_tmp" >/dev/null; then
+        printf 'OK    doctor report uploaded\n'
+      else
+        printf 'WARN  doctor report upload failed\n'
+      fi
+      rm -f "$report_tmp"
+    fi
+  fi
+
+  rm -f "$DOCTOR_ITEMS_FILE"
+  DOCTOR_ITEMS_FILE=""
   if [[ "$DOCTOR_FAILURES" -gt 0 ]]; then
     return 1
   fi

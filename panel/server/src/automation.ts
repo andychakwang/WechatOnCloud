@@ -174,12 +174,12 @@ export interface WecomBridgeWorkerStatus extends WecomBridgeWorker {
   offlineAfterSeconds: number;
 }
 
-export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'unknown';
+export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'doctor' | 'unknown';
 export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
-export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
+export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 
 export interface WecomBridgeTargetVerification {
@@ -4646,6 +4646,7 @@ function normalizeBridgeRunTarget(value: unknown): WecomBridgeRunTarget {
   if (raw === 'replies' || raw === 'reply') return 'replies';
   if (raw === 'mass' || raw === 'mass-tasks' || raw === 'mass_tasks') return 'mass';
   if (raw === 'moments' || raw === 'moment') return 'moments';
+  if (raw === 'doctor' || raw === 'diagnostic' || raw === 'diagnostics') return 'doctor';
   if (raw === 'all') return 'all';
   return 'unknown';
 }
@@ -4655,6 +4656,7 @@ function normalizeBridgeRunReportItemTarget(value: unknown): WecomBridgeRunRepor
   if (raw === 'reply' || raw === 'replies' || raw === 'event') return 'reply';
   if (raw === 'mass' || raw === 'mass-task' || raw === 'mass_tasks' || raw === 'mass-tasks') return 'mass';
   if (raw === 'moment' || raw === 'moments' || raw === 'draft') return 'moment';
+  if (raw === 'doctor' || raw === 'diagnostic' || raw === 'diagnostics') return 'doctor';
   return 'unknown';
 }
 

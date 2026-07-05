@@ -281,6 +281,7 @@ request_json GET /api/admin/automation/bridge
 json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.commands.writeEnv
 json_assert_path bridge.runnerGuide.commands.dryRunAll
+json_assert_path bridge.runnerGuide.commands.doctorReport
 json_assert_path bridge.audienceEndpoint
 json_assert_path bridge.materialEndpoint
 json_assert_path bridge.materialMapEndpoint
@@ -670,9 +671,14 @@ PY
     WECOM_BRIDGE_WORKER_ID=smoke-worker \
     WECOM_MATERIAL_MAP_FILE="$material_map_file" \
     WECOM_DOCTOR_APP=0 \
+    WECOM_DOCTOR_REPORT=1 \
     "$WECOM_BRIDGE_RUNNER" doctor > "$body_file"
   grep -q "remote policy reachable" "$body_file"
   grep -q "Summary: 0 failure" "$body_file"
+  request_json GET /api/admin/automation/bridge-runs?limit=5
+  json_assert_eq reports[0].target doctor
+  json_assert_eq reports[0].mode doctor
+  json_assert_eq reports[0].items[0].target doctor
 
   say "Report WeCom Bridge runner result"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" report-run \

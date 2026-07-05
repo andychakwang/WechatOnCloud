@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r43-runner-doctor';
+const CLIENT_VERSION = 'automation-lab-r44-doctor-report';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -21,7 +21,7 @@ Commands:
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   runner-policy [--worker-id name]
-  report-run [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--status completed|failed] [--items-json '[...]']
+  report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
   pull-replies [--limit 50]
   claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
   release-reply <eventId> [--worker-id name] [--reason text]

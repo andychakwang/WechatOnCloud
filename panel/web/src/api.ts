@@ -199,12 +199,12 @@ export interface WecomBridgeWorkerStatus {
   offlineAfterSeconds: number;
 }
 
-export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'unknown';
+export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'doctor' | 'unknown';
 export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
-export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
+export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 
 export interface WecomBridgeTargetVerification {
@@ -323,6 +323,7 @@ export interface AutomationBridgeRunnerGuide {
     syncMaterialMap?: string;
     printConfig: string;
     doctor: string;
+    doctorReport: string;
     dryRunAll: string;
     prepareAll: string;
     sendAll: string;
