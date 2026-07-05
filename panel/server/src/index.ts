@@ -256,6 +256,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
+    "WECOM_USE_RPA_PACKAGE='0'",
+    'WECOM_RPA_PACKAGE_SAVE_DIR=$HOME/.config/wechat-on-cloud/rpa-packages',
     "WECOM_BRIDGE_CAPABILITIES='reply,mass,moment,prepare,material-map,target-match,handler-verification'",
     `WECOM_REQUIRE_TARGET_MATCH=${shellSingle(policy.requireTargetMatch ? '1' : '0')}`,
     `WECOM_REQUIRE_HANDLER_VERIFICATION=${shellSingle(policy.requireHandlerVerification ? '1' : '0')}`,
@@ -281,6 +283,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       doctor: 'scripts/wecom-bridge-runner.sh doctor',
       doctorReport: 'WECOM_DOCTOR_REPORT=1 scripts/wecom-bridge-runner.sh doctor',
       dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
+      dryRunRpaPackageAll:
+        'WECOM_USE_RPA_PACKAGE=1 WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       prepareAll: 'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       sendAll: 'WECOM_RUNNER_MODE=send WECOM_RUNNER_TARGET=all WECOM_ALLOW_SEND=1 scripts/wecom-bridge-runner.sh run-once',
       dryRunLaunchAgent:

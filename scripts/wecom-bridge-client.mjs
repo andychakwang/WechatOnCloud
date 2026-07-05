@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r52-rpa-package-runner';
+const CLIENT_VERSION = 'automation-lab-r54-cloud-rpa-package-runner';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 
@@ -26,6 +26,7 @@ Commands:
   push-events <file|-> [--source name]
   export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source]
   run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run]
+  run-cloud-rpa-package [--target replies|mass|moments|all] [--limit 50] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--save-package file|--save-package-dir dir]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
   runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
@@ -57,6 +58,7 @@ Examples:
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs export-rpa-package --target all --output-dir ~/.config/wechat-on-cloud/rpa-packages
   node scripts/wecom-bridge-client.mjs run-rpa-package ~/.config/wechat-on-cloud/rpa-packages/latest.jsonl --mode dry-run
+  node scripts/wecom-bridge-client.mjs run-cloud-rpa-package --target all --mode dry-run --save-package-dir ~/.config/wechat-on-cloud/rpa-packages
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs runner-policy --worker-id mac-mini-01
   node scripts/wecom-bridge-client.mjs report-run --target all --mode dry-run --handled-replies 2
@@ -614,7 +616,7 @@ async function writeRpaPackage(options, pkg, format) {
   return '';
 }
 
-async function exportRpaPackage(options) {
+async function buildCloudRpaPackage(options) {
   const target = normalizeRpaExportTarget(options.target || options.queue || 'all');
   const limit = intOpt(options.limit, 50, 1, 200);
   const format = String(options.format || 'jsonl').trim().toLowerCase() === 'json' ? 'json' : 'jsonl';
@@ -649,6 +651,11 @@ async function exportRpaPackage(options) {
     tasks,
   };
 
+  return { pkg, target, format };
+}
+
+async function exportRpaPackage(options) {
+  const { pkg, target, format } = await buildCloudRpaPackage(options);
   const outputPath = await writeRpaPackage(options, pkg, format);
   if (outputPath) {
     printJson({
@@ -662,6 +669,15 @@ async function exportRpaPackage(options) {
       },
     });
   }
+}
+
+async function saveRpaPackageIfRequested(options, pkg, format) {
+  const output = String(options['save-package'] || options.savePackage || options['package-output'] || options.packageOutput || '').trim();
+  const outputDir = String(
+    options['save-package-dir'] || options.savePackageDir || options['package-output-dir'] || options.packageOutputDir || '',
+  ).trim();
+  if (!output && !outputDir) return '';
+  return await writeRpaPackage({ output, file: output, 'output-dir': outputDir }, pkg, format);
 }
 
 function normalizeRpaTaskTarget(value) {
@@ -821,7 +837,7 @@ async function ackRpaTask(options, target, task, mode, ok, error) {
   });
 }
 
-async function runRpaPackage(options, positional) {
+async function runRpaPackageTasks(options, packageMeta, rawTasks) {
   const mode = runnerMode(options, 'dry-run');
   if (!['dry-run', 'prepare', 'send'].includes(mode)) throw new BridgeError('run-rpa-package --mode must be dry-run, prepare, or send.');
   const selectedTarget = normalizeRpaRunTarget(options.target || options.queue || 'all');
@@ -832,8 +848,6 @@ async function runRpaPackage(options, positional) {
   const runHandlers = !boolOpt(options, 'no-handler', 'list-only');
   const startedMs = Date.now();
   const startedAt = new Date(startedMs).toISOString();
-  const inputFile = positional[0] || options.file || '-';
-  const { package: packageMeta, tasks: rawTasks } = await readRpaPackageInput(inputFile);
   const tasks = rawTasks
     .map((task) => bridgeTaskFromRpaTask(task))
     .filter((item) => selectedTargets.has(item.target))
@@ -887,6 +901,8 @@ async function runRpaPackage(options, positional) {
 
   const output = {
     packageId: packageMeta?.packageId || '',
+    packageSchema: packageMeta?.schema || '',
+    packageCounts: packageMeta?.counts || { total: rawTasks.length },
     mode,
     target: selectedTarget,
     total: tasks.length,
@@ -912,6 +928,20 @@ async function runRpaPackage(options, positional) {
       summary: runSummary(`rpa-package/${selectedTarget}`, handled, tasks.length),
     });
   }
+  return output;
+}
+
+async function runRpaPackage(options, positional) {
+  const inputFile = positional[0] || options.file || '-';
+  const { package: packageMeta, tasks: rawTasks } = await readRpaPackageInput(inputFile);
+  printJson(await runRpaPackageTasks(options, packageMeta, rawTasks));
+}
+
+async function runCloudRpaPackage(options) {
+  const { pkg, format } = await buildCloudRpaPackage(options);
+  const output = await runRpaPackageTasks(options, pkg, pkg.tasks);
+  const savedPackagePath = await saveRpaPackageIfRequested(options, pkg, format);
+  if (savedPackagePath) output.savedPackagePath = savedPackagePath;
   printJson(output);
 }
 
@@ -1046,6 +1076,11 @@ async function main() {
 
   if (command === 'run-rpa-package' || command === 'run-run-package') {
     await runRpaPackage(options, positional);
+    return;
+  }
+
+  if (command === 'run-cloud-rpa-package' || command === 'run-remote-rpa-package' || command === 'run-rpa-cloud') {
+    await runCloudRpaPackage(options);
     return;
   }
 

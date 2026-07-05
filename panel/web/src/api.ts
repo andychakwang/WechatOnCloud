@@ -410,6 +410,7 @@ export interface AutomationBridgeRunnerGuide {
     doctor: string;
     doctorReport: string;
     dryRunAll: string;
+    dryRunRpaPackageAll?: string;
     prepareAll: string;
     sendAll: string;
     dryRunLaunchAgent: string;

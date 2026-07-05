@@ -1993,6 +1993,20 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           复制
                         </button>
                       </div>
+                      {bridgeGuide.commands.dryRunRpaPackageAll && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>RPA 包 dry-run</b>
+                            <code>{bridgeGuide.commands.dryRunRpaPackageAll}</code>
+                          </div>
+                          <button
+                            className="btn-text"
+                            onClick={() => copyBridgeText(bridgeGuide.commands.dryRunRpaPackageAll!, 'RPA 包 dry-run 命令')}
+                          >
+                            复制
+                          </button>
+                        </div>
+                      )}
                       {bridgeGuide.commands.syncMaterialMap && (
                         <div className="bridge-command-row">
                           <div>

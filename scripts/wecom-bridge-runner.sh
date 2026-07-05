@@ -27,6 +27,10 @@ MODE="${WECOM_RUNNER_MODE:-dry-run}"
 TARGET="${WECOM_RUNNER_TARGET:-replies}"
 LIMIT="${WECOM_RUNNER_LIMIT:-5}"
 CLAIM_TTL_SECONDS="${WECOM_CLAIM_TTL_SECONDS:-300}"
+USE_RPA_PACKAGE="${WECOM_USE_RPA_PACKAGE:-}"
+RUNNER_ENGINE="${WECOM_RUNNER_ENGINE:-bridge}"
+RPA_PACKAGE_ACK="${WECOM_RPA_PACKAGE_ACK:-}"
+RPA_PACKAGE_SAVE_DIR="${WECOM_RPA_PACKAGE_SAVE_DIR:-}"
 
 usage() {
   cat <<'EOF'
@@ -46,6 +50,9 @@ Optional:
   WECOM_RUNNER_LIMIT=5
   WECOM_USE_REMOTE_POLICY=1               pull mode/target/limits from panel
   WECOM_ACCEPT_REMOTE_SEND=1              allow remote policy to enable send
+  WECOM_USE_RPA_PACKAGE=1                 run through the standard RPA package boundary
+  WECOM_RPA_PACKAGE_SAVE_DIR=~/...        keep a JSONL copy of each pulled package
+  WECOM_RPA_PACKAGE_ACK=1                 ack successful package tasks where supported
   WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
@@ -80,7 +87,7 @@ case "$cmd" in
     exit 0
     ;;
   print-config)
-    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nMATERIAL_MAP_FILE=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "${WECOM_MATERIAL_MAP_FILE:-}"
+    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nENGINE=%s\nUSE_RPA_PACKAGE=%s\nRPA_PACKAGE_SAVE_DIR=%s\nMATERIAL_MAP_FILE=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "$RUNNER_ENGINE" "$USE_RPA_PACKAGE" "$RPA_PACKAGE_SAVE_DIR" "${WECOM_MATERIAL_MAP_FILE:-}"
     exit 0
     ;;
   doctor)
@@ -479,6 +486,34 @@ if [[ -z "${WECOM_BRIDGE_CAPABILITIES:-}" ]]; then
 fi
 
 node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
+
+run_rpa_package_engine() {
+  local args
+  args=(
+    run-cloud-rpa-package
+    --target "$TARGET"
+    --limit "$LIMIT"
+    --mode "$MODE"
+    --handler-reply "$HANDLER"
+    --handler-mass "$MASS_HANDLER"
+    --handler-moment "$MOMENT_HANDLER"
+    --report-run
+    --report-failure
+  )
+  if [[ "$MODE" == "send" || "$RPA_PACKAGE_ACK" == "1" || "$RPA_PACKAGE_ACK" == "true" ]]; then
+    args+=(--ack)
+  fi
+  if [[ -n "$RPA_PACKAGE_SAVE_DIR" ]]; then
+    RPA_PACKAGE_SAVE_DIR="${RPA_PACKAGE_SAVE_DIR/#\~/$HOME}"
+    mkdir -p "$RPA_PACKAGE_SAVE_DIR"
+    args+=(--save-package-dir "$RPA_PACKAGE_SAVE_DIR")
+  fi
+  exec node "$CLIENT" "${args[@]}"
+}
+
+if [[ "$USE_RPA_PACKAGE" == "1" || "$USE_RPA_PACKAGE" == "true" || "$RUNNER_ENGINE" == "rpa-package" ]]; then
+  run_rpa_package_engine
+fi
 
 run_all() {
   local replies_file mass_file moments_file

@@ -18,6 +18,7 @@ body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
 material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
 rpa_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-package.XXXXXX.json")"
+rpa_cloud_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-cloud-package.XXXXXX.jsonl")"
 verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
 handler_error_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-handler-error.XXXXXX.log")"
 fake_osascript_log_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX.log")"
@@ -26,7 +27,7 @@ reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
   rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
@@ -326,6 +327,12 @@ if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MATERIAL_MAP_FILE="* ]
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_USE_RPA_PACKAGE="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_USE_RPA_PACKAGE" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+json_assert_path bridge.runnerGuide.commands.dryRunRpaPackageAll
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_BRIDGE_CAPABILITIES="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing WECOM_BRIDGE_CAPABILITIES" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -1582,6 +1589,65 @@ if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id and
     raise SystemExit("mass RPA package task was not handled")
 if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
     raise SystemExit("moment RPA package task was not handled")
+PY
+
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" run-cloud-rpa-package \
+    --target all \
+    --limit 20 \
+    --mode dry-run \
+    --handler-reply "$WECOM_REPLY_HANDLER" \
+    --handler-mass "$WECOM_MASS_HANDLER" \
+    --handler-moment "$WECOM_MOMENT_HANDLER" \
+    --save-package "$rpa_cloud_package_file" > "$body_file"
+  python3 - "$body_file" "$rpa_cloud_package_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
+import json
+import sys
+
+result_file, package_file, event_id, mass_job_id, moment_draft_id = sys.argv[1:6]
+with open(result_file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if payload.get("mode") != "dry-run":
+    raise SystemExit("cloud RPA runner should use dry-run mode")
+if payload.get("savedPackagePath") != package_file:
+    raise SystemExit("cloud RPA runner should save the pulled package")
+if payload.get("packageCounts", {}).get("total", 0) < 3:
+    raise SystemExit("cloud RPA package should contain at least three tasks")
+handled = payload.get("handled", [])
+if not any(item.get("target") == "reply" and item.get("id") == event_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
+    raise SystemExit("cloud reply RPA package task was not handled")
+if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
+    raise SystemExit("cloud mass RPA package task was not handled")
+if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id and item.get("action") == "dry-run" and item.get("ok") is True for item in handled):
+    raise SystemExit("cloud moment RPA package task was not handled")
+with open(package_file, "r", encoding="utf-8") as fh:
+    tasks = [json.loads(line) for line in fh if line.strip()]
+if not any(task.get("target") == "reply" and task.get("id") == event_id for task in tasks):
+    raise SystemExit("saved cloud RPA package missing reply task")
+if not any(task.get("target") == "mass" and task.get("jobId") == mass_job_id for task in tasks):
+    raise SystemExit("saved cloud RPA package missing mass task")
+if not any(task.get("target") == "moment" and task.get("draftId") == moment_draft_id for task in tasks):
+    raise SystemExit("saved cloud RPA package missing moment task")
+PY
+
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_USE_RPA_PACKAGE=1 WECOM_RPA_PACKAGE_SAVE_DIR="$(dirname "$rpa_cloud_package_file")" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
+  python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
+import json
+import sys
+
+file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+if payload.get("target") != "all":
+    raise SystemExit("RPA package runner should preserve all target")
+handled = payload.get("handled", [])
+if not any(item.get("target") == "reply" and item.get("id") == event_id for item in handled):
+    raise SystemExit("RPA package runner env mode missing reply")
+if not any(item.get("target") == "mass" and item.get("jobId") == mass_job_id for item in handled):
+    raise SystemExit("RPA package runner env mode missing mass")
+if not any(item.get("target") == "moment" and item.get("draftId") == moment_draft_id for item in handled):
+    raise SystemExit("RPA package runner env mode missing moment")
+if not payload.get("savedPackagePath"):
+    raise SystemExit("RPA package runner env mode should save a package copy")
 PY
 
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all "$WECOM_BRIDGE_RUNNER" run-once > "$body_file"
