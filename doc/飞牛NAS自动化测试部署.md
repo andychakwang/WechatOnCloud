@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r65-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r78-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,11 +9,46 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r65-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r65-2026-07-06`
-- 本版新增：Bridge 运行健康汇总接口 `GET /api/admin/automation/bridge-runs/summary`，Web「Mac Bridge」区域展示最近 24 小时运行次数、成功率、处理/失败量、RPA 包次数、预检阻断次数、worker 汇总和 Top 失败原因，便于 SaaS 运维排查 Mac/RPA 执行稳定性。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r78-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r78-2026-07-06`
+- 本版新增：Mac Bridge Runner 会把本机素材映射文件状态随心跳上报，Web「Mac Bridge」worker 列表和预检会直接显示 mapped/skipped/missing/invalid，便于判断朋友圈/群发图片素材是否已经能在 Mac 端落地。
 
-## 2026-07-06 运行验收
+## 2026-07-06 R78 更新验收
+
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板已通过飞牛 Docker socket helper 更新，公网入口返回 `200`。
+- `36081` 当前运行容器 `woc-panel-automation-test` 已在飞牛 Docker 容器详情中验证使用镜像：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r78-2026-07-06
+  ```
+
+- 飞牛 Docker Compose 项目 `woc-automation-test` 的 YAML 配置页已验证为 R78：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r78-2026-07-06
+  ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r78-2026-07-06
+  ```
+
+- 更新前 helper 会在项目目录内创建 `docker-compose.yml.bak-<timestamp>` 备份，再写入新 YAML。
+- 一次性 helper 容器 `woc-updater-...` 已在更新完成后删除，Docker 容器列表恢复为 27 个容器。
+- 本次辅助部署脚本已提交到 GitHub：
+
+  ```text
+  1db0bc9 Add fnOS Docker socket upgrade helper
+  ```
+
+- 本次公网入口检查：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  http://nasbot.cloud:36081/api/auth/me -> 401 {"error":"未登录"}
+  ```
+
+  其中 `/api/auth/me` 返回 401 属于未登录预期响应，说明后端 API 正常响应。
+
+## 2026-07-06 R65 初次运行验收（历史）
 
 - `36080` 原版面板保持不变，仍由 `woc-panel` 提供服务，镜像仍为 `ghcr.io/gloridust/woc-panel:1.1.7`。
 - `36081` 自动化测试面板已通过飞牛 Docker 项目 `woc-automation-test` 执行 `composeBuild` 重建。
@@ -184,6 +219,30 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 ```
 
 这个脚本只创建/更新测试项目 `woc-panel-automation-test`，不会改动现有 `36080` 生产面板。
+
+## 无 SSH 的 Docker socket helper 更新
+
+如果飞牛 NAS 的 SSH 无法免密登录，但 `woc-panel-automation-test` 仍能打开终端，可以在该容器终端里启动一次性 helper。helper 会通过挂载的 `/var/run/docker.sock`：
+
+- 读取当前测试容器配置，不读取生产容器。
+- 备份 `woc-automation-test` 项目目录下的 compose 文件。
+- 拉取目标 panel / wechat 镜像。
+- 重建 `woc-panel-automation-test`，保留原数据目录、端口、账号和环境变量。
+- 成功后删除旧备份容器；失败时回滚旧容器。
+
+推荐用提交哈希固定脚本来源：
+
+```bash
+WOC_VERSION=andy-automation-usable-r78-2026-07-06 \
+WOC_ALLOWED_HOSTS=nasbot.cloud \
+node /tmp/fnos-docker-socket-upgrade-container.mjs
+```
+
+也可以先从 GitHub 下载脚本到 `/tmp` 后再运行。脚本路径：
+
+```text
+scripts/fnos-docker-socket-upgrade-container.mjs
+```
 
 ## 部署入口检查
 
