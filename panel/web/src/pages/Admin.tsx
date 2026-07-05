@@ -2498,16 +2498,40 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <b>Mac Runner 接入</b>
                         <div className="muted small">
                           面板 <code>{bridgeGuide.panelUrl}</code> · 配置 <code>{bridgeGuide.configPath}</code>
+                          {bridgeGuide.branch ? (
+                            <>
+                              {' · 分支 '}
+                              <code>{bridgeGuide.branch}</code>
+                            </>
+                          ) : null}
                         </div>
                       </div>
-                      <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.writeEnv, '配置模板')}>
-                        复制配置
-                      </button>
+                      <div className="auto-actions inline">
+                        {bridgeGuide.commands.bootstrap && (
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.bootstrap!, '初始化脚本')}>
+                            初始化
+                          </button>
+                        )}
+                        <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.writeEnv, '配置模板')}>
+                          配置
+                        </button>
+                      </div>
                     </div>
                     <pre className="auto-code-block">
                       <code>{bridgeGuide.envFile}</code>
                     </pre>
                     <div className="bridge-command-list">
+                      {bridgeGuide.commands.bootstrap && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>初始化 Mac Runner</b>
+                            <code>{bridgeGuide.commands.bootstrap}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.bootstrap!, '初始化脚本')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
                       <div className="bridge-command-row">
                         <div>
                           <b>全队列 dry-run</b>

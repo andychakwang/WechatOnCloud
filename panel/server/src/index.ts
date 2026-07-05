@@ -247,6 +247,10 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
   const panelUrl = requestPublicOrigin(req) || 'http://nasbot.cloud:36081';
   const policy = getWecomBridgeRunnerPolicy();
   const configPath = '~/.config/wechat-on-cloud/wecom-bridge.env';
+  const configPathShell = '$HOME/.config/wechat-on-cloud/wecom-bridge.env';
+  const workspacePath = '$HOME/wechat-on-cloud-automation';
+  const repoUrl = 'https://github.com/andychakwang/WechatOnCloud.git';
+  const branch = 'andy/automation-lab';
   const materialMapPath = '$HOME/.config/wechat-on-cloud/wecom-materials.json';
   const materialMapCommandPath = '~/.config/wechat-on-cloud/wecom-materials.json';
   const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
@@ -274,9 +278,53 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_BRIDGE_INTERVAL_SEC=${shellSingle(String(policy.heartbeatIntervalSeconds))}`,
     `WECOM_BRIDGE_WORKER_ID=${shellSingle(defaultWorkerId)}`,
   ].join('\n');
+  const bootstrapScript = [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    '',
+    `repo_url=${shellSingle(repoUrl)}`,
+    `repo_branch=${shellSingle(branch)}`,
+    `workspace_dir="${workspacePath}"`,
+    `config_file="${configPathShell}"`,
+    '',
+    'need_cmd() {',
+    '  if ! command -v "$1" >/dev/null 2>&1; then',
+    '    echo "ERROR: missing required command: $1" >&2',
+    '    exit 1',
+    '  fi',
+    '}',
+    '',
+    'need_cmd git',
+    'need_cmd node',
+    '',
+    'mkdir -p "$(dirname "$config_file")"',
+    'mkdir -p "$(dirname "$workspace_dir")"',
+    '',
+    'if [[ -d "$workspace_dir/.git" ]]; then',
+    '  git -C "$workspace_dir" fetch --prune origin "$repo_branch"',
+    '  git -C "$workspace_dir" checkout "$repo_branch"',
+    '  git -C "$workspace_dir" pull --ff-only origin "$repo_branch"',
+    'else',
+    '  git clone --branch "$repo_branch" --depth 1 "$repo_url" "$workspace_dir"',
+    'fi',
+    '',
+    'cat > "$config_file" <<\'EOF\'',
+    envFile,
+    'EOF',
+    'chmod 600 "$config_file"',
+    '',
+    'cd "$workspace_dir"',
+    'echo "Wrote $config_file"',
+    'echo "Edit AUTOMATION_BRIDGE_TOKEN in $config_file, then run:"',
+    'echo "  scripts/wecom-bridge-runner.sh doctor"',
+    'echo "  scripts/wecom-bridge-runner.sh run-once"',
+  ].join('\n');
   return {
     panelUrl,
     configPath,
+    workspacePath,
+    repoUrl,
+    branch,
     tokenEnvName: 'AUTOMATION_BRIDGE_TOKEN',
     tokenPlaceholder,
     defaultWorkerId,
@@ -286,7 +334,9 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     modes: ['dry-run', 'prepare', 'send'],
     targets: ['replies', 'mass', 'moments', 'all'],
     envFile,
+    bootstrapScript,
     commands: {
+      bootstrap: `cat > /tmp/woc-mac-runner-bootstrap.sh <<'EOF'\n${bootstrapScript}\nEOF\nbash /tmp/woc-mac-runner-bootstrap.sh`,
       writeEnv: `mkdir -p ~/.config/wechat-on-cloud\ncat > ${configPath} <<'EOF'\n${envFile}\nEOF\nchmod 600 ${configPath}`,
       syncMaterialMap: `node scripts/wecom-bridge-client.mjs material-map --kind image --include-skipped 1 --output ${materialMapCommandPath}`,
       printConfig: 'scripts/wecom-bridge-runner.sh print-config',

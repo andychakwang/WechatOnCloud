@@ -321,9 +321,12 @@ json_assert_path report.summary.block
 json_assert_path report.checks[0].id
 request_json GET /api/admin/automation/bridge
 json_assert_path bridge.runnerGuide.envFile
+json_assert_path bridge.runnerGuide.bootstrapScript
 json_assert_path bridge.runnerGuide.commands.writeEnv
+json_assert_path bridge.runnerGuide.commands.bootstrap
 json_assert_path bridge.runnerGuide.commands.dryRunAll
 json_assert_path bridge.runnerGuide.commands.doctorReport
+json_assert_eq bridge.runnerGuide.branch andy/automation-lab
 json_assert_path bridge.audienceEndpoint
 json_assert_path bridge.materialEndpoint
 json_assert_path bridge.materialMapEndpoint
@@ -333,6 +336,16 @@ json_assert_path bridge.runnerGuide.commands.syncMaterialMap
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.bootstrapScript)" != *"git clone"* || "$(json_get bridge.runnerGuide.bootstrapScript)" != *"scripts/wecom-bridge-runner.sh doctor"* ]]; then
+  echo "ERROR: Bridge runner guide bootstrap script is missing clone or doctor steps" >&2
+  sed -n '1,160p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.bootstrap)" != *"/tmp/woc-mac-runner-bootstrap.sh"* ]]; then
+  echo "ERROR: Bridge runner guide bootstrap command is missing temp script handoff" >&2
+  sed -n '1,160p' "$body_file" >&2
   exit 1
 fi
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MATERIAL_MAP_FILE="* ]]; then

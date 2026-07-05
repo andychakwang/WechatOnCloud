@@ -547,6 +547,9 @@ export interface WecomBridgeRunnerPolicy {
 export interface AutomationBridgeRunnerGuide {
   panelUrl: string;
   configPath: string;
+  workspacePath?: string;
+  repoUrl?: string;
+  branch?: string;
   tokenEnvName: string;
   tokenPlaceholder: string;
   defaultWorkerId: string;
@@ -556,7 +559,9 @@ export interface AutomationBridgeRunnerGuide {
   modes: string[];
   targets: string[];
   envFile: string;
+  bootstrapScript?: string;
   commands: {
+    bootstrap?: string;
     writeEnv: string;
     syncMaterialMap?: string;
     printConfig: string;
