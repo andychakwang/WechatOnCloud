@@ -494,6 +494,7 @@ app.post('/api/admin/automation/bridge-recovery', async (req, reply) => {
     const filters = [
       result.workerId ? `worker=${result.workerId}` : '',
       result.failureReason ? `原因=${result.failureReason}` : '',
+      result.minFailedAgeSeconds > 0 ? `失败冷却>=${result.minFailedAgeSeconds}s` : '',
       result.cursor ? 'cursor=继续' : '',
       result.hasMore ? 'hasMore=1' : '',
     ].filter(Boolean);

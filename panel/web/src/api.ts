@@ -251,6 +251,7 @@ export interface AutomationBridgeRecoveryChange {
   reason?: string;
   workerId?: string;
   error?: string;
+  failedAt?: string;
   cursor?: string;
 }
 
@@ -261,6 +262,7 @@ export interface AutomationBridgeRecoveryResult {
   retryFailed: boolean;
   workerId?: string;
   failureReason?: string;
+  minFailedAgeSeconds: number;
   cursor?: string;
   nextCursor?: string;
   hasMore: boolean;
@@ -564,6 +566,7 @@ export interface MassSendItem {
   bridgeClaimedAt?: string;
   bridgeClaimedBy?: string;
   bridgeClaimExpiresAt?: string;
+  bridgeFailedAt?: string;
   bridgeFailedBy?: string;
 }
 
@@ -707,6 +710,7 @@ export const api = {
     includeMoments?: boolean;
     workerId?: string;
     failureReason?: string;
+    minFailedAgeSeconds?: number;
     cursor?: string;
     limit?: number;
   }) =>
