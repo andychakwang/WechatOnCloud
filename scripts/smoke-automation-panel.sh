@@ -177,7 +177,10 @@ import sys
 file, task_id = sys.argv[1], sys.argv[2]
 with open(file, "r", encoding="utf-8") as fh:
     payload = json.load(fh)
-for task in payload.get("tasks", []):
+tasks = payload.get("tasks")
+if tasks is None and isinstance(payload.get("package"), dict):
+    tasks = payload["package"].get("tasks", [])
+for task in tasks or []:
     if task.get("id") == task_id:
         raise SystemExit(f"task {task_id} should not be listed")
 PY
@@ -192,7 +195,10 @@ import sys
 file, task_id = sys.argv[1], sys.argv[2]
 with open(file, "r", encoding="utf-8") as fh:
     payload = json.load(fh)
-for task in payload.get("tasks", []):
+tasks = payload.get("tasks")
+if tasks is None and isinstance(payload.get("package"), dict):
+    tasks = payload["package"].get("tasks", [])
+for task in tasks or []:
     if task.get("id") == task_id:
         raise SystemExit(0)
 raise SystemExit(f"task {task_id} should be listed")
@@ -1364,6 +1370,79 @@ PY
 )"
   request_json PUT /api/admin/automation/config "$mass_config_payload"
   json_assert_path config.settings.massSendEnabled
+
+  say "Check scheduled mass and moment tasks wait until due"
+  scheduled_mass_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-scheduled-mass-{stamp}",
+    "message": "scheduled mass message",
+    "scheduledAt": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    "recipients": [f"Smoke Scheduled Contact {stamp}"],
+    "options": {
+        "perSendDelaySeconds": 0,
+        "requireOperatorConfirmRecipient": True,
+        "openConversationBeforeSend": False,
+    },
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/mass-jobs "$scheduled_mass_payload"
+  scheduled_mass_job_id="$(json_get job.id)"
+  scheduled_mass_item_id="$(json_get job.items[0].id)"
+  scheduled_mass_task_id="$scheduled_mass_job_id:$scheduled_mass_item_id"
+  request_json PATCH "/api/admin/automation/mass-jobs/$scheduled_mass_job_id" '{"approved":true,"status":"queued"}'
+
+  scheduled_moment_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "title": f"smoke-scheduled-moment-{stamp}",
+    "text": "scheduled moment text",
+    "scheduledAt": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+}, ensure_ascii=False))
+PY
+)"
+  request_json POST /api/admin/automation/moment-drafts "$scheduled_moment_payload"
+  scheduled_moment_id="$(json_get draft.id)"
+  request_json PATCH "/api/admin/automation/moment-drafts/$scheduled_moment_id" '{"approved":true,"status":"ready"}'
+
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 50 > "$body_file"
+  json_assert_no_task_id "$scheduled_mass_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 50 > "$body_file"
+  json_assert_no_task_id "$scheduled_moment_id"
+  request_json GET "/api/admin/automation/rpa-package?target=all&limit=50&format=json"
+  json_assert_no_task_id "$scheduled_mass_task_id"
+  json_assert_no_task_id "$scheduled_moment_id"
+  request_json GET /api/admin/automation/preflight
+  json_assert_check_id mass_scheduled_waiting ok
+  json_assert_check_id moments_scheduled_waiting ok
+
+  scheduled_due_payload="$(python3 <<'PY'
+import json
+from datetime import datetime, timedelta, timezone
+
+print(json.dumps({"scheduledAt": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}))
+PY
+)"
+  request_json PATCH "/api/admin/automation/mass-jobs/$scheduled_mass_job_id" "$scheduled_due_payload"
+  request_json PATCH "/api/admin/automation/moment-drafts/$scheduled_moment_id" "$scheduled_due_payload"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 50 > "$body_file"
+  json_assert_task_id "$scheduled_mass_task_id"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 50 > "$body_file"
+  json_assert_task_id "$scheduled_moment_id"
+  request_json GET "/api/admin/automation/rpa-package?target=all&limit=50&format=json"
+  json_assert_task_id "$scheduled_mass_task_id"
+  json_assert_task_id "$scheduled_moment_id"
+  request_json PATCH "/api/admin/automation/mass-jobs/$scheduled_mass_job_id" '{"status":"cancelled","approved":false}'
+  request_json PATCH "/api/admin/automation/moment-drafts/$scheduled_moment_id" '{"status":"archived","approved":false}'
 
   say "Apply WeCom Bridge run-report delivery callbacks"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" heartbeat --worker-id smoke-report-worker --mode send > "$body_file"

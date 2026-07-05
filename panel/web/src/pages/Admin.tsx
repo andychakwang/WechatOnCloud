@@ -74,6 +74,24 @@ function isPastIso(value?: string): boolean {
   const ms = Date.parse(value);
   return Number.isFinite(ms) && ms <= Date.now();
 }
+function isScheduleWaiting(value?: string): boolean {
+  if (!value) return false;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && ms > Date.now();
+}
+function localDatetimeFromIso(value?: string): string {
+  if (!value) return '';
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const p = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function isoFromLocalDatetime(value: string): string | undefined {
+  if (!value.trim()) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
 
 const MenuIcon = (
   <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -508,6 +526,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [massTitle, setMassTitle] = useState('');
   const [massRecipients, setMassRecipients] = useState('');
   const [massMessage, setMassMessage] = useState('');
+  const [massScheduledAt, setMassScheduledAt] = useState('');
   const [massDelay, setMassDelay] = useState('10');
   const [massAutoOpen, setMassAutoOpen] = useState(true);
   const [massSearchShortcut, setMassSearchShortcut] = useState('ctrl+f');
@@ -525,6 +544,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [momentText, setMomentText] = useState('');
   const [momentImageNotes, setMomentImageNotes] = useState('');
   const [momentMaterials, setMomentMaterials] = useState('');
+  const [momentScheduledAt, setMomentScheduledAt] = useState('');
 
   const [knowledgeSource, setKnowledgeSource] = useState('wecom-mac');
   const [knowledgeCategory, setKnowledgeCategory] = useState<AutomationKnowledgeCategory>('faq');
@@ -1287,6 +1307,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         title: massTitle.trim() || `群发队列 ${new Date().toLocaleString()}`,
         message: massMessage,
         recipients,
+        scheduledAt: isoFromLocalDatetime(massScheduledAt),
         options: {
           perSendDelaySeconds: Number(massDelay) || 0,
           requireOperatorConfirmRecipient: true,
@@ -1300,6 +1321,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setMassTitle('');
       setMassRecipients('');
       setMassMessage('');
+      setMassScheduledAt('');
       toast('群发队列已创建，审核后可逐条发送', 'ok');
       await loadAutomation();
     } catch (e: any) {
@@ -1315,6 +1337,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       const { job, selection } = await api.createMassSendJobFromAudience({
         title: massTitle.trim() || `受众群发 ${new Date().toLocaleString()}`,
         message: massMessage,
+        scheduledAt: isoFromLocalDatetime(massScheduledAt),
         audienceFilter: {
           query: massAudienceQuery.trim(),
           tag: massAudienceTag.trim(),
@@ -1335,6 +1358,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setJobs((list) => [job, ...list]);
       setMassTitle('');
       setMassMessage('');
+      setMassScheduledAt('');
       toast(`已从受众创建 ${selection.selected} 个目标的群发队列`, 'ok');
       await loadAutomation();
     } catch (e: any) {
@@ -1428,12 +1452,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         text: momentText,
         imageNotes: momentImageNotes,
         materials: linesOf(momentMaterials),
+        scheduledAt: isoFromLocalDatetime(momentScheduledAt),
       });
       setDrafts((list) => [draft, ...list]);
       setMomentTitle('');
       setMomentText('');
       setMomentImageNotes('');
       setMomentMaterials('');
+      setMomentScheduledAt('');
       toast('朋友圈草稿已创建，审核后可填入发布框', 'ok');
       await loadAutomation();
     } catch (e: any) {
@@ -1556,7 +1582,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </div>
               <div className="auto-overview-metric">{overview.mass.itemsPending}</div>
               <div className="muted small">
-                待发送目标 · 已发 {overview.mass.itemsSent} · 失败 {overview.mass.itemsFailed}
+                待发送目标 · 排期 {overview.mass.scheduledJobs} · 已发 {overview.mass.itemsSent} · 失败 {overview.mass.itemsFailed}
               </div>
             </div>
             <div className="auto-overview-card">
@@ -1566,7 +1592,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </div>
               <div className="auto-overview-metric">{overview.bridge.pendingMomentTasks}</div>
               <div className="muted small">
-                待准备 · 已准备 {overview.moments.prepared} · 已发布 {overview.moments.published}
+                待准备 · 排期 {overview.moments.scheduledReady} · 已准备 {overview.moments.prepared} · 已发布 {overview.moments.published}
               </div>
             </div>
             <div className="auto-overview-card">
@@ -2734,6 +2760,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <input className="input" placeholder="队列名称" value={massTitle} onChange={(e) => setMassTitle(e.target.value)} />
             <textarea className="input textarea tall" placeholder="群发内容" value={massMessage} onChange={(e) => setMassMessage(e.target.value)} />
             <textarea className="input textarea" placeholder="联系人或群聊名，一行一个" value={massRecipients} onChange={(e) => setMassRecipients(e.target.value)} />
+            <label className="auto-field">
+              <span className="field-label">计划开始时间</span>
+              <input className="input" type="datetime-local" value={massScheduledAt} onChange={(e) => setMassScheduledAt(e.target.value)} />
+            </label>
             <div className="auto-grid two compact">
               <input className="input" placeholder="受众关键词" value={massAudienceQuery} onChange={(e) => setMassAudienceQuery(e.target.value)} />
               <input className="input" placeholder="受众标签" value={massAudienceTag} onChange={(e) => setMassAudienceTag(e.target.value)} />
@@ -2787,17 +2817,24 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     <div className="muted small">
                       {AUTO_STATUS_LABEL[job.status] || job.status} · {jobProgress(job)} · {job.options.openConversationBeforeSend ? '自动搜索' : '当前会话'} · 下一位{' '}
                       {nextMassTarget(job) || '无'}
+                      {job.scheduledAt ? ` · 计划 ${localDatetimeFromIso(job.scheduledAt).replace('T', ' ')}` : ''}
                     </div>
                   </div>
                   <div className="auto-actions">
+                    {isScheduleWaiting(job.scheduledAt) && <span className="tag tag-warn">等待计划</span>}
                     {!job.approved && (
                       <button className="btn-text" disabled={busy === `job-${job.id}`} onClick={() => patchJob(job, { approved: true, status: 'queued' })}>
                         审核
                       </button>
                     )}
-                    <button className="btn-text" disabled={!job.approved || busy === `send-${job.id}` || !nextMassTarget(job)} onClick={() => sendNextJobItem(job)}>
+                    <button className="btn-text" disabled={!job.approved || isScheduleWaiting(job.scheduledAt) || busy === `send-${job.id}` || !nextMassTarget(job)} onClick={() => sendNextJobItem(job)}>
                       发下一条
                     </button>
+                    {isScheduleWaiting(job.scheduledAt) && (
+                      <button className="btn-text" disabled={busy === `job-${job.id}`} onClick={() => patchJob(job, { scheduledAt: '' })}>
+                        立即执行
+                      </button>
+                    )}
                     {job.status !== 'cancelled' && job.status !== 'completed' && (
                       <button className="btn-text danger" disabled={busy === `job-${job.id}`} onClick={() => patchJob(job, { status: 'cancelled' })}>
                         取消
@@ -2854,6 +2891,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <textarea className="input textarea tall" placeholder="朋友圈正文" value={momentText} onChange={(e) => setMomentText(e.target.value)} />
             <textarea className="input textarea" placeholder="图片/素材说明" value={momentImageNotes} onChange={(e) => setMomentImageNotes(e.target.value)} />
             <textarea className="input textarea" placeholder="素材文件名或链接，一行一个" value={momentMaterials} onChange={(e) => setMomentMaterials(e.target.value)} />
+            <label className="auto-field">
+              <span className="field-label">计划准备时间</span>
+              <input className="input" type="datetime-local" value={momentScheduledAt} onChange={(e) => setMomentScheduledAt(e.target.value)} />
+            </label>
             <button className="btn btn-primary s-btn" disabled={busy === 'moment-create' || !momentText.trim()} onClick={createMoment}>
               保存朋友圈草稿
             </button>
@@ -2864,22 +2905,29 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     <b>{draft.title}</b>
                     <div className="muted small">
                       {AUTO_STATUS_LABEL[draft.status] || draft.status} · {draft.approved ? '已审核' : '未审核'}
+                      {draft.scheduledAt ? ` · 计划 ${localDatetimeFromIso(draft.scheduledAt).replace('T', ' ')}` : ''}
                       {draft.bridgeClaimedBy ? ` · ${draft.bridgeClaimedBy} 已领取` : ''}
                       {draft.bridgeError ? ` · ${draft.bridgeError}` : ''}
                     </div>
                   </div>
                   <div className="auto-actions">
+                    {isScheduleWaiting(draft.scheduledAt) && <span className="tag tag-warn">等待计划</span>}
                     {!draft.approved && (
                       <button className="btn-text" disabled={busy === `draft-${draft.id}`} onClick={() => patchDraft(draft, { approved: true, status: 'ready' })}>
                         审核
                       </button>
                     )}
-                    <button className="btn-text" disabled={!draft.approved || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft, 'copy-to-clipboard')}>
+                    <button className="btn-text" disabled={!draft.approved || isScheduleWaiting(draft.scheduledAt) || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft, 'copy-to-clipboard')}>
                       复制
                     </button>
-                    <button className="btn-text" disabled={!draft.approved || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft, 'fill-current-input')}>
+                    <button className="btn-text" disabled={!draft.approved || isScheduleWaiting(draft.scheduledAt) || busy === `prepare-${draft.id}`} onClick={() => prepareDraft(draft, 'fill-current-input')}>
                       填入
                     </button>
+                    {isScheduleWaiting(draft.scheduledAt) && (
+                      <button className="btn-text" disabled={busy === `draft-${draft.id}`} onClick={() => patchDraft(draft, { scheduledAt: '' })}>
+                        立即准备
+                      </button>
+                    )}
                     {draft.status !== 'published' && (
                       <button className="btn-text" disabled={busy === `draft-${draft.id}`} onClick={() => patchDraft(draft, { status: 'published' })}>
                         标记发布

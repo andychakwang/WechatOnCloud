@@ -517,6 +517,7 @@ export interface AutomationOverview {
     completed: number;
     cancelled: number;
     approvedRunnableJobs: number;
+    scheduledJobs: number;
     itemsPending: number;
     itemsSent: number;
     itemsFailed: number;
@@ -531,6 +532,7 @@ export interface AutomationOverview {
     published: number;
     archived: number;
     approvedReady: number;
+    scheduledReady: number;
     bridgeClaimedDrafts: number;
     bridgeFailedDrafts: number;
   };
@@ -666,6 +668,7 @@ export interface MassSendJob {
   message: string;
   status: MassSendJobStatus;
   approved: boolean;
+  scheduledAt?: string;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -681,6 +684,7 @@ export interface WecomBridgeMassSendTask {
   recipientName: string;
   message: string;
   options: MassSendJobOptions;
+  scheduledAt?: string;
   claimedAt?: string;
   claimedBy?: string;
   claimExpiresAt?: string;
@@ -696,6 +700,7 @@ export interface MomentDraft {
   materials: string[];
   status: MomentDraftStatus;
   approved: boolean;
+  scheduledAt?: string;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -718,6 +723,7 @@ export interface WecomBridgeMomentTask {
   imageNotes: string;
   materials: string[];
   status: MomentDraftStatus;
+  scheduledAt?: string;
   claimedAt?: string;
   claimedBy?: string;
   claimExpiresAt?: string;
@@ -754,6 +760,7 @@ export interface WecomRpaTask {
   imageNotes?: string;
   materials?: string[];
   materialCount?: number;
+  scheduledAt?: string;
   sourceTask?: unknown;
 }
 
@@ -976,7 +983,7 @@ export function getAutomationOverview(): AutomationOverview {
     (event) => event.replyApproved && hasRunnableBridgeReply(event) && !!event.replyClaimedAt && !isBridgeReplyClaimExpired(event, nowIso) && !event.replyDeliveredAt,
   ).length;
   const pendingMassTasks = data.massSendJobs.reduce((sum, job) => {
-    if (!isMassJobBridgeRunnable(job)) return sum;
+    if (!isMassJobBridgeRunnable(job, nowIso)) return sum;
     return (
       sum +
       job.items.filter((item) => item.status === 'pending' && (!item.bridgeClaimedAt || isMassItemBridgeClaimExpired(item, nowIso))).length
@@ -987,7 +994,7 @@ export function getAutomationOverview(): AutomationOverview {
     0,
   );
   const pendingMomentTasks = data.momentDrafts.filter(
-    (draft) => isMomentDraftBridgeRunnable(draft) && (!draft.bridgeClaimedAt || isMomentDraftBridgeClaimExpired(draft, nowIso)),
+    (draft) => isMomentDraftBridgeRunnable(draft, nowIso) && (!draft.bridgeClaimedAt || isMomentDraftBridgeClaimExpired(draft, nowIso)),
   ).length;
   const claimedMomentTasks = data.momentDrafts.filter(
     (draft) => draft.status === 'ready' && !!draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, nowIso),
@@ -1074,7 +1081,8 @@ export function getAutomationOverview(): AutomationOverview {
       paused: data.massSendJobs.filter((job) => job.status === 'paused').length,
       completed: data.massSendJobs.filter((job) => job.status === 'completed').length,
       cancelled: data.massSendJobs.filter((job) => job.status === 'cancelled').length,
-      approvedRunnableJobs: data.massSendJobs.filter(isMassJobBridgeRunnable).length,
+      approvedRunnableJobs: data.massSendJobs.filter((job) => isMassJobBridgeRunnable(job, nowIso)).length,
+      scheduledJobs: data.massSendJobs.filter((job) => isMassJobWaitingForSchedule(job, nowIso)).length,
       itemsPending: massItems.filter((item) => item.status === 'pending').length,
       itemsSent: massItems.filter((item) => item.status === 'sent').length,
       itemsFailed: massItems.filter((item) => item.status === 'failed').length,
@@ -1088,7 +1096,8 @@ export function getAutomationOverview(): AutomationOverview {
       prepared: data.momentDrafts.filter((draft) => draft.status === 'prepared').length,
       published: data.momentDrafts.filter((draft) => draft.status === 'published').length,
       archived: data.momentDrafts.filter((draft) => draft.status === 'archived').length,
-      approvedReady: data.momentDrafts.filter(isMomentDraftBridgeRunnable).length,
+      approvedReady: data.momentDrafts.filter((draft) => isMomentDraftBridgeRunnable(draft, nowIso)).length,
+      scheduledReady: data.momentDrafts.filter((draft) => isMomentDraftWaitingForSchedule(draft, nowIso)).length,
       bridgeClaimedDrafts: claimedMomentTasks,
       bridgeFailedDrafts: data.momentDrafts.filter((draft) => !!draft.bridgeFailedAt).length,
     },
@@ -1109,8 +1118,8 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
   const runnableRuleCount = enabledApprovedRules.filter(hasRunnableSteps).length;
   const pendingTotal = overview.bridge.pendingReplies + overview.bridge.pendingMassTasks + overview.bridge.pendingMomentTasks;
   const bridgeWorkers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
-  const runnableMassJobs = data.massSendJobs.filter(isMassJobBridgeRunnable);
-  const readyMomentDrafts = data.momentDrafts.filter((draft) => draft.approved && draft.status === 'ready' && !!draft.text.trim());
+  const runnableMassJobs = data.massSendJobs.filter((job) => isMassJobBridgeRunnable(job, nowIso));
+  const readyMomentDrafts = data.momentDrafts.filter((draft) => isMomentDraftBridgeRunnable(draft, nowIso));
   const add = (check: AutomationPreflightCheck) => checks.push(check);
 
   if (data.settings.enabled) {
@@ -1203,6 +1212,16 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
     });
   }
 
+  if (overview.mass.scheduledJobs > 0) {
+    add({
+      id: 'mass_scheduled_waiting',
+      level: 'ok',
+      title: '群发队列等待计划时间',
+      message: `${overview.mass.scheduledJobs} 个已审核群发队列尚未到计划时间，暂不会被 Bridge/RPA 拉取。`,
+      count: overview.mass.scheduledJobs,
+    });
+  }
+
   if (!data.settings.momentsEnabled && readyMomentDrafts.length > 0) {
     add({
       id: 'moments_off',
@@ -1212,6 +1231,16 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
       count: readyMomentDrafts.length,
       refs: readyMomentDrafts.slice(0, 8).map((draft) => draft.title),
       action: '确认草稿后开启“朋友圈半自动”。',
+    });
+  }
+
+  if (overview.moments.scheduledReady > 0) {
+    add({
+      id: 'moments_scheduled_waiting',
+      level: 'ok',
+      title: '朋友圈草稿等待计划时间',
+      message: `${overview.moments.scheduledReady} 个已审核朋友圈草稿尚未到计划时间，暂不会被 Bridge/RPA 拉取。`,
+      count: overview.moments.scheduledReady,
     });
   }
 
@@ -1544,7 +1573,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   if (data.settings.enabled && data.settings.massSendEnabled) {
     for (const job of data.massSendJobs) {
       if (massTasks.length >= rpaScanLimit) break;
-      if (!isMassJobBridgeRunnable(job)) continue;
+      if (!isMassJobBridgeRunnable(job, generatedAt)) continue;
       const item = job.items.find((candidate) => candidate.status === 'pending');
       if (!item || (item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, generatedAt))) continue;
       try {
@@ -3525,6 +3554,9 @@ export function patchMassSendJob(actor: User, jobId: string, raw: any): MassSend
   if (!job) throw new Error('群发队列不存在');
   const now = new Date().toISOString();
   if (typeof raw?.approved === 'boolean') job.approved = raw.approved;
+  if (Object.prototype.hasOwnProperty.call(raw ?? {}, 'scheduledAt')) {
+    job.scheduledAt = normalizeOptionalIsoDate(raw.scheduledAt);
+  }
   if (typeof raw?.title === 'string') job.title = str(raw.title, 80).trim() || job.title;
   if (typeof raw?.message === 'string') {
     const msg = str(raw.message, 2000).trim();
@@ -3589,7 +3621,7 @@ export function listApprovedWecomBridgeMassTasks(limit = 50): WecomBridgeMassSen
   const tasks: WecomBridgeMassSendTask[] = [];
   for (const job of data.massSendJobs) {
     if (tasks.length >= n) break;
-    if (!isMassJobBridgeRunnable(job)) continue;
+    if (!isMassJobBridgeRunnable(job, now)) continue;
     const item = job.items.find((candidate) => candidate.status === 'pending');
     if (!item) {
       refreshMassJobCompletion(job);
@@ -3622,8 +3654,8 @@ export function patchWecomBridgeMassTaskDelivery(
   if (!item) throw new Error('群发目标不存在');
   const deliveryStatus = normalizeBridgeMassDeliveryStatus(raw?.deliveryStatus ?? raw?.status);
   if (!deliveryStatus) throw new Error('Bridge 群发任务状态不合法');
-  if (!isMassJobBridgeRunnable(job) && deliveryStatus !== 'released') throw new Error('群发队列当前不可执行');
   const now = new Date().toISOString();
+  if (!isMassJobBridgeRunnable(job, now) && deliveryStatus !== 'released') throw new Error('群发队列当前不可执行或尚未到计划时间');
   const workerId = str(raw?.workerId ?? raw?.replyClaimedBy ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
 
   if (deliveryStatus === 'claimed') {
@@ -3665,7 +3697,7 @@ export function patchWecomBridgeMassTaskDelivery(
     }
     job.updatedAt = now;
     persist();
-    return { task: item.status === 'pending' ? massTaskFrom(job, item) : undefined, job: cloneMassSendJob(job), item: { ...item } };
+    return { task: item.status === 'pending' && isMassJobBridgeRunnable(job, now) ? massTaskFrom(job, item) : undefined, job: cloneMassSendJob(job), item: { ...item } };
   }
 
   if (deliveryStatus === 'failed') {
@@ -3762,6 +3794,13 @@ export function patchMomentDraft(actor: User, draftId: string, raw: any): Moment
     draft.approved = raw.approved;
     shouldClearBridgeState = true;
   }
+  if (Object.prototype.hasOwnProperty.call(raw ?? {}, 'scheduledAt')) {
+    const scheduledAt = normalizeOptionalIsoDate(raw.scheduledAt);
+    if (scheduledAt !== draft.scheduledAt) {
+      draft.scheduledAt = scheduledAt;
+      shouldClearBridgeState = true;
+    }
+  }
   if (typeof raw?.title === 'string') {
     const title = str(raw.title, 80).trim() || draft.title;
     if (title !== draft.title) {
@@ -3818,7 +3857,7 @@ export function listApprovedWecomBridgeMomentTasks(limit = 50): WecomBridgeMomen
   const tasks: WecomBridgeMomentTask[] = [];
   for (const draft of data.momentDrafts) {
     if (tasks.length >= n) break;
-    if (!isMomentDraftBridgeRunnable(draft)) continue;
+    if (!isMomentDraftBridgeRunnable(draft, now)) continue;
     if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, now)) continue;
     const risk = assessRisk([draft.text, draft.imageNotes]);
     if (risk.level !== 'normal') continue;
@@ -3842,7 +3881,7 @@ export function patchWecomBridgeMomentTaskDelivery(
   const workerId = str(raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
 
   if (deliveryStatus === 'claimed') {
-    if (!isMomentDraftBridgeRunnable(draft)) throw new Error('朋友圈草稿当前不可领取');
+    if (!isMomentDraftBridgeRunnable(draft, now)) throw new Error('朋友圈草稿当前不可领取或尚未到计划时间');
     if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, now) && draft.bridgeClaimedBy && draft.bridgeClaimedBy !== workerId) {
       throw new Error(`朋友圈草稿已由 ${draft.bridgeClaimedBy} 领取，未超时前不能重复领取`);
     }
@@ -3866,7 +3905,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     clearMomentBridgeClaim(draft);
     draft.updatedAt = now;
     persist();
-    return { task: isMomentDraftBridgeRunnable(draft) ? momentTaskFrom(draft) : undefined, draft: cloneMomentDraft(draft) };
+    return { task: isMomentDraftBridgeRunnable(draft, now) ? momentTaskFrom(draft) : undefined, draft: cloneMomentDraft(draft) };
   }
 
   if (deliveryStatus === 'failed') {
@@ -4182,6 +4221,7 @@ export async function sendNextMassSendItem(
   if (job.status === 'cancelled') throw new Error('群发队列已取消');
   if (job.status === 'completed') throw new Error('群发队列已完成');
   if (job.status === 'paused') throw new Error('群发队列已暂停');
+  if (!isScheduleDue(job.scheduledAt)) throw new Error(`群发队列计划在 ${job.scheduledAt} 后执行`);
   const pending = job.items.find((item) => item.status === 'pending');
   if (!pending) {
     job.status = 'completed';
@@ -4294,6 +4334,7 @@ export async function prepareMomentDraft(
   if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能填入发布框');
   if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
   if (draft.status === 'published') throw new Error('朋友圈草稿已标记发布');
+  if (!isScheduleDue(draft.scheduledAt)) throw new Error(`朋友圈草稿计划在 ${draft.scheduledAt} 后准备`);
   if (draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft)) {
     throw new Error(`朋友圈草稿已由 ${draft.bridgeClaimedBy || 'Mac Bridge'} 领取，未超时前不能从 Web 重复准备`);
   }
@@ -4999,6 +5040,7 @@ function normalizeMassSendJob(raw: any, preserveIds: boolean, now: string): Mass
     message: str(raw?.message, 2000).trim(),
     status: normalizeMassSendJobStatus(raw?.status) || 'draft',
     approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    scheduledAt: normalizeOptionalIsoDate(raw?.scheduledAt ?? raw?.scheduleAt ?? raw?.availableAt ?? raw?.runAfter),
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
     createdBy: str(raw?.createdBy, 80) || 'system',
@@ -5047,6 +5089,7 @@ function normalizeMomentDraft(raw: any, preserveIds: boolean, now: string): Mome
     materials: normalizeMaterials(raw?.materials),
     status: normalizeMomentDraftStatus(raw?.status) || 'draft',
     approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    scheduledAt: normalizeOptionalIsoDate(raw?.scheduledAt ?? raw?.scheduleAt ?? raw?.availableAt ?? raw?.publishAfter),
     createdAt,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
     createdBy: str(raw?.createdBy, 80) || 'system',
@@ -5663,6 +5706,7 @@ function buildWecomRpaTask(
       jobId: mass.jobId,
       itemId: mass.itemId,
       jobTitle: str(mass.jobTitle, 120).trim(),
+      scheduledAt: mass.scheduledAt,
       text,
       textChars: rpaTextLength(text),
       requiresOperatorReview: true,
@@ -5680,6 +5724,7 @@ function buildWecomRpaTask(
     expectedName: str(moment.title || moment.id, 120).trim(),
     draftId: moment.draftId || moment.id,
     title: str(moment.title, 120).trim(),
+    scheduledAt: moment.scheduledAt,
     text,
     textChars: rpaTextLength(text),
     imageNotes: str(moment.imageNotes, 2000).trim(),
@@ -5721,8 +5766,19 @@ function ensureBridgeMomentTaskEnabled() {
   if (!data.settings.momentsEnabled) throw new Error('朋友圈半自动开关未开启');
 }
 
-function isMassJobBridgeRunnable(job: MassSendJob): boolean {
-  return job.approved && (job.status === 'queued' || job.status === 'running') && !!job.message.trim();
+function isScheduleDue(scheduledAt: string | undefined, nowIso = new Date().toISOString()): boolean {
+  if (!scheduledAt) return true;
+  const scheduledMs = Date.parse(scheduledAt);
+  const nowMs = Date.parse(nowIso);
+  return Number.isFinite(scheduledMs) && Number.isFinite(nowMs) && scheduledMs <= nowMs;
+}
+
+function isMassJobWaitingForSchedule(job: MassSendJob, nowIso = new Date().toISOString()): boolean {
+  return job.approved && (job.status === 'queued' || job.status === 'running') && !!job.message.trim() && !isScheduleDue(job.scheduledAt, nowIso);
+}
+
+function isMassJobBridgeRunnable(job: MassSendJob, nowIso = new Date().toISOString()): boolean {
+  return job.approved && (job.status === 'queued' || job.status === 'running') && !!job.message.trim() && isScheduleDue(job.scheduledAt, nowIso);
 }
 
 function isMassItemBridgeClaimExpired(item: MassSendItem, nowIso = new Date().toISOString()): boolean {
@@ -5742,6 +5798,7 @@ function massTaskFrom(job: MassSendJob, item: MassSendItem): WecomBridgeMassSend
     recipientName: item.recipientName,
     message: job.message,
     options: { ...job.options },
+    scheduledAt: job.scheduledAt,
     claimedAt: item.bridgeClaimedAt,
     claimedBy: item.bridgeClaimedBy,
     claimExpiresAt: item.bridgeClaimExpiresAt,
@@ -5755,8 +5812,12 @@ function parseMassTaskId(taskId: string): { jobId: string; itemId: string } {
   return { jobId: raw.slice(0, index), itemId: raw.slice(index + 1) };
 }
 
-function isMomentDraftBridgeRunnable(draft: MomentDraft): boolean {
-  return draft.approved && draft.status === 'ready' && !!draft.text.trim() && !draft.bridgeFailedAt;
+function isMomentDraftWaitingForSchedule(draft: MomentDraft, nowIso = new Date().toISOString()): boolean {
+  return draft.approved && draft.status === 'ready' && !!draft.text.trim() && !draft.bridgeFailedAt && !isScheduleDue(draft.scheduledAt, nowIso);
+}
+
+function isMomentDraftBridgeRunnable(draft: MomentDraft, nowIso = new Date().toISOString()): boolean {
+  return draft.approved && draft.status === 'ready' && !!draft.text.trim() && !draft.bridgeFailedAt && isScheduleDue(draft.scheduledAt, nowIso);
 }
 
 function isMomentDraftBridgeClaimExpired(draft: MomentDraft, nowIso = new Date().toISOString()): boolean {
@@ -5776,6 +5837,7 @@ function momentTaskFrom(draft: MomentDraft): WecomBridgeMomentTask {
     imageNotes: draft.imageNotes,
     materials: [...draft.materials],
     status: draft.status,
+    scheduledAt: draft.scheduledAt,
     claimedAt: draft.bridgeClaimedAt,
     claimedBy: draft.bridgeClaimedBy,
     claimExpiresAt: draft.bridgeClaimExpiresAt,
@@ -6391,6 +6453,12 @@ function normalizeIsoDate(value: unknown, fallback: string): string {
     if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
   }
   return fallback;
+}
+
+function normalizeOptionalIsoDate(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const normalized = normalizeIsoDate(value, '');
+  return normalized || undefined;
 }
 
 function normalizeMaterials(raw: any): string[] {

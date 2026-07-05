@@ -402,6 +402,7 @@ export interface WecomRpaTask {
   imageNotes?: string;
   materials?: string[];
   materialCount?: number;
+  scheduledAt?: string;
 }
 
 export interface WecomRpaPackage {
@@ -630,6 +631,7 @@ export interface AutomationOverview {
     completed: number;
     cancelled: number;
     approvedRunnableJobs: number;
+    scheduledJobs: number;
     itemsPending: number;
     itemsSent: number;
     itemsFailed: number;
@@ -644,6 +646,7 @@ export interface AutomationOverview {
     published: number;
     archived: number;
     approvedReady: number;
+    scheduledReady: number;
     bridgeClaimedDrafts: number;
     bridgeFailedDrafts: number;
   };
@@ -817,6 +820,7 @@ export interface MassSendJob {
   message: string;
   status: 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'cancelled';
   approved: boolean;
+  scheduledAt?: string;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -845,6 +849,7 @@ export interface MomentDraft {
   materials: string[];
   status: 'draft' | 'ready' | 'prepared' | 'published' | 'archived';
   approved: boolean;
+  scheduledAt?: string;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -1105,6 +1110,7 @@ export const api = {
     title: string;
     message: string;
     recipients: string[];
+    scheduledAt?: string;
     options?: {
       perSendDelaySeconds?: number;
       requireOperatorConfirmRecipient?: boolean;
@@ -1121,6 +1127,7 @@ export const api = {
   createMassSendJobFromAudience: (payload: {
     title: string;
     message: string;
+    scheduledAt?: string;
     audienceFilter?: {
       query?: string;
       tag?: string;
@@ -1143,7 +1150,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  patchMassSendJob: (jobId: string, payload: Partial<Pick<MassSendJob, 'title' | 'message' | 'status' | 'approved'>> & { options?: Partial<MassSendJob['options']> }) =>
+  patchMassSendJob: (jobId: string, payload: Partial<Pick<MassSendJob, 'title' | 'message' | 'status' | 'approved' | 'scheduledAt'>> & { options?: Partial<MassSendJob['options']> }) =>
     req<{ job: MassSendJob }>(`/api/admin/automation/mass-jobs/${jobId}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -1155,12 +1162,12 @@ export const api = {
     }),
   listMomentDrafts: (limit = 100) =>
     req<{ drafts: MomentDraft[] }>(`/api/admin/automation/moment-drafts?limit=${encodeURIComponent(limit)}`),
-  createMomentDraft: (payload: { title: string; text: string; imageNotes?: string; materials?: string[] }) =>
+  createMomentDraft: (payload: { title: string; text: string; imageNotes?: string; materials?: string[]; scheduledAt?: string }) =>
     req<{ draft: MomentDraft }>('/api/admin/automation/moment-drafts', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  patchMomentDraft: (draftId: string, payload: Partial<Pick<MomentDraft, 'title' | 'text' | 'imageNotes' | 'materials' | 'status' | 'approved'>>) =>
+  patchMomentDraft: (draftId: string, payload: Partial<Pick<MomentDraft, 'title' | 'text' | 'imageNotes' | 'materials' | 'status' | 'approved' | 'scheduledAt'>>) =>
     req<{ draft: MomentDraft }>(`/api/admin/automation/moment-drafts/${draftId}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
