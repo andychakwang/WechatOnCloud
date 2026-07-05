@@ -670,6 +670,14 @@ export interface AutomationReplyPlan {
   reasons: string[];
 }
 
+export interface WecomBridgeReplyPlanResult {
+  event: WecomBridgeEvent;
+  plan?: AutomationReplyPlan;
+  planned: boolean;
+  approved: boolean;
+  skippedReason?: string;
+}
+
 export interface MassSendItem {
   id: string;
   recipientName: string;
@@ -816,6 +824,11 @@ export const api = {
     req<{ events: WecomBridgeEvent[] }>(
       `/api/admin/automation/bridge-events?limit=${encodeURIComponent(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`,
     ),
+  planWecomBridgeEventReply: (eventId: string, payload: { overwrite?: boolean; approveRuleReplies?: boolean; extraInstruction?: string } = {}) =>
+    req<{ result: WecomBridgeReplyPlanResult }>(`/api/admin/automation/bridge-events/${eventId}/reply-plan`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   listWecomBridgeRunReports: (limit = 50, workerId = '') =>
     req<{ reports: WecomBridgeRunReport[] }>(
       `/api/admin/automation/bridge-runs?limit=${encodeURIComponent(limit)}${workerId ? `&workerId=${encodeURIComponent(workerId)}` : ''}`,

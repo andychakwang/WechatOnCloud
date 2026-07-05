@@ -849,6 +849,73 @@ PY
   json_assert_eq env.WECOM_REQUIRE_TARGET_MATCH 1
   json_assert_eq env.WECOM_REQUIRE_HANDLER_VERIFICATION 1
 
+  say "Plan WeCom Bridge replies during event ingest"
+  request_json GET /api/admin/automation/config
+  bridge_plan_config_original="$(python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+print(json.dumps(payload["config"], ensure_ascii=False))
+PY
+)"
+  bridge_plan_trigger="smoke auto plan $stamp"
+  bridge_plan_config_payload="$(python3 - "$body_file" "$bridge_plan_trigger" <<'PY'
+import json
+import sys
+
+file, trigger = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+settings = config.get("settings", {})
+settings["enabled"] = True
+settings["aiDraftEnabled"] = False
+settings["automaticRuleRepliesEnabled"] = True
+config["settings"] = settings
+config.setdefault("rules", []).append({
+    "name": f"smoke-auto-plan-rule-{trigger}",
+    "enabled": True,
+    "approved": True,
+    "priority": 7,
+    "triggers": [trigger],
+    "responseSteps": [{"type": "text", "text": "这是自动规划出的 Bridge 规则回复。", "sendEnter": True}],
+})
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  request_json PUT /api/admin/automation/config "$bridge_plan_config_payload"
+  bridge_plan_event_payload="$(python3 - "$stamp" "$bridge_plan_trigger" <<'PY'
+import json
+import sys
+
+stamp, trigger = sys.argv[1], sys.argv[2]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-auto-plan-{stamp}",
+        "conversationName": "Smoke Auto Plan Conversation",
+        "senderName": "Smoke Sender",
+        "inboundText": f"你好，{trigger}，请自动生成回复。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" \
+    node "$BRIDGE_CLIENT" push-events --plan-replies --approve-rule-replies - <<<"$bridge_plan_event_payload" > "$body_file"
+  json_assert_eq result.planned 1
+  json_assert_eq result.approved 1
+  json_assert_eq result.events[0].status planned
+  json_assert_path result.events[0].replyApproved
+  bridge_plan_event_id="$(json_get result.events[0].id)"
+  request_bridge_json GET "/api/automation/bridge/wecom/replies?limit=50"
+  json_assert_reply_id "$bridge_plan_event_id"
+  request_json PATCH "/api/admin/automation/bridge-events/$bridge_plan_event_id" '{"status":"archived","replyApproved":false}'
+  json_assert_eq event.status archived
+  request_json PUT /api/admin/automation/config "$bridge_plan_config_original"
+  json_assert_path config.settings
+
   say "Check WeCom Bridge runner doctor"
   WOC_PANEL_URL="$PANEL_URL" \
     AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" \

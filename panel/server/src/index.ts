@@ -90,6 +90,8 @@ import {
   serializeWecomRpaPackage,
   importAutomationBundle,
   ingestWecomBridgeEvents,
+  planWecomBridgeEventReply,
+  planWecomBridgeEventReplies,
   importAutomationKnowledge,
   importAutomationAudience,
   listAutomationAudience,
@@ -336,6 +338,12 @@ function tokenEquals(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function boolQuery(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  const raw = String(value ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
 function requireAutomationBridge(req: FastifyRequest, reply: FastifyReply): boolean {
   const status = automationBridgeStatus();
   if (!status.configured) {
@@ -507,6 +515,21 @@ app.get('/api/admin/automation/bridge-events', async (req, reply) => {
   return { events: listWecomBridgeEvents(Number(query?.limit || 100), query?.status) };
 });
 
+app.post('/api/admin/automation/bridge-events/:eventId/reply-plan', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = await planWecomBridgeEventReply(admin, (req.params as any).eventId, {
+      overwrite: true,
+      ...(req.body as any),
+    });
+    appendPanelLog('INFO', `生成企微 Bridge 回复草稿「${result.event.conversationName || result.event.senderName}」by ${admin.username}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '生成企微 Bridge 回复草稿失败' });
+  }
+});
+
 app.get('/api/admin/automation/bridge-runs', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   const query = req.query as any;
@@ -666,10 +689,28 @@ app.get(AUTOMATION_BRIDGE_MATERIAL_MAP_ENDPOINT, async (req, reply) => {
 app.post(AUTOMATION_BRIDGE_EVENT_ENDPOINT, async (req, reply) => {
   if (!requireAutomationBridge(req, reply)) return;
   try {
+    const body = (req.body as any) ?? {};
+    const query = (req.query as any) ?? {};
     const result = ingestWecomBridgeEvents(AUTOMATION_BRIDGE_USER, {
-      ...(req.body as any),
-      source: (req.body as any)?.source || 'wecom-mac-bridge',
+      ...body,
+      source: body?.source || 'wecom-mac-bridge',
     });
+    const shouldPlanReplies =
+      boolQuery(body?.planReplies ?? body?.autoPlanReplies ?? body?.replyPlan ?? query?.planReplies ?? query?.autoPlanReplies);
+    if (shouldPlanReplies && result.events.length > 0) {
+      const planResult = await planWecomBridgeEventReplies(AUTOMATION_BRIDGE_USER, {
+        eventIds: result.events.map((event) => event.id),
+        overwrite: boolQuery(body?.overwriteReplyDrafts ?? body?.overwrite ?? query?.overwrite),
+        approveRuleReplies: boolQuery(body?.approveRuleReplies ?? body?.approveKeywordRules ?? query?.approveRuleReplies),
+        extraInstruction: body?.extraInstruction ?? query?.extraInstruction,
+        limit: result.events.length,
+      });
+      result.events = planResult.results.map((item) => item.event);
+      result.planned = planResult.planned;
+      result.approved = planResult.approved;
+      result.planSkipped = planResult.skipped;
+      result.planErrors = planResult.errors;
+    }
     appendPanelLog('INFO', `Bridge 收到企微消息事件：新增 ${result.imported}，更新 ${result.updated}，跳过 ${result.skipped}`);
     return { result };
   } catch (e: any) {

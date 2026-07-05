@@ -5,9 +5,42 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r57-run-report-delivery-apply';
+const CLIENT_VERSION = 'automation-lab-r58-bridge-auto-reply-plan';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
+const BOOLEAN_OPTIONS = new Set([
+  'ack',
+  'ack-delivered',
+  'ack-prepared',
+  'ack-published',
+  'ack-sent',
+  'approve',
+  'approve-imported',
+  'approve-keyword-rules',
+  'approve-rule-replies',
+  'auto-plan-replies',
+  'claim',
+  'claim-first',
+  'dry-run',
+  'include-source',
+  'list-only',
+  'mark-delivered',
+  'mark-failed',
+  'mark-prepared',
+  'mark-published',
+  'mark-sent',
+  'mark-success',
+  'no-handler',
+  'overwrite',
+  'overwrite-reply-drafts',
+  'plan-replies',
+  'reply-plan',
+  'report-failure',
+  'report-run',
+  'require-handler-verification',
+  'require-positive-verification',
+  'require-verification',
+]);
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -23,7 +56,7 @@ Commands:
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
-  push-events <file|-> [--source name]
+  push-events <file|-> [--source name] [--plan-replies] [--approve-rule-replies] [--overwrite-reply-drafts]
   export-rpa-package [--target replies|mass|moments|all] [--limit 50] [--format json|jsonl] [--output file|--output-dir dir] [--include-source]
   run-rpa-package <file|-> [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run]
   run-cloud-rpa-package [--target replies|mass|moments|all] [--limit 50] [--mode dry-run|prepare|send] [--handler-reply cmd] [--handler-mass cmd] [--handler-moment cmd] [--ack] [--report-failure] [--report-run] [--save-package file|--save-package-dir dir]
@@ -97,6 +130,10 @@ function parseArgs(argv) {
       continue;
     }
     const key = arg.slice(2);
+    if (BOOLEAN_OPTIONS.has(key)) {
+      options[key] = true;
+      continue;
+    }
     const next = argv[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
       options[key] = next;
@@ -227,9 +264,15 @@ function normalizeMaterialPayload(input, options) {
 
 function normalizeEventPayload(input, options) {
   const source = String(options.source || input?.source || DEFAULT_SOURCE);
-  if (Array.isArray(input)) return { source, events: input };
-  if (Array.isArray(input?.events)) return { ...input, source };
-  return { source, events: [input] };
+  const flags = {};
+  if (boolOpt(options, 'plan-replies', 'auto-plan-replies', 'reply-plan')) flags.planReplies = true;
+  if (boolOpt(options, 'approve-rule-replies', 'approve-keyword-rules')) flags.approveRuleReplies = true;
+  if (boolOpt(options, 'overwrite-reply-drafts', 'overwrite')) flags.overwriteReplyDrafts = true;
+  const extraInstruction = String(options['extra-instruction'] || options.instruction || '').trim();
+  if (extraInstruction) flags.extraInstruction = extraInstruction;
+  if (Array.isArray(input)) return { source, events: input, ...flags };
+  if (Array.isArray(input?.events)) return { ...input, source, ...flags };
+  return { source, events: [input], ...flags };
 }
 
 function shouldReportRun(options) {

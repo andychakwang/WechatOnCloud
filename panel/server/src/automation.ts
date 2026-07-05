@@ -326,6 +326,32 @@ export interface WecomBridgeEventIngestResult {
   imported: number;
   updated: number;
   skipped: number;
+  planned?: number;
+  approved?: number;
+  planSkipped?: number;
+  errors: string[];
+  planErrors?: string[];
+}
+
+export interface WecomBridgeReplyPlanOptions {
+  overwrite?: boolean;
+  approveRuleReplies?: boolean;
+  extraInstruction?: string;
+}
+
+export interface WecomBridgeReplyPlanResult {
+  event: WecomBridgeEvent;
+  plan?: AutomationReplyPlan;
+  planned: boolean;
+  approved: boolean;
+  skippedReason?: string;
+}
+
+export interface WecomBridgeReplyPlanBatchResult {
+  results: WecomBridgeReplyPlanResult[];
+  planned: number;
+  approved: number;
+  skipped: number;
   errors: string[];
 }
 
@@ -1815,6 +1841,108 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
       actor: actor.username,
       message: `Bridge 收到企微消息事件：新增 ${result.imported} 条，更新 ${result.updated} 条，跳过 ${result.skipped} 条`,
     });
+  }
+  return result;
+}
+
+export async function planWecomBridgeEventReply(actor: User, eventId: string, raw: any = {}): Promise<WecomBridgeReplyPlanResult> {
+  const event = data.bridgeEvents.find((item) => item.id === eventId);
+  if (!event) throw new Error('Bridge 消息事件不存在');
+  const options = normalizeBridgeReplyPlanOptions(raw);
+  const existingRunnable = hasRunnableBridgeReply(event);
+  if (event.status === 'archived') {
+    return { event: cloneBridgeEvent(event), planned: false, approved: false, skippedReason: '消息已归档' };
+  }
+  if (event.replyDeliveredAt) {
+    return { event: cloneBridgeEvent(event), planned: false, approved: false, skippedReason: '回复已交付' };
+  }
+  if (existingRunnable && !options.overwrite) {
+    return { event: cloneBridgeEvent(event), planned: false, approved: event.replyApproved, skippedReason: '已有回复草稿' };
+  }
+
+  const plan = await planAutomationReply({
+    inboundText: event.inboundText,
+    conversationContext: bridgeEventReplyContext(event),
+    extraInstruction:
+      options.extraInstruction ||
+      '基于企微 Bridge 收件箱消息生成一条克制、可人工确认后发送的回复。不要替用户承诺未确认事项。',
+  });
+  const now = new Date().toISOString();
+  const plannedDraft = str(plan.draft, 1000).trim();
+  const plannedSteps = bridgeReplyStepsForPlan(plan);
+  if (!plannedDraft && plannedSteps.length === 0) {
+    return {
+      event: cloneBridgeEvent(event),
+      plan,
+      planned: false,
+      approved: false,
+      skippedReason: plan.mode === 'blocked' ? '风控阻断，没有可保存草稿' : '没有生成可保存的回复草稿',
+    };
+  }
+  const previousDraft = event.replyDraft || '';
+  const previousSteps = JSON.stringify(event.replySteps || []);
+  const shouldApprove = !!(
+    options.approveRuleReplies &&
+    plan.mode === 'keyword-rule' &&
+    plan.canSendRule &&
+    (plannedDraft || plannedSteps.length)
+  );
+
+  event.status = 'planned';
+  event.lastPlannedAt = now;
+  event.updatedAt = now;
+  event.replyDraft = plannedDraft || undefined;
+  event.replySteps = plannedSteps.length ? plannedSteps : undefined;
+  event.replyApproved = shouldApprove;
+  event.replyApprovedAt = shouldApprove ? now : undefined;
+
+  if ((event.replyDraft || '') !== previousDraft || JSON.stringify(event.replySteps || []) !== previousSteps || !shouldApprove) {
+    resetBridgeReplyDeliveryState(event);
+  }
+  if (event.replyApproved && !hasRunnableBridgeReply(event)) {
+    event.replyApproved = false;
+    event.replyApprovedAt = undefined;
+  }
+
+  persist();
+  addAutomationAudit({
+    action: 'bridge_reply_planned',
+    actor: actor.username,
+    conversationName: event.conversationName || event.senderName,
+    message: `生成企微消息回复草稿「${event.conversationName || event.senderName || event.id}」：${plan.mode}${event.replyApproved ? '，规则回复已批准' : '，待人工批准'}`,
+  });
+  return { event: cloneBridgeEvent(event), plan, planned: true, approved: event.replyApproved };
+}
+
+export async function planWecomBridgeEventReplies(actor: User, raw: any = {}): Promise<WecomBridgeReplyPlanBatchResult> {
+  const eventIds = normalizeBridgeReplyPlanEventIds(raw).slice(0, clampInt(raw?.limit, 1, 100, 50));
+  const targets =
+    eventIds.length > 0
+      ? eventIds
+      : data.bridgeEvents
+          .filter((event) => event.status !== 'archived' && !event.replyDeliveredAt && !hasRunnableBridgeReply(event))
+          .slice(-clampInt(raw?.limit, 1, 100, 20))
+          .map((event) => event.id);
+  const result: WecomBridgeReplyPlanBatchResult = {
+    results: [],
+    planned: 0,
+    approved: 0,
+    skipped: 0,
+    errors: [],
+  };
+  for (const eventId of targets) {
+    try {
+      const item = await planWecomBridgeEventReply(actor, eventId, {
+        ...raw,
+        overwrite: raw?.overwrite ?? raw?.overwriteReplyDrafts ?? false,
+      });
+      result.results.push(item);
+      if (item.planned) result.planned += 1;
+      else result.skipped += 1;
+      if (item.approved) result.approved += 1;
+    } catch (e: any) {
+      result.errors.push(`${eventId}：${e?.message || e}`);
+    }
   }
   return result;
 }
@@ -4437,6 +4565,12 @@ function bridgeReplySteps(event: WecomBridgeEvent): AutomationStep[] {
   return text ? [{ type: 'text', text, sendEnter: true }] : [];
 }
 
+function bridgeReplyStepsForPlan(plan: AutomationReplyPlan): AutomationStep[] {
+  if (!plan.ruleId) return [];
+  const rule = data.rules.find((item) => item.id === plan.ruleId);
+  return rule ? rule.responseSteps.map((step) => ({ ...step })) : [];
+}
+
 function bridgeReplyTextFromSteps(steps: AutomationStep[]): string {
   return steps
     .filter((step): step is Extract<AutomationStep, { type: 'text' }> => step.type === 'text')
@@ -4461,6 +4595,47 @@ function resetBridgeReplyDeliveryState(event: WecomBridgeEvent) {
   event.replyError = undefined;
   event.replyRetryCount = undefined;
   event.replyDeliveredAt = undefined;
+}
+
+function bridgeEventReplyContext(event: WecomBridgeEvent): string {
+  return [
+    event.conversationName ? `会话：${event.conversationName}` : '',
+    event.senderName ? `发送人：${event.senderName}` : '',
+    event.receivedAt ? `时间：${event.receivedAt}` : '',
+    event.conversationContext,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 4000);
+}
+
+function normalizeBridgeReplyPlanOptions(raw: any): WecomBridgeReplyPlanOptions {
+  const payload = raw && typeof raw === 'object' ? raw : {};
+  return {
+    overwrite: truthyFlag(payload.overwrite ?? payload.overwriteReplyDrafts ?? payload.force),
+    approveRuleReplies: truthyFlag(payload.approveRuleReplies ?? payload.approveKeywordRules ?? payload.approveRules),
+    extraInstruction: str(payload.extraInstruction ?? payload.instruction ?? payload.prompt, 1000).trim() || undefined,
+  };
+}
+
+function normalizeBridgeReplyPlanEventIds(raw: any): string[] {
+  const payload = raw && typeof raw === 'object' ? raw : {};
+  const values = [payload.eventId, payload.id, payload.ids, payload.eventIds, payload.events, payload.items];
+  const ids: string[] = [];
+  for (const value of values) {
+    if (!value) continue;
+    if (typeof value === 'string') {
+      ids.push(...value.split(',').map((item) => item.trim()));
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string') ids.push(item.trim());
+        else if (item && typeof item === 'object') ids.push(str(item.id ?? item.eventId, 120).trim());
+      }
+    }
+  }
+  return uniqueStrings(ids.filter(Boolean));
 }
 
 function normalizeAuditEvent(raw: any): AutomationAuditEvent | null {

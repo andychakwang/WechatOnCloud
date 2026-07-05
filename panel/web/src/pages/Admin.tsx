@@ -971,24 +971,28 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   };
 
   const useBridgeEventForReply = async (event: WecomBridgeEvent) => {
-    const context = [
-      event.conversationName ? `会话：${event.conversationName}` : '',
-      event.senderName ? `发送人：${event.senderName}` : '',
-      event.receivedAt ? `时间：${fmtDate(Date.parse(event.receivedAt))}` : '',
-      event.conversationContext,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    setReplyInbound(event.inboundText);
-    setReplyContext(context.slice(0, 4000));
-    setReplyInstruction('基于企微 Bridge 收件箱消息生成一条克制、可人工确认后发送的回复。');
     setBusy(`bridge-event-${event.id}`);
     try {
-      const { event: saved } = await api.patchWecomBridgeEvent(event.id, { status: 'planned' });
+      const { result } = await api.planWecomBridgeEventReply(event.id, { overwrite: true });
+      const saved = result.event;
       setBridgeEvents((list) => list.map((x) => (x.id === saved.id ? saved : x)));
-      toast('已填入 AI 回复工作台', 'ok');
+      setBridgeReplyDrafts((map) => ({ ...map, [saved.id]: saved.replyDraft || '' }));
+      setReplyInbound(saved.inboundText);
+      setReplyContext(
+        [
+          saved.conversationName ? `会话：${saved.conversationName}` : '',
+          saved.senderName ? `发送人：${saved.senderName}` : '',
+          saved.receivedAt ? `时间：${fmtDate(Date.parse(saved.receivedAt))}` : '',
+          saved.conversationContext,
+        ]
+          .filter(Boolean)
+          .join('\n')
+          .slice(0, 4000),
+      );
+      setReplyInstruction('基于企微 Bridge 收件箱消息生成一条克制、可人工确认后发送的回复。');
+      toast(result.approved ? '已生成并批准规则回复，Mac 端可拉取' : result.planned ? '已生成待审回复草稿' : result.skippedReason || '没有生成回复草稿', result.planned ? 'ok' : 'error');
     } catch (e: any) {
-      toast(e.message || '标记消息失败', 'error');
+      toast(e.message || '生成回复失败', 'error');
     } finally {
       setBusy('');
     }
