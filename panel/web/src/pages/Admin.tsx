@@ -362,6 +362,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [recoveryIncludeMass, setRecoveryIncludeMass] = useState(true);
   const [recoveryIncludeMoments, setRecoveryIncludeMoments] = useState(true);
   const [recoveryWorkerId, setRecoveryWorkerId] = useState('');
+  const [recoveryFailureReason, setRecoveryFailureReason] = useState('');
+  const [recoveryCursor, setRecoveryCursor] = useState('');
+  const [recoveryLimit, setRecoveryLimit] = useState('500');
   const [recoveryPreview, setRecoveryPreview] = useState<AutomationBridgeRecoveryResult | null>(null);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
@@ -506,20 +509,33 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
-  const bridgeRecoveryPayload = (dryRun: boolean) => ({
-    dryRun,
-    releaseClaims: recoveryReleaseClaims,
-    retryFailed: recoveryRetryFailed,
-    includeReplies: recoveryIncludeReplies,
-    includeMass: recoveryIncludeMass,
-    includeMoments: recoveryIncludeMoments,
-    workerId: recoveryWorkerId.trim() || undefined,
-  });
+  const bridgeRecoveryLimit = () => {
+    const parsed = Number.parseInt(recoveryLimit, 10);
+    if (!Number.isFinite(parsed)) return 500;
+    return Math.max(1, Math.min(2000, parsed));
+  };
 
-  const previewBridgeRecovery = async () => {
+  const bridgeRecoveryPayload = (dryRun: boolean, cursorOverride?: string) => {
+    const cursor = (cursorOverride ?? recoveryCursor).trim();
+    return {
+      dryRun,
+      releaseClaims: recoveryReleaseClaims,
+      retryFailed: recoveryRetryFailed,
+      includeReplies: recoveryIncludeReplies,
+      includeMass: recoveryIncludeMass,
+      includeMoments: recoveryIncludeMoments,
+      workerId: recoveryWorkerId.trim() || undefined,
+      failureReason: recoveryFailureReason.trim() || undefined,
+      cursor: cursor || undefined,
+      limit: bridgeRecoveryLimit(),
+    };
+  };
+
+  const previewBridgeRecovery = async (cursorOverride?: string) => {
     setBusy('bridge-recovery-preview');
     try {
-      const { result } = await api.recoverAutomationBridgeOutbox(bridgeRecoveryPayload(true));
+      if (cursorOverride !== undefined) setRecoveryCursor(cursorOverride);
+      const { result } = await api.recoverAutomationBridgeOutbox(bridgeRecoveryPayload(true, cursorOverride));
       setRecoveryPreview(result);
       const count = bridgeRecoveryCount(result);
       toast(`恢复预览：${count.total} 项，释放 ${count.released}，重试 ${count.retried}`, 'ok');
@@ -538,9 +554,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       recoveryIncludeMoments ? '朋友圈' : '',
     ].filter(Boolean);
     const workerText = recoveryWorkerId.trim() || '全部 worker';
+    const reasonText = recoveryFailureReason.trim() || '全部失败原因';
+    const cursorText = recoveryCursor.trim() ? '从游标继续' : '从头扫描';
     const ok = await confirm({
       title: '恢复 Bridge 出箱？',
-      body: `范围：${scopes.join('、') || '未选择'}；Worker：${workerText}；领取：${releaseText}；失败项：${recoveryRetryFailed ? '重试' : '不处理'}。不会直接发送内容。`,
+      body: `范围：${scopes.join('、') || '未选择'}；Worker：${workerText}；领取：${releaseText}；失败项：${recoveryRetryFailed ? `重试，${reasonText}` : '不处理'}；${cursorText}；每批 ${bridgeRecoveryLimit()}。不会直接发送内容。`,
       confirmText: '恢复',
     });
     if (!ok) return;
@@ -1599,14 +1617,19 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       <b>Bridge 出箱恢复</b>
                       <div className="muted small">
                         {recoveryPreview
-                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${recoveryPreview.workerId || '全部 worker'} · ${bridgeRecoveryCount(recoveryPreview).total} 项`
+                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${recoveryPreview.workerId || '全部 worker'} · 每批 ${recoveryPreview.limit} · ${bridgeRecoveryCount(recoveryPreview).total} 项${recoveryPreview.hasMore ? ' · 还有下一批' : ''}`
                           : '待预览'}
                       </div>
                     </div>
                     <div className="auto-actions inline">
-                      <button className="btn-text" disabled={busy === 'bridge-recovery-preview'} onClick={previewBridgeRecovery}>
+                      <button className="btn-text" disabled={busy === 'bridge-recovery-preview'} onClick={() => previewBridgeRecovery()}>
                         预览
                       </button>
+                      {recoveryPreview?.nextCursor && (
+                        <button className="btn-text" disabled={busy === 'bridge-recovery-preview'} onClick={() => previewBridgeRecovery(recoveryPreview.nextCursor || '')}>
+                          下一批
+                        </button>
+                      )}
                       <button className="btn-text" disabled={busy === 'bridge-recovery'} onClick={recoverBridgeOutbox}>
                         执行
                       </button>
@@ -1631,6 +1654,26 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           </option>
                         ))}
                       </select>
+                    </label>
+                    <label>
+                      <span className="field-label">失败原因</span>
+                      <input className="input" value={recoveryFailureReason} onChange={(e) => setRecoveryFailureReason(e.target.value)} placeholder="包含文本" />
+                    </label>
+                    <label>
+                      <span className="field-label">每批</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min="1"
+                        max="2000"
+                        step="1"
+                        value={recoveryLimit}
+                        onChange={(e) => setRecoveryLimit(e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span className="field-label">游标</span>
+                      <input className="input" value={recoveryCursor} onChange={(e) => setRecoveryCursor(e.target.value)} placeholder="nextCursor" />
                     </label>
                     <div className="auto-field">
                       <span className="field-label">失败项</span>
@@ -1670,11 +1713,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                               {change.reason ? ` · ${change.reason}` : ''}
                               {change.workerId ? ` · ${change.workerId}` : ''}
                             </div>
+                            {change.error && <div className="muted small">失败：{change.error}</div>}
+                            {change.cursor && <div className="muted small">游标：{change.cursor}</div>}
                           </div>
                           <span className="tag tag-warn">{recoveryPreview.dryRun ? '预览' : '已处理'}</span>
                         </div>
                       ))}
                       {recoveryPreview.totalChanged > 5 && <div className="muted small">还有 {recoveryPreview.totalChanged - 5} 项</div>}
+                      {recoveryPreview.nextCursor && <div className="muted small">下一批：{recoveryPreview.nextCursor}</div>}
                       {recoveryPreview.totalChanged === 0 && <div className="muted small">没有待恢复项</div>}
                     </div>
                   )}

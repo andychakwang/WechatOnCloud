@@ -250,6 +250,8 @@ export interface AutomationBridgeRecoveryChange {
   action: 'release-claim' | 'retry-failed';
   reason?: string;
   workerId?: string;
+  error?: string;
+  cursor?: string;
 }
 
 export interface AutomationBridgeRecoveryResult {
@@ -258,6 +260,11 @@ export interface AutomationBridgeRecoveryResult {
   releaseClaims: BridgeRecoveryReleaseMode;
   retryFailed: boolean;
   workerId?: string;
+  failureReason?: string;
+  cursor?: string;
+  nextCursor?: string;
+  hasMore: boolean;
+  limit: number;
   replies: { releasedClaims: number; retriedFailed: number };
   mass: { releasedClaims: number; retriedFailed: number; resumedJobs: number };
   moments: { releasedClaims: number; retriedFailed: number };
@@ -699,6 +706,8 @@ export const api = {
     includeMass?: boolean;
     includeMoments?: boolean;
     workerId?: string;
+    failureReason?: string;
+    cursor?: string;
     limit?: number;
   }) =>
     req<{ result: AutomationBridgeRecoveryResult }>('/api/admin/automation/bridge-recovery', {

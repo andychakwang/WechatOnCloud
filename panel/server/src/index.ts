@@ -491,9 +491,15 @@ app.post('/api/admin/automation/bridge-recovery', async (req, reply) => {
   if (!admin) return;
   try {
     const result = recoverAutomationBridgeOutbox(admin, req.body as any);
+    const filters = [
+      result.workerId ? `worker=${result.workerId}` : '',
+      result.failureReason ? `原因=${result.failureReason}` : '',
+      result.cursor ? 'cursor=继续' : '',
+      result.hasMore ? 'hasMore=1' : '',
+    ].filter(Boolean);
     appendPanelLog(
       'INFO',
-      `${result.dryRun ? '预览' : '恢复'} Bridge 出箱${result.workerId ? ` worker=${result.workerId}` : ''} by ${admin.username}：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims}，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed}`,
+      `${result.dryRun ? '预览' : '恢复'} Bridge 出箱${filters.length ? ` ${filters.join(' ')}` : ''} by ${admin.username}：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims}，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed}，limit=${result.limit}`,
     );
     return { result };
   } catch (e: any) {

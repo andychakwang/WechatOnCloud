@@ -224,6 +224,8 @@ export interface AutomationBridgeRecoveryChange {
   action: 'release-claim' | 'retry-failed';
   reason?: string;
   workerId?: string;
+  error?: string;
+  cursor?: string;
 }
 
 export interface AutomationBridgeRecoveryResult {
@@ -232,6 +234,11 @@ export interface AutomationBridgeRecoveryResult {
   releaseClaims: BridgeRecoveryReleaseMode;
   retryFailed: boolean;
   workerId?: string;
+  failureReason?: string;
+  cursor?: string;
+  nextCursor?: string;
+  hasMore: boolean;
+  limit: number;
   replies: { releasedClaims: number; retriedFailed: number };
   mass: { releasedClaims: number; retriedFailed: number; resumedJobs: number };
   moments: { releasedClaims: number; retriedFailed: number };
@@ -1594,12 +1601,19 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
   const includeMoments = payload.includeMoments !== false;
   const limit = clampInt(payload.limit, 1, 2000, 500);
   const workerIdFilter = str(payload.workerId ?? payload.claimedBy ?? payload.worker ?? '', 120).trim();
+  const failureReasonFilter = str(payload.failureReason ?? payload.errorContains ?? payload.failedReason ?? '', 300).trim();
+  const failureReasonNeedle = failureReasonFilter.toLowerCase();
+  const cursorFilter = str(payload.cursor ?? payload.after ?? payload.afterCursor ?? '', 300).trim();
   const result: AutomationBridgeRecoveryResult = {
     generatedAt: now,
     dryRun,
     releaseClaims,
     retryFailed,
     workerId: workerIdFilter || undefined,
+    failureReason: failureReasonFilter || undefined,
+    cursor: cursorFilter || undefined,
+    hasMore: false,
+    limit,
     replies: { releasedClaims: 0, retriedFailed: 0 },
     mass: { releasedClaims: 0, retriedFailed: 0, resumedJobs: 0 },
     moments: { releasedClaims: 0, retriedFailed: 0 },
@@ -1607,13 +1621,29 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     changes: [],
   };
   const resumedJobIds = new Set<string>();
-  const canChange = () => result.changes.length < limit;
+  let lastRecordedCursor: string | undefined;
+  let cursorPassed = !cursorFilter;
+  let shouldStop = false;
+  const cursorPart = (value: string) => encodeURIComponent(value).replace(/%20/g, '+');
+  const recoveryCursor = (target: AutomationBridgeRecoveryChange['target'], action: AutomationBridgeRecoveryChange['action'], ...parts: string[]) =>
+    [target, action, ...parts].map(cursorPart).join('|');
+  const shouldConsiderCursor = (cursorKey: string) => {
+    if (cursorPassed) return true;
+    if (cursorKey === cursorFilter) cursorPassed = true;
+    return false;
+  };
   const record = (change: AutomationBridgeRecoveryChange): boolean => {
-    if (!canChange()) return false;
+    if (result.changes.length >= limit) {
+      result.hasMore = true;
+      result.nextCursor = lastRecordedCursor;
+      return false;
+    }
     result.changes.push(change);
+    lastRecordedCursor = change.cursor;
     return true;
   };
   const workerMatches = (workerId?: string) => !workerIdFilter || workerId === workerIdFilter;
+  const failureReasonMatches = (message?: string) => !failureReasonNeedle || String(message || '').toLowerCase().includes(failureReasonNeedle);
   const shouldReleaseReplyClaim = (event: WecomBridgeEvent) => {
     if (releaseClaims === 'none' || !event.replyClaimedAt) return false;
     if (!workerMatches(event.replyClaimedBy)) return false;
@@ -1633,9 +1663,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
 
   if (includeReplies) {
     for (const event of data.bridgeEvents) {
-      if (!canChange()) break;
-      if (event.status === 'archived' || !event.replyApproved || !hasRunnableBridgeReply(event) || event.replyDeliveredAt) continue;
-      if (shouldReleaseReplyClaim(event)) {
+      if (shouldStop) break;
+      const canRecoverReply = event.status !== 'archived' && event.replyApproved && hasRunnableBridgeReply(event) && !event.replyDeliveredAt;
+      const releaseCursor = recoveryCursor('reply', 'release-claim', event.id);
+      if (shouldConsiderCursor(releaseCursor) && canRecoverReply && shouldReleaseReplyClaim(event)) {
         const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
         if (
           !record({
@@ -1645,8 +1676,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             action: 'release-claim',
             reason,
             workerId: event.replyClaimedBy,
+            cursor: releaseCursor,
           })
         ) {
+          shouldStop = true;
           break;
         }
         result.replies.releasedClaims += 1;
@@ -1658,8 +1691,15 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         }
         changed = true;
       }
-      if (!canChange()) break;
-      if (retryFailed && event.replyFailedAt && workerMatches(event.replyFailedBy)) {
+      const retryCursor = recoveryCursor('reply', 'retry-failed', event.id);
+      if (
+        shouldConsiderCursor(retryCursor) &&
+        canRecoverReply &&
+        retryFailed &&
+        event.replyFailedAt &&
+        workerMatches(event.replyFailedBy) &&
+        failureReasonMatches(event.replyError)
+      ) {
         if (
           !record({
             target: 'reply',
@@ -1668,8 +1708,11 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             action: 'retry-failed',
             reason: 'failed_retry',
             workerId: event.replyFailedBy,
+            error: event.replyError,
+            cursor: retryCursor,
           })
         ) {
+          shouldStop = true;
           break;
         }
         result.replies.retriedFailed += 1;
@@ -1687,14 +1730,15 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     }
   }
 
-  if (includeMass) {
+  if (!shouldStop && includeMass) {
     for (const job of data.massSendJobs) {
-      if (!canChange()) break;
+      if (shouldStop) break;
       if (!job.approved || job.status === 'draft' || job.status === 'completed' || job.status === 'cancelled') continue;
       let jobChanged = false;
       for (const item of job.items) {
-        if (!canChange()) break;
-        if (item.status === 'pending' && shouldReleaseMassClaim(item)) {
+        if (shouldStop) break;
+        const releaseCursor = recoveryCursor('mass', 'release-claim', job.id, item.id);
+        if (shouldConsiderCursor(releaseCursor) && item.status === 'pending' && shouldReleaseMassClaim(item)) {
           const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
           if (
             !record({
@@ -1704,8 +1748,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
               action: 'release-claim',
               reason,
               workerId: item.bridgeClaimedBy,
+              cursor: releaseCursor,
             })
           ) {
+            shouldStop = true;
             break;
           }
           result.mass.releasedClaims += 1;
@@ -1719,8 +1765,14 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
           jobChanged = true;
           changed = true;
         }
-        if (!canChange()) break;
-        if (retryFailed && item.status === 'failed' && workerMatches(item.bridgeFailedBy)) {
+        const retryCursor = recoveryCursor('mass', 'retry-failed', job.id, item.id);
+        if (
+          shouldConsiderCursor(retryCursor) &&
+          retryFailed &&
+          item.status === 'failed' &&
+          workerMatches(item.bridgeFailedBy) &&
+          failureReasonMatches(item.error)
+        ) {
           if (
             !record({
               target: 'mass',
@@ -1729,8 +1781,11 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
               action: 'retry-failed',
               reason: 'failed_retry',
               workerId: item.bridgeFailedBy,
+              error: item.error,
+              cursor: retryCursor,
             })
           ) {
+            shouldStop = true;
             break;
           }
           result.mass.retriedFailed += 1;
@@ -1760,11 +1815,12 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     }
   }
 
-  if (includeMoments) {
+  if (!shouldStop && includeMoments) {
     for (const draft of data.momentDrafts) {
-      if (!canChange()) break;
+      if (shouldStop) break;
       if (draft.status === 'published' || draft.status === 'archived') continue;
-      if (shouldReleaseMomentClaim(draft)) {
+      const releaseCursor = recoveryCursor('moment', 'release-claim', draft.id);
+      if (shouldConsiderCursor(releaseCursor) && shouldReleaseMomentClaim(draft)) {
         const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
         if (
           !record({
@@ -1774,8 +1830,10 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             action: 'release-claim',
             reason,
             workerId: draft.bridgeClaimedBy,
+            cursor: releaseCursor,
           })
         ) {
+          shouldStop = true;
           break;
         }
         result.moments.releasedClaims += 1;
@@ -1785,8 +1843,14 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         }
         changed = true;
       }
-      if (!canChange()) break;
-      if (retryFailed && draft.bridgeFailedAt && workerMatches(draft.bridgeFailedBy)) {
+      const retryCursor = recoveryCursor('moment', 'retry-failed', draft.id);
+      if (
+        shouldConsiderCursor(retryCursor) &&
+        retryFailed &&
+        draft.bridgeFailedAt &&
+        workerMatches(draft.bridgeFailedBy) &&
+        failureReasonMatches(draft.bridgeError)
+      ) {
         if (
           !record({
             target: 'moment',
@@ -1795,8 +1859,11 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             action: 'retry-failed',
             reason: 'failed_retry',
             workerId: draft.bridgeFailedBy,
+            error: draft.bridgeError,
+            cursor: retryCursor,
           })
         ) {
+          shouldStop = true;
           break;
         }
         result.moments.retriedFailed += 1;

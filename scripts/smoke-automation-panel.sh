@@ -728,18 +728,45 @@ PY
   json_assert_path event.replyError
   request_json POST /api/admin/automation/bridge-recovery '{"dryRun":true,"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false,"workerId":"other-worker"}'
   json_assert_eq result.totalChanged 0
-  request_json POST /api/admin/automation/bridge-recovery '{"dryRun":true,"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false,"workerId":"smoke-worker"}'
+  request_json POST /api/admin/automation/bridge-recovery '{"dryRun":true,"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false,"workerId":"smoke-worker","failureReason":"not-present"}'
+  json_assert_eq result.totalChanged 0
+  request_json POST /api/admin/automation/bridge-recovery '{"dryRun":true,"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false,"workerId":"smoke-worker","failureReason":"handler failed","limit":1}'
   json_assert_eq result.dryRun True
   json_assert_eq result.workerId smoke-worker
+  json_assert_eq result.failureReason "handler failed"
+  json_assert_eq result.limit 1
   json_assert_eq result.totalChanged 1
   json_assert_eq result.changes[0].target reply
   json_assert_eq result.changes[0].action retry-failed
   json_assert_eq result.changes[0].workerId smoke-worker
-  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false,"workerId":"smoke-worker"}'
+  json_assert_path result.changes[0].error
+  json_assert_path result.changes[0].cursor
+  reply_recovery_cursor="$(json_get result.changes[0].cursor)"
+  reply_cursor_payload="$(python3 - "$reply_recovery_cursor" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "dryRun": True,
+    "releaseClaims": "expired",
+    "retryFailed": True,
+    "includeMass": False,
+    "includeMoments": False,
+    "workerId": "smoke-worker",
+    "failureReason": "handler failed",
+    "cursor": sys.argv[1],
+}))
+PY
+)"
+  request_json POST /api/admin/automation/bridge-recovery "$reply_cursor_payload"
+  json_assert_eq result.totalChanged 0
+  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false,"workerId":"smoke-worker","failureReason":"handler failed"}'
   json_assert_eq result.replies.retriedFailed 1
+  json_assert_eq result.failureReason "handler failed"
   json_assert_eq result.changes[0].target reply
   json_assert_eq result.changes[0].action retry-failed
   json_assert_eq result.changes[0].workerId smoke-worker
+  json_assert_path result.changes[0].cursor
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_reply_id "$bridge_event_id"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-delivered "$bridge_event_id" --worker-id smoke-worker > "$body_file"
@@ -872,13 +899,16 @@ PY
   json_assert_eq item.status failed
   json_assert_eq item.bridgeFailedBy smoke-worker
   json_assert_eq job.status paused
-  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeReplies":false,"includeMoments":false,"workerId":"smoke-worker"}'
+  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeReplies":false,"includeMoments":false,"workerId":"smoke-worker","failureReason":"mass handler failed"}'
   json_assert_eq result.workerId smoke-worker
+  json_assert_eq result.failureReason "mass handler failed"
   json_assert_eq result.mass.retriedFailed 1
   json_assert_eq result.mass.resumedJobs 1
   json_assert_eq result.changes[0].target mass
   json_assert_eq result.changes[0].action retry-failed
   json_assert_eq result.changes[0].workerId smoke-worker
+  json_assert_path result.changes[0].error
+  json_assert_path result.changes[0].cursor
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-mass-tasks --limit 20 > "$body_file"
   json_assert_task_id "$bridge_mass_task_id"
   request_json PATCH "/api/admin/automation/mass-jobs/$bridge_mass_job_id" '{"status":"cancelled","approved":false}'
@@ -954,12 +984,15 @@ PY
   json_assert_eq draft.status draft
   json_assert_eq draft.approved False
   json_assert_eq draft.bridgeFailedBy smoke-worker
-  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeReplies":false,"includeMass":false,"workerId":"smoke-worker"}'
+  request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeReplies":false,"includeMass":false,"workerId":"smoke-worker","failureReason":"moment handler failed"}'
   json_assert_eq result.workerId smoke-worker
+  json_assert_eq result.failureReason "moment handler failed"
   json_assert_eq result.moments.retriedFailed 1
   json_assert_eq result.changes[0].target moment
   json_assert_eq result.changes[0].action retry-failed
   json_assert_eq result.changes[0].workerId smoke-worker
+  json_assert_path result.changes[0].error
+  json_assert_path result.changes[0].cursor
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-moment-tasks --limit 20 > "$body_file"
   json_assert_task_id "$bridge_moment_task_id"
   request_json PATCH "/api/admin/automation/moment-drafts/$bridge_moment_draft_id" '{"status":"archived","approved":false}'
