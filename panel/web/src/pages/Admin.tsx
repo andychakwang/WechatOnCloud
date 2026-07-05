@@ -186,6 +186,13 @@ const BRIDGE_RUN_TARGET_LABEL: Record<string, string> = {
   unknown: '未知',
 };
 
+const BRIDGE_RUN_ITEM_TARGET_LABEL: Record<string, string> = {
+  reply: '回复',
+  mass: '群发',
+  moment: '朋友圈',
+  unknown: '未知',
+};
+
 const BRIDGE_RUNNER_MODE_LABEL: Record<WecomBridgeRunnerMode, string> = {
   'dry-run': '只预览',
   prepare: '领取并准备',
@@ -1596,6 +1603,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       const handled = report.handledReplies + report.handledMassTasks + report.handledMomentTasks;
                       const failed = report.failedReplies + report.failedMassTasks + report.failedMomentTasks;
                       const reportAt = Date.parse(report.finishedAt || report.updatedAt);
+                      const items = report.items || [];
+                      const itemSummary = items
+                        .slice(0, 3)
+                        .map((item) => {
+                          const label = BRIDGE_RUN_ITEM_TARGET_LABEL[item.target] || item.target;
+                          const result = item.ok === false ? '失败' : item.dryRun ? '预览' : item.ok === true ? '成功' : '记录';
+                          return `${label} · ${item.name || item.id} · ${item.action || result}`;
+                        })
+                        .join('；');
                       return (
                         <div className="auto-list-item" key={report.id}>
                           <div>
@@ -1607,6 +1623,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                               {report.durationMs !== undefined ? ` · ${Math.round(report.durationMs / 1000)}s` : ''}
                             </div>
                             {(report.summary || report.error) && <div className="muted small auto-snippet">{report.summary || report.error}</div>}
+                            {items.length > 0 && (
+                              <div className="muted small auto-snippet">
+                                明细 {itemSummary}
+                                {items.length > 3 ? `；+${items.length - 3}` : ''}
+                              </div>
+                            )}
                           </div>
                           <span className={'tag ' + (report.status === 'failed' ? 'tag-off' : report.status === 'started' ? '' : 'tag-on')}>
                             {report.status === 'started' ? '运行中' : AUTO_STATUS_LABEL[report.status] || report.status}

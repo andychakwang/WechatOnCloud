@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r33-material-map';
+const CLIENT_VERSION = 'automation-lab-r34-run-items';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -605,8 +605,10 @@ async function main() {
     for (const reply of replies) {
       if (dryRun) {
         handled.push({
+          target: 'reply',
           id: reply.id,
           conversationName: reply.conversationName,
+          action: 'dry-run',
           stepCount: Array.isArray(reply.replySteps) && reply.replySteps.length ? reply.replySteps.length : reply.replyDraft ? 1 : 0,
           imageStepCount: Array.isArray(reply.replySteps) ? reply.replySteps.filter((step) => step?.type === 'image').length : 0,
           dryRun: true,
@@ -624,7 +626,16 @@ async function main() {
       }
       const result = await runHandler(handler, runnable);
       const ok = result.code === 0;
-      const item = { id: reply.id, conversationName: reply.conversationName, ok, exitCode: result.code, signal: result.signal, claimed: claim };
+      const item = {
+        target: 'reply',
+        id: reply.id,
+        conversationName: reply.conversationName,
+        action: ok ? (markDelivered ? 'delivered' : claim ? 'prepared' : 'handled') : 'failed',
+        ok,
+        exitCode: result.code,
+        signal: result.signal,
+        claimed: claim,
+      };
       if (ok && markDelivered) {
         item.delivered = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'delivered',
@@ -651,6 +662,7 @@ async function main() {
         durationMs: Date.now() - startedMs,
         handledReplies: handled.length,
         failedReplies: handled.filter((item) => item.ok === false).length,
+        items: handled,
         summary: runSummary('replies', handled, replies.length),
       });
     }
@@ -672,7 +684,7 @@ async function main() {
     const handled = [];
     for (const task of tasks) {
       if (dryRun) {
-        handled.push({ id: task.id, recipientName: task.recipientName, dryRun: true });
+        handled.push({ target: 'mass', id: task.id, recipientName: task.recipientName, action: 'dry-run', dryRun: true });
         continue;
       }
       let runnable = task;
@@ -686,7 +698,16 @@ async function main() {
       }
       const result = await runMassHandler(handler, runnable);
       const ok = result.code === 0;
-      const item = { id: task.id, recipientName: task.recipientName, ok, exitCode: result.code, signal: result.signal, claimed: claim };
+      const item = {
+        target: 'mass',
+        id: task.id,
+        recipientName: task.recipientName,
+        action: ok ? (markSent ? 'sent' : claim ? 'prepared' : 'handled') : 'failed',
+        ok,
+        exitCode: result.code,
+        signal: result.signal,
+        claimed: claim,
+      };
       if (ok && markSent) {
         item.sent = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'sent',
@@ -713,6 +734,7 @@ async function main() {
         durationMs: Date.now() - startedMs,
         handledMassTasks: handled.length,
         failedMassTasks: handled.filter((item) => item.ok === false).length,
+        items: handled,
         summary: runSummary('mass', handled, tasks.length),
       });
     }
@@ -736,7 +758,7 @@ async function main() {
     const handled = [];
     for (const task of tasks) {
       if (dryRun) {
-        handled.push({ id: task.id, title: task.title, dryRun: true });
+        handled.push({ target: 'moment', id: task.id, title: task.title, action: 'dry-run', dryRun: true });
         continue;
       }
       let runnable = task;
@@ -750,7 +772,16 @@ async function main() {
       }
       const result = await runMomentHandler(handler, runnable);
       const ok = result.code === 0;
-      const item = { id: task.id, title: task.title, ok, exitCode: result.code, signal: result.signal, claimed: claim };
+      const item = {
+        target: 'moment',
+        id: task.id,
+        title: task.title,
+        action: ok ? (markPublished ? 'published' : markPrepared || claim ? 'prepared' : 'handled') : 'failed',
+        ok,
+        exitCode: result.code,
+        signal: result.signal,
+        claimed: claim,
+      };
       if (ok && markPrepared) {
         item.prepared = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'prepared',
@@ -790,6 +821,7 @@ async function main() {
         durationMs: Date.now() - startedMs,
         handledMomentTasks: handled.length,
         failedMomentTasks: handled.filter((item) => item.ok === false).length,
+        items: handled,
         summary: runSummary('moments', handled, tasks.length),
       });
     }

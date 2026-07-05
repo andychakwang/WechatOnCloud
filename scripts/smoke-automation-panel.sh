@@ -702,6 +702,9 @@ PY
   json_assert_eq handled[0].stepCount 6
   json_assert_eq handled[0].imageStepCount 2
   json_assert_path runReport.report.id
+  json_assert_eq runReport.report.items[0].target reply
+  json_assert_eq runReport.report.items[0].action dry-run
+  json_assert_eq runReport.report.items[0].id "$bridge_event_id"
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" pull-replies --limit 20 > "$body_file"
   json_assert_path replies[0].id
   json_assert_eq replies[0].replySteps[1].seconds 1
@@ -1021,6 +1024,12 @@ PY
   json_assert_path replies.runReport.report.id
   json_assert_path mass.runReport.report.id
   json_assert_path moments.runReport.report.id
+  json_assert_eq replies.runReport.report.items[0].target reply
+  json_assert_eq mass.runReport.report.items[0].target mass
+  json_assert_eq moments.runReport.report.items[0].target moment
+  json_assert_eq replies.runReport.report.items[0].action dry-run
+  json_assert_eq mass.runReport.report.items[0].action dry-run
+  json_assert_eq moments.runReport.report.items[0].action dry-run
 
   request_json PATCH "/api/admin/automation/bridge-events/$all_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived

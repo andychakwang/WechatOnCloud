@@ -177,6 +177,20 @@ export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
+export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
+
+export interface WecomBridgeRunReportItem {
+  id: string;
+  target: WecomBridgeRunReportItemTarget;
+  name?: string;
+  action?: string;
+  ok?: boolean;
+  dryRun?: boolean;
+  claimed?: boolean;
+  exitCode?: number;
+  signal?: string;
+  error?: string;
+}
 
 export interface WecomBridgeRunReport {
   id: string;
@@ -196,6 +210,7 @@ export interface WecomBridgeRunReport {
   failedMomentTasks: number;
   error?: string;
   summary?: string;
+  items: WecomBridgeRunReportItem[];
   createdAt: string;
   updatedAt: string;
 }
@@ -531,6 +546,7 @@ const MAX_MATERIAL_ASSETS = 1000;
 const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
+const MAX_BRIDGE_RUN_REPORT_ITEMS = 100;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
 
 const DEFAULT_RUNNER_POLICY: WecomBridgeRunnerPolicy = {
@@ -3155,6 +3171,13 @@ function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): 
     str(raw?.workerId ?? raw?.worker ?? raw?.clientId ?? raw?.hostname ?? raw?.host, 120).trim() || `${source}-worker`;
   const startedAt = normalizeIsoDate(raw?.startedAt ?? raw?.startTime ?? raw?.createdAt, now);
   const finishedAt = raw?.finishedAt || raw?.endedAt || raw?.endTime ? normalizeIsoDate(raw?.finishedAt ?? raw?.endedAt ?? raw?.endTime, now) : undefined;
+  const rawItems = Array.isArray(raw?.items)
+    ? raw.items
+    : Array.isArray(raw?.details)
+      ? raw.details
+      : Array.isArray(raw?.handled)
+        ? raw.handled
+        : [];
   return {
     id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
     source,
@@ -3173,9 +3196,35 @@ function normalizeBridgeRunReport(raw: any, preserveIds: boolean, now: string): 
     failedMomentTasks: clampInt(raw?.failedMomentTasks ?? raw?.momentsFailed, 0, 100000, 0),
     error: str(raw?.error ?? raw?.message ?? raw?.reason, 1000).trim() || undefined,
     summary: str(raw?.summary ?? raw?.note, 1000).trim() || undefined,
+    items: rawItems.slice(0, MAX_BRIDGE_RUN_REPORT_ITEMS).map(normalizeBridgeRunReportItem),
     createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
   };
+}
+
+function normalizeBridgeRunReportItem(raw: any): WecomBridgeRunReportItem {
+  const base = raw && typeof raw === 'object' ? raw : {};
+  const id =
+    str(base.id ?? base.taskId ?? base.eventId ?? base.draftId ?? base.externalId, 160).trim() ||
+    randomUUID();
+  const target = normalizeBridgeRunReportItemTarget(base.target ?? base.kind ?? base.type);
+  const name = str(base.name ?? base.conversationName ?? base.recipientName ?? base.title ?? base.label, 240).trim();
+  const action = str(base.action ?? base.status ?? base.deliveryStatus, 80).trim();
+  const signal = str(base.signal, 80).trim();
+  const error = str(base.error ?? base.message ?? base.reason, 500).trim();
+  const item: WecomBridgeRunReportItem = {
+    id,
+    target,
+  };
+  if (name) item.name = name;
+  if (action) item.action = action;
+  if (typeof base.ok === 'boolean') item.ok = base.ok;
+  if (typeof base.dryRun === 'boolean') item.dryRun = base.dryRun;
+  if (typeof base.claimed === 'boolean') item.claimed = base.claimed;
+  if (Number.isFinite(Number(base.exitCode))) item.exitCode = Math.max(0, Math.trunc(Number(base.exitCode)));
+  if (signal) item.signal = signal;
+  if (error) item.error = error;
+  return item;
 }
 
 function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
@@ -3863,7 +3912,7 @@ function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
 }
 
 function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunReport {
-  return { ...report };
+  return { ...report, items: report.items.map((item) => ({ ...item })) };
 }
 
 function cloneRunnerPolicy(policy: WecomBridgeRunnerPolicy): WecomBridgeRunnerPolicy {
@@ -4040,6 +4089,14 @@ function normalizeBridgeRunTarget(value: unknown): WecomBridgeRunTarget {
   if (raw === 'mass' || raw === 'mass-tasks' || raw === 'mass_tasks') return 'mass';
   if (raw === 'moments' || raw === 'moment') return 'moments';
   if (raw === 'all') return 'all';
+  return 'unknown';
+}
+
+function normalizeBridgeRunReportItemTarget(value: unknown): WecomBridgeRunReportItemTarget {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'reply' || raw === 'replies' || raw === 'event') return 'reply';
+  if (raw === 'mass' || raw === 'mass-task' || raw === 'mass_tasks' || raw === 'mass-tasks') return 'mass';
+  if (raw === 'moment' || raw === 'moments' || raw === 'draft') return 'moment';
   return 'unknown';
 }
 

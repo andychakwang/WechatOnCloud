@@ -204,6 +204,20 @@ export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
+export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
+
+export interface WecomBridgeRunReportItem {
+  id: string;
+  target: WecomBridgeRunReportItemTarget;
+  name?: string;
+  action?: string;
+  ok?: boolean;
+  dryRun?: boolean;
+  claimed?: boolean;
+  exitCode?: number;
+  signal?: string;
+  error?: string;
+}
 
 export interface WecomBridgeRunReport {
   id: string;
@@ -223,6 +237,7 @@ export interface WecomBridgeRunReport {
   failedMomentTasks: number;
   error?: string;
   summary?: string;
+  items: WecomBridgeRunReportItem[];
   createdAt: string;
   updatedAt: string;
 }
