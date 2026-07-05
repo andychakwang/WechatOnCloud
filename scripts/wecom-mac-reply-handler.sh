@@ -9,6 +9,7 @@ set -euo pipefail
 #   WECOM_ALLOW_SEND=1                        required when mode=send
 #   WECOM_APP_NAME='企业微信'                  macOS app name
 #   WECOM_SEARCH_SHORTCUT=command+k|command+f|none
+#   WECOM_VERIFY_TARGET=1                     include window-title verification in handler JSON
 #   WECOM_MATERIAL_MAP='{"poster":"/Users/me/Pictures/poster.png"}'
 #   WECOM_MATERIAL_MAP_FILE=/path/to/wecom-materials.json
 
@@ -200,6 +201,84 @@ if ! command -v osascript >/dev/null 2>&1; then
   exit 3
 fi
 
+target_verification() {
+  local expected_name="$1"
+  local required="${2:-1}"
+  local enabled="${WECOM_VERIFY_TARGET:-1}"
+  if [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "off" ]]; then
+    printf ''
+    return
+  fi
+
+  local snapshot
+  if ! snapshot="$(osascript - "$APP_NAME" <<'APPLESCRIPT' 2>/dev/null
+on run argv
+  set appName to item 1 of argv
+  set frontApp to ""
+  set windowTitle to ""
+  tell application "System Events"
+    try
+      set frontApp to name of first application process whose frontmost is true
+    end try
+    if exists process appName then
+      tell process appName
+        set frontmost to true
+        delay 0.1
+        try
+          set windowTitle to name of window 1
+        end try
+      end tell
+    end if
+  end tell
+  return frontApp & linefeed & windowTitle
+end run
+APPLESCRIPT
+)"; then
+    node - "$expected_name" "$APP_NAME" "$required" <<'NODE'
+const expectedName = String(process.argv[2] || '').trim();
+const activeApp = String(process.argv[3] || '').trim();
+const required = String(process.argv[4] || '1') !== '0';
+console.log(JSON.stringify({
+  required,
+  verified: false,
+  expectedName,
+  activeApp,
+  conversationMatched: false,
+  inputReady: false,
+  error: 'Unable to read WeCom window title via AppleScript',
+  checkedAt: new Date().toISOString(),
+}));
+NODE
+    return
+  fi
+
+  node - "$expected_name" "$APP_NAME" "$required" "$snapshot" <<'NODE'
+const expectedName = String(process.argv[2] || '').trim();
+const appName = String(process.argv[3] || '').trim();
+const required = String(process.argv[4] || '1') !== '0';
+const snapshot = String(process.argv[5] || '');
+const [frontAppRaw = '', ...titleLines] = snapshot.split(/\r?\n/);
+const activeApp = frontAppRaw.trim() || appName;
+const windowTitle = titleLines.join('\n').trim();
+const norm = (value) => String(value || '').trim().toLowerCase();
+const conversationMatched = !!expectedName && norm(windowTitle).includes(norm(expectedName));
+const inputReady = activeApp === appName || norm(activeApp) === norm(appName);
+const verified = required ? conversationMatched && inputReady : inputReady || !!windowTitle;
+console.log(JSON.stringify({
+  required,
+  verified,
+  expectedName,
+  matchedName: conversationMatched ? expectedName : '',
+  conversationMatched,
+  inputReady,
+  activeApp,
+  windowTitle,
+  confidence: conversationMatched ? 0.85 : 0,
+  checkedAt: new Date().toISOString(),
+}));
+NODE
+}
+
 focus_conversation() {
   osascript - "$APP_NAME" "$conversation_name" "$SEARCH_SHORTCUT" <<'APPLESCRIPT'
 on run argv
@@ -372,5 +451,18 @@ for (const step of p.steps || []) {
 ' "$parsed")
 fi
 
-node -e 'console.log(JSON.stringify({ok:true, mode:process.argv[1], appName:process.argv[2], conversationName:process.argv[3], replyChars:Number(process.argv[4]), stepCount:Number(process.argv[5]), textStepCount:Number(process.argv[6]), imageStepCount:Number(process.argv[7])}, null, 2))' \
-  "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars" "$step_count" "$text_step_count" "$image_step_count"
+verification_json="$(target_verification "$conversation_name" 1)"
+node -e '
+const verification = process.argv[8] ? JSON.parse(process.argv[8]) : undefined;
+console.log(JSON.stringify({
+  ok: true,
+  mode: process.argv[1],
+  appName: process.argv[2],
+  conversationName: process.argv[3],
+  replyChars: Number(process.argv[4]),
+  stepCount: Number(process.argv[5]),
+  textStepCount: Number(process.argv[6]),
+  imageStepCount: Number(process.argv[7]),
+  ...(verification ? { verification } : {}),
+}, null, 2));
+' "$MODE" "$APP_NAME" "$conversation_name" "$reply_chars" "$step_count" "$text_step_count" "$image_step_count" "$verification_json"

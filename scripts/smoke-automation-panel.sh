@@ -18,11 +18,13 @@ body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
 material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
 verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
+fake_osascript_dir="$(mktemp -d "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX")"
 reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
   rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$verification_handler_file"
+  rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
 
@@ -520,6 +522,31 @@ if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
   say "Check WeCom Mac handler dry-run"
   WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" < "$ROOT/doc/examples/wecom-bridge-reply.sample.json" > "$body_file"
   json_assert_path ok
+
+  say "Check WeCom Mac handler verification output"
+  cat > "$fake_osascript_dir/osascript" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-" && "$#" -eq 2 ]]; then
+  printf '企业微信\n企业微信 - %s\n' "${WECOM_FAKE_WINDOW_TITLE:-Smoke Verify Conversation}"
+fi
+exit 0
+SH
+  chmod +x "$fake_osascript_dir/osascript"
+  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_SEARCH_SHORTCUT=none WECOM_FAKE_WINDOW_TITLE="Smoke Verify Conversation" "$WECOM_REPLY_HANDLER" <<'JSON' > "$body_file"
+{"id":"evt","conversationName":"Smoke Verify Conversation","replyDraft":"hello"}
+JSON
+  json_assert_path verification.verified
+  json_assert_eq verification.matchedName "Smoke Verify Conversation"
+  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_SEARCH_SHORTCUT=none WECOM_FAKE_WINDOW_TITLE="Smoke Verify Mass" "$WECOM_MASS_HANDLER" <<'JSON' > "$body_file"
+{"id":"task","recipientName":"Smoke Verify Mass","message":"hello"}
+JSON
+  json_assert_path verification.verified
+  json_assert_eq verification.matchedName "Smoke Verify Mass"
+  PATH="$fake_osascript_dir:$PATH" WECOM_HANDLER_MODE=prepare WECOM_FAKE_WINDOW_TITLE="Smoke Verify Moment" "$WECOM_MOMENT_HANDLER" <<'JSON' > "$body_file"
+{"id":"moment","title":"Smoke Verify Moment Draft","text":"hello"}
+JSON
+  json_assert_path verification.verified
+  json_assert_eq verification.windowTitle "企业微信 - Smoke Verify Moment"
 
   say "Import WeCom knowledge through Bridge"
   bridge_title="smoke-bridge-$stamp"

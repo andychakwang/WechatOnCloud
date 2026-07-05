@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r41-2026-07-05` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r42-2026-07-05` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,8 +9,8 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r41-2026-07-05`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r41-2026-07-05`
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r42-2026-07-05`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r42-2026-07-05`
 
 ## 飞牛 Docker 面板导入
 
@@ -139,7 +139,7 @@ PANEL_PASSWORD='测试面板密码' \
 
 它会验证登录、版本接口、自动化配置、自动化预检、缺失素材阻断、接入资料导入、受众资产、素材资产台账、资产包导出/预览/导入、模拟决策、群发受控队列、朋友圈草稿和审计日志；创建出的测试队列会被取消，测试朋友圈草稿会被归档。
 
-如果本地同时设置了 `AUTOMATION_BRIDGE_TOKEN`，smoke 会额外验证 Bridge 资料推送、受众推送、素材台账推送、云端素材映射导出、消息事件推送、带图片路径和素材 key 映射的顺序回复 `replySteps`、worker 心跳、Mac handler dry-run、Bridge runner dry-run、带目标会话/OCR 校验快照的运行报告明细、Bridge 出箱恢复预览、按 worker/失败原因/失败冷却/重试上限筛选恢复、cursor 分批继续和 all-target 汇总，并通过 `scripts/wecom-bridge-client.mjs` 验证批准回复、群发任务和朋友圈任务的拉取、领取、释放、失败回写与成功回写接口。
+如果本地同时设置了 `AUTOMATION_BRIDGE_TOKEN`，smoke 会额外验证 Bridge 资料推送、受众推送、素材台账推送、云端素材映射导出、消息事件推送、带图片路径和素材 key 映射的顺序回复 `replySteps`、worker 心跳、Mac handler dry-run、Mac handler 目标窗口校验快照、Bridge runner dry-run、带目标会话/OCR 校验快照的运行报告明细、Bridge 出箱恢复预览、按 worker/失败原因/失败冷却/重试上限筛选恢复、cursor 分批继续和 all-target 汇总，并通过 `scripts/wecom-bridge-client.mjs` 验证批准回复、群发任务和朋友圈任务的拉取、领取、释放、失败回写与成功回写接口。
 
 ## 回滚与清理
 

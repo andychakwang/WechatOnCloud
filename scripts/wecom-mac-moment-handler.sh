@@ -8,6 +8,7 @@ set -euo pipefail
 #   WECOM_HANDLER_MODE=dry-run|prepare        default: prepare
 #   WECOM_APP_NAME='企业微信'                  macOS app name
 #   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
+#   WECOM_VERIFY_TARGET=1                     include window-title verification in handler JSON
 
 APP_NAME="${WECOM_APP_NAME:-企业微信}"
 MODE="${WECOM_HANDLER_MODE:-prepare}"
@@ -66,6 +67,79 @@ if ! command -v osascript >/dev/null 2>&1; then
   exit 3
 fi
 
+target_verification() {
+  local expected_name="$1"
+  local required="${2:-0}"
+  local enabled="${WECOM_VERIFY_TARGET:-1}"
+  if [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "off" ]]; then
+    printf ''
+    return
+  fi
+
+  local snapshot
+  if ! snapshot="$(osascript - "$APP_NAME" <<'APPLESCRIPT' 2>/dev/null
+on run argv
+  set appName to item 1 of argv
+  set frontApp to ""
+  set windowTitle to ""
+  tell application "System Events"
+    try
+      set frontApp to name of first application process whose frontmost is true
+    end try
+    if exists process appName then
+      tell process appName
+        set frontmost to true
+        delay 0.1
+        try
+          set windowTitle to name of window 1
+        end try
+      end tell
+    end if
+  end tell
+  return frontApp & linefeed & windowTitle
+end run
+APPLESCRIPT
+)"; then
+    node - "$expected_name" "$APP_NAME" "$required" <<'NODE'
+const expectedName = String(process.argv[2] || '').trim();
+const activeApp = String(process.argv[3] || '').trim();
+const required = String(process.argv[4] || '0') !== '0';
+console.log(JSON.stringify({
+  required,
+  verified: false,
+  expectedName,
+  activeApp,
+  inputReady: false,
+  error: 'Unable to read WeCom window title via AppleScript',
+  checkedAt: new Date().toISOString(),
+}));
+NODE
+    return
+  fi
+
+  node - "$expected_name" "$APP_NAME" "$required" "$snapshot" <<'NODE'
+const expectedName = String(process.argv[2] || '').trim();
+const appName = String(process.argv[3] || '').trim();
+const required = String(process.argv[4] || '0') !== '0';
+const snapshot = String(process.argv[5] || '');
+const [frontAppRaw = '', ...titleLines] = snapshot.split(/\r?\n/);
+const activeApp = frontAppRaw.trim() || appName;
+const windowTitle = titleLines.join('\n').trim();
+const norm = (value) => String(value || '').trim().toLowerCase();
+const inputReady = activeApp === appName || norm(activeApp) === norm(appName);
+console.log(JSON.stringify({
+  required,
+  verified: inputReady || !!windowTitle,
+  expectedName,
+  inputReady,
+  activeApp,
+  windowTitle,
+  confidence: inputReady ? 0.75 : 0,
+  checkedAt: new Date().toISOString(),
+}));
+NODE
+}
+
 osascript - "$APP_NAME" "$moment_text" "$PASTE_MODE" <<'APPLESCRIPT'
 on run argv
   set appName to item 1 of argv
@@ -90,5 +164,17 @@ on run argv
 end run
 APPLESCRIPT
 
-node -e 'console.log(JSON.stringify({ok:true, mode:"prepare", pasteMode:process.argv[1], appName:process.argv[2], title:process.argv[3], textChars:Number(process.argv[4]), materialsCount:Number(process.argv[5])}, null, 2))' \
-  "$PASTE_MODE" "$APP_NAME" "$title" "$text_chars" "$materials_count"
+verification_json="$(target_verification "$title" 0)"
+node -e '
+const verification = process.argv[6] ? JSON.parse(process.argv[6]) : undefined;
+console.log(JSON.stringify({
+  ok: true,
+  mode: "prepare",
+  pasteMode: process.argv[1],
+  appName: process.argv[2],
+  title: process.argv[3],
+  textChars: Number(process.argv[4]),
+  materialsCount: Number(process.argv[5]),
+  ...(verification ? { verification } : {}),
+}, null, 2));
+' "$PASTE_MODE" "$APP_NAME" "$title" "$text_chars" "$materials_count" "$verification_json"
