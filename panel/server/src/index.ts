@@ -84,6 +84,8 @@ import {
   getAutomationConfig,
   getAutomationOverview,
   updateAutomationConfig,
+  exportAutomationBundle,
+  importAutomationBundle,
   ingestWecomBridgeEvents,
   importAutomationKnowledge,
   importAutomationAudience,
@@ -405,6 +407,33 @@ app.put('/api/admin/automation/config', async (req, reply) => {
     return { config };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '保存自动化配置失败' });
+  }
+});
+
+app.get('/api/admin/automation/bundle', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  const query = req.query as any;
+  return {
+    bundle: exportAutomationBundle({
+      includeBridgeEvents: query?.includeBridgeEvents === '1' || query?.includeBridgeEvents === 'true',
+      includeOperational: query?.includeOperational === '1' || query?.includeOperational === 'true',
+      includeAudit: query?.includeAudit === '1' || query?.includeAudit === 'true',
+    }),
+  };
+});
+
+app.post('/api/admin/automation/bundle/import', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = importAutomationBundle(admin, req.body as any);
+    appendPanelLog(
+      'INFO',
+      `${result.dryRun ? '预览' : '导入'}自动化资产包 by ${admin.username}：新增 ${Object.values(result.imported).reduce((sum, value) => sum + value, 0)}，更新 ${Object.values(result.updated).reduce((sum, value) => sum + value, 0)}，跳过 ${result.skipped}`,
+    );
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '导入自动化资产包失败' });
   }
 });
 

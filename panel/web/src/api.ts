@@ -426,6 +426,48 @@ export interface AutomationAuditEvent {
   message: string;
 }
 
+export type AutomationBundleMode = 'append' | 'upsert';
+
+export interface AutomationBundleSummary {
+  rules: number;
+  knowledgeItems: number;
+  audienceContacts: number;
+  materialAssets: number;
+  massSendJobs: number;
+  momentDrafts: number;
+  bridgeEvents: number;
+}
+
+export interface AutomationBundle {
+  schema: 'wechat-on-cloud.automation-bundle';
+  version: number;
+  exportedAt: string;
+  summary: AutomationBundleSummary;
+  config: AutomationConfig;
+  audienceContacts: AutomationAudienceContact[];
+  materialAssets: AutomationMaterialAsset[];
+  massSendJobs: MassSendJob[];
+  momentDrafts: MomentDraft[];
+  runnerPolicy: WecomBridgeRunnerPolicy;
+  bridgeEvents?: WecomBridgeEvent[];
+  bridgeWorkers?: WecomBridgeWorkerStatus[];
+  bridgeRunReports?: WecomBridgeRunReport[];
+  auditEvents?: AutomationAuditEvent[];
+}
+
+export interface AutomationBundleImportResult {
+  dryRun: boolean;
+  mode: AutomationBundleMode;
+  includeConfig: boolean;
+  keepOperationalState: boolean;
+  summary: AutomationBundleSummary;
+  imported: Record<string, number>;
+  updated: Record<string, number>;
+  ids: Record<string, string[]>;
+  skipped: number;
+  errors: string[];
+}
+
 export interface AutomationDecision {
   action: 'send-rule' | 'review' | 'none' | 'blocked';
   rule: AutomationRule | null;
@@ -549,6 +591,24 @@ export const api = {
   getAutomationOverview: () => req<{ overview: AutomationOverview }>('/api/admin/automation/overview'),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
+  exportAutomationBundle: (options: { includeBridgeEvents?: boolean; includeOperational?: boolean; includeAudit?: boolean } = {}) =>
+    req<{ bundle: AutomationBundle }>(
+      `/api/admin/automation/bundle?includeBridgeEvents=${options.includeBridgeEvents ? '1' : '0'}&includeOperational=${options.includeOperational ? '1' : '0'}&includeAudit=${options.includeAudit ? '1' : '0'}`,
+    ),
+  importAutomationBundle: (payload: {
+    bundle: any;
+    dryRun?: boolean;
+    mode?: AutomationBundleMode;
+    includeConfig?: boolean;
+    includeQueues?: boolean;
+    keepOperationalState?: boolean;
+    includeBridgeEvents?: boolean;
+    includeRunnerPolicy?: boolean;
+  }) =>
+    req<{ result: AutomationBundleImportResult }>('/api/admin/automation/bundle/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getAutomationBridge: () => req<{ bridge: AutomationBridgeStatus }>('/api/admin/automation/bridge'),
   listWecomBridgeEvents: (limit = 100, status?: WecomBridgeEvent['status']) =>
     req<{ events: WecomBridgeEvent[] }>(

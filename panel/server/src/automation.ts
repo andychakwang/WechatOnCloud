@@ -429,6 +429,48 @@ export interface AutomationAuditEvent {
   message: string;
 }
 
+export type AutomationBundleMode = 'append' | 'upsert';
+
+export interface AutomationBundleSummary {
+  rules: number;
+  knowledgeItems: number;
+  audienceContacts: number;
+  materialAssets: number;
+  massSendJobs: number;
+  momentDrafts: number;
+  bridgeEvents: number;
+}
+
+export interface AutomationBundle {
+  schema: 'wechat-on-cloud.automation-bundle';
+  version: number;
+  exportedAt: string;
+  summary: AutomationBundleSummary;
+  config: AutomationConfig;
+  audienceContacts: AutomationAudienceContact[];
+  materialAssets: AutomationMaterialAsset[];
+  massSendJobs: MassSendJob[];
+  momentDrafts: MomentDraft[];
+  runnerPolicy: WecomBridgeRunnerPolicy;
+  bridgeEvents?: WecomBridgeEvent[];
+  bridgeWorkers?: WecomBridgeWorker[];
+  bridgeRunReports?: WecomBridgeRunReport[];
+  auditEvents?: AutomationAuditEvent[];
+}
+
+export interface AutomationBundleImportResult {
+  dryRun: boolean;
+  mode: AutomationBundleMode;
+  includeConfig: boolean;
+  keepOperationalState: boolean;
+  summary: AutomationBundleSummary;
+  imported: Record<string, number>;
+  updated: Record<string, number>;
+  ids: Record<string, string[]>;
+  skipped: number;
+  errors: string[];
+}
+
 interface AutomationData extends AutomationConfig {
   audienceContacts: AutomationAudienceContact[];
   materialAssets: AutomationMaterialAsset[];
@@ -668,6 +710,211 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
   );
   persist();
   return getAutomationConfig();
+}
+
+export function exportAutomationBundle(raw: any = {}): AutomationBundle {
+  const includeBridgeEvents = raw?.includeBridgeEvents === true;
+  const includeOperational = raw?.includeOperational === true;
+  const includeAudit = raw?.includeAudit === true;
+  const bundle: AutomationBundle = {
+    schema: 'wechat-on-cloud.automation-bundle',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    summary: automationBundleSummary(data, includeBridgeEvents),
+    config: getAutomationConfig(),
+    audienceContacts: data.audienceContacts.map(cloneAudienceContact),
+    materialAssets: data.materialAssets.map(cloneMaterialAsset),
+    massSendJobs: data.massSendJobs.map(cloneMassSendJob),
+    momentDrafts: data.momentDrafts.map(cloneMomentDraft),
+    runnerPolicy: cloneRunnerPolicy(data.runnerPolicy),
+  };
+  if (includeBridgeEvents) bundle.bridgeEvents = data.bridgeEvents.map(cloneBridgeEvent);
+  if (includeOperational) {
+    bundle.bridgeWorkers = data.bridgeWorkers.map((worker) => ({ ...worker }));
+    bundle.bridgeRunReports = data.bridgeRunReports.map(cloneBridgeRunReport);
+  }
+  if (includeAudit) bundle.auditEvents = data.auditEvents.map((event) => ({ ...event }));
+  return bundle;
+}
+
+export function importAutomationBundle(actor: User, raw: any): AutomationBundleImportResult {
+  const bundle = raw?.bundle && typeof raw.bundle === 'object' ? raw.bundle : raw;
+  if (!bundle || typeof bundle !== 'object') throw new Error('资产包格式不合法');
+  const mode: AutomationBundleMode = raw?.mode === 'append' ? 'append' : 'upsert';
+  const dryRun = raw?.dryRun !== false;
+  const includeConfig = raw?.includeConfig !== false;
+  const includeQueues = raw?.includeQueues !== false;
+  const keepOperationalState = raw?.keepOperationalState === true;
+  const includeBridgeEvents = raw?.includeBridgeEvents === true && keepOperationalState;
+  const now = new Date().toISOString();
+  const target: AutomationData = structuredClone(data);
+  const imported = emptyBundleCounters();
+  const updated = emptyBundleCounters();
+  const ids = emptyBundleIdLists();
+  const errors: string[] = [];
+  let skipped = 0;
+
+  const configRaw = bundle.config && typeof bundle.config === 'object' ? bundle.config : bundle;
+  if (includeConfig) {
+    const settings = normalizeSettings(configRaw?.settings ?? bundle.settings);
+    if (!keepOperationalState) settings.enabled = false;
+    target.settings = settings;
+    target.persona = str(configRaw?.persona ?? bundle.persona ?? target.persona, 2000);
+    target.knowledgeNotes = str(configRaw?.knowledgeNotes ?? bundle.knowledgeNotes ?? target.knowledgeNotes, 50000);
+    if (bundle.runnerPolicy && raw?.includeRunnerPolicy !== false) {
+      target.runnerPolicy = normalizeRunnerPolicy(
+        {
+          ...bundle.runnerPolicy,
+          updatedAt: now,
+          updatedBy: actor.username,
+        },
+        now,
+      );
+    }
+  }
+
+  const mergeItems = <T extends { id: string; createdAt?: string; updatedAt?: string }>(
+    category: keyof AutomationBundleSummary,
+    list: T[],
+    rawItems: any[],
+    normalize: (item: any) => T,
+    keyOf: (item: T) => string,
+    validate: (item: T) => string | null,
+  ) => {
+    for (const [index, rawItem] of rawItems.entries()) {
+      try {
+        const item = normalize(rawItem);
+        const reason = validate(item);
+        if (reason) throw new Error(reason);
+        const key = keyOf(item);
+        const existingIndex = mode === 'upsert' && key ? list.findIndex((current) => keyOf(current) === key) : -1;
+        if (existingIndex >= 0) {
+          const existing = list[existingIndex];
+          list[existingIndex] = {
+            ...item,
+            id: existing.id,
+            createdAt: existing.createdAt,
+            updatedAt: now,
+          };
+          updated[category] += 1;
+          ids[category].push(existing.id);
+        } else {
+          list.push(item);
+          imported[category] += 1;
+          ids[category].push(item.id);
+        }
+      } catch (e: any) {
+        skipped += 1;
+        errors.push(`${bundleCategoryLabel(category)} 第 ${index + 1} 条跳过：${e?.message || e}`);
+      }
+    }
+  };
+
+  const rulesRaw = bundleArray(configRaw?.rules ?? bundle.rules).slice(0, 200);
+  mergeItems(
+    'rules',
+    target.rules,
+    rulesRaw,
+    (item) => normalizeRule({ ...item, updatedAt: now }, false, now),
+    (item) => item.name.trim().toLowerCase(),
+    (item) => (!item.name.trim() ? '规则名称为空' : null),
+  );
+
+  const knowledgeRaw = bundleArray(configRaw?.knowledgeItems ?? bundle.knowledgeItems).slice(0, MAX_KNOWLEDGE_ITEMS);
+  mergeItems(
+    'knowledgeItems',
+    target.knowledgeItems,
+    knowledgeRaw,
+    (item) => normalizeKnowledgeItem({ ...item, updatedAt: now, lastImportedAt: now }, false, now),
+    (item) => `${item.source.toLowerCase()}\n${item.title.toLowerCase()}`,
+    (item) => (!item.content.trim() ? '资料内容为空' : null),
+  );
+
+  const audienceRaw = bundleArray(bundle.audienceContacts ?? bundle.contacts ?? bundle.audience).slice(0, MAX_AUDIENCE_CONTACTS);
+  mergeItems(
+    'audienceContacts',
+    target.audienceContacts,
+    audienceRaw,
+    (item) => normalizeAudienceContact({ ...item, updatedAt: now, lastImportedAt: now }, false, now),
+    (item) => `${item.source.toLowerCase()}\n${item.type}\n${item.name.toLowerCase()}`,
+    (item) => (!item.name.trim() ? '受众名称为空' : null),
+  );
+
+  const materialRaw = bundleArray(bundle.materialAssets ?? bundle.assets ?? bundle.materials).slice(0, MAX_MATERIAL_ASSETS);
+  mergeItems(
+    'materialAssets',
+    target.materialAssets,
+    materialRaw,
+    (item) => normalizeMaterialAsset({ ...item, updatedAt: now, lastImportedAt: now }, false, now),
+    (item) => `${item.source.toLowerCase()}\n${item.key.toLowerCase()}`,
+    (item) => {
+      if (!item.key.trim()) return '素材 key 为空';
+      if (!item.localPath.trim() && !item.url.trim() && !item.description.trim()) return '素材至少需要本机路径、URL 或说明';
+      return null;
+    },
+  );
+
+  if (includeQueues) {
+    const massRaw = bundleArray(bundle.massSendJobs ?? bundle.massJobs).slice(0, 500);
+    mergeItems(
+      'massSendJobs',
+      target.massSendJobs,
+      massRaw,
+      (item) => normalizeMassSendJob(prepareBundleMassJob(item, keepOperationalState), false, now),
+      (item) => item.title.trim().toLowerCase(),
+      (item) => {
+        if (!item.title.trim()) return '群发队列标题为空';
+        if (!item.message.trim()) return '群发内容为空';
+        if (!item.items.length) return '群发目标为空';
+        return null;
+      },
+    );
+
+    const momentRaw = bundleArray(bundle.momentDrafts ?? bundle.moments).slice(0, 500);
+    mergeItems(
+      'momentDrafts',
+      target.momentDrafts,
+      momentRaw,
+      (item) => normalizeMomentDraft(prepareBundleMomentDraft(item, keepOperationalState), false, now),
+      (item) => item.title.trim().toLowerCase(),
+      (item) => (!item.text.trim() ? '朋友圈文案为空' : null),
+    );
+  }
+
+  if (includeBridgeEvents) {
+    const bridgeRaw = bundleArray(bundle.bridgeEvents).slice(0, MAX_BRIDGE_EVENTS);
+    mergeItems(
+      'bridgeEvents',
+      target.bridgeEvents,
+      bridgeRaw,
+      (item) => normalizeBridgeEvent({ ...item, updatedAt: now }, false, now),
+      (item) => `${item.source.toLowerCase()}\n${(item.externalId || item.id).toLowerCase()}`,
+      (item) => (!item.inboundText.trim() ? 'Bridge 消息内容为空' : null),
+    );
+  }
+
+  const result: AutomationBundleImportResult = {
+    dryRun,
+    mode,
+    includeConfig,
+    keepOperationalState,
+    summary: automationBundleSummaryFromRaw(bundle),
+    imported,
+    updated,
+    ids,
+    skipped,
+    errors,
+  };
+
+  if (!dryRun) {
+    data = normalizeData(target, true);
+    addAutomationAudit({
+      action: 'bundle_imported',
+      actor: actor.username,
+      message: `导入自动化资产包：新增 ${sumBundleCounters(imported)}，更新 ${sumBundleCounters(updated)}，跳过 ${skipped}`,
+    });
+  }
+  return result;
 }
 
 export function listWecomBridgeEvents(limit = 100, status?: string): WecomBridgeEvent[] {
@@ -3142,6 +3389,114 @@ function cloneMomentDraft(draft: MomentDraft): MomentDraft {
   return {
     ...draft,
     materials: [...draft.materials],
+  };
+}
+
+function emptyBundleCounters(): Record<keyof AutomationBundleSummary, number> {
+  return {
+    rules: 0,
+    knowledgeItems: 0,
+    audienceContacts: 0,
+    materialAssets: 0,
+    massSendJobs: 0,
+    momentDrafts: 0,
+    bridgeEvents: 0,
+  };
+}
+
+function emptyBundleIdLists(): Record<keyof AutomationBundleSummary, string[]> {
+  return {
+    rules: [],
+    knowledgeItems: [],
+    audienceContacts: [],
+    materialAssets: [],
+    massSendJobs: [],
+    momentDrafts: [],
+    bridgeEvents: [],
+  };
+}
+
+function sumBundleCounters(counters: Record<string, number>): number {
+  return Object.values(counters).reduce((sum, value) => sum + value, 0);
+}
+
+function automationBundleSummary(source: AutomationData, includeBridgeEvents = false): AutomationBundleSummary {
+  return {
+    rules: source.rules.length,
+    knowledgeItems: source.knowledgeItems.length,
+    audienceContacts: source.audienceContacts.length,
+    materialAssets: source.materialAssets.length,
+    massSendJobs: source.massSendJobs.length,
+    momentDrafts: source.momentDrafts.length,
+    bridgeEvents: includeBridgeEvents ? source.bridgeEvents.length : 0,
+  };
+}
+
+function automationBundleSummaryFromRaw(bundle: any): AutomationBundleSummary {
+  const config = bundle?.config && typeof bundle.config === 'object' ? bundle.config : bundle;
+  return {
+    rules: bundleArray(config?.rules ?? bundle?.rules).length,
+    knowledgeItems: bundleArray(config?.knowledgeItems ?? bundle?.knowledgeItems).length,
+    audienceContacts: bundleArray(bundle?.audienceContacts ?? bundle?.contacts ?? bundle?.audience).length,
+    materialAssets: bundleArray(bundle?.materialAssets ?? bundle?.assets ?? bundle?.materials).length,
+    massSendJobs: bundleArray(bundle?.massSendJobs ?? bundle?.massJobs).length,
+    momentDrafts: bundleArray(bundle?.momentDrafts ?? bundle?.moments).length,
+    bridgeEvents: bundleArray(bundle?.bridgeEvents).length,
+  };
+}
+
+function bundleArray(value: any): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function bundleCategoryLabel(category: keyof AutomationBundleSummary): string {
+  const labels: Record<keyof AutomationBundleSummary, string> = {
+    rules: '规则',
+    knowledgeItems: '接入资料',
+    audienceContacts: '受众',
+    materialAssets: '素材',
+    massSendJobs: '群发队列',
+    momentDrafts: '朋友圈草稿',
+    bridgeEvents: 'Bridge 消息',
+  };
+  return labels[category] || String(category);
+}
+
+function prepareBundleMassJob(raw: any, keepOperationalState: boolean): any {
+  if (keepOperationalState) return raw;
+  const items = Array.isArray(raw?.items)
+    ? raw.items.map((item: any) => ({
+        ...item,
+        status: 'pending',
+        sentAt: undefined,
+        auditEventId: undefined,
+        error: undefined,
+        bridgeClaimedAt: undefined,
+        bridgeClaimedBy: undefined,
+        bridgeClaimExpiresAt: undefined,
+      }))
+    : raw?.items;
+  return {
+    ...raw,
+    approved: false,
+    status: 'draft',
+    items,
+  };
+}
+
+function prepareBundleMomentDraft(raw: any, keepOperationalState: boolean): any {
+  if (keepOperationalState) return raw;
+  return {
+    ...raw,
+    approved: false,
+    status: 'draft',
+    lastPreparedAt: undefined,
+    publishedAt: undefined,
+    bridgeClaimedAt: undefined,
+    bridgeClaimedBy: undefined,
+    bridgeClaimExpiresAt: undefined,
+    bridgeFailedAt: undefined,
+    bridgeError: undefined,
   };
 }
 

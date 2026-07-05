@@ -10,6 +10,8 @@ import {
   type AutomationConfig,
   type AutomationAudienceContact,
   type AutomationAudienceContactType,
+  type AutomationBundleImportResult,
+  type AutomationBundleMode,
   type AutomationKnowledgeCategory,
   type AutomationKnowledgeItem,
   type AutomationMaterialAsset,
@@ -208,6 +210,18 @@ function linesOf(text: string): string[] {
   return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
 }
 
+function bundleCount(result?: AutomationBundleImportResult | null): string {
+  if (!result) return '';
+  const imported = Object.values(result.imported || {}).reduce((sum, value) => sum + value, 0);
+  const updated = Object.values(result.updated || {}).reduce((sum, value) => sum + value, 0);
+  return `新增 ${imported} · 更新 ${updated} · 跳过 ${result.skipped}`;
+}
+
+function compactDateForFile(date = new Date()): string {
+  const p = (x: number) => String(x).padStart(2, '0');
+  return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}-${p(date.getHours())}${p(date.getMinutes())}`;
+}
+
 function replyStepsFromDraft(draft: string): AutomationStep[] {
   const steps: AutomationStep[] = [];
   let buffer: string[] = [];
@@ -343,6 +357,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [materialKind, setMaterialKind] = useState<AutomationMaterialKind>('image');
   const [materialApproveImported, setMaterialApproveImported] = useState(false);
   const [materialImportText, setMaterialImportText] = useState('');
+  const [bundleImportText, setBundleImportText] = useState('');
+  const [bundleMode, setBundleMode] = useState<AutomationBundleMode>('upsert');
+  const [bundleIncludeConfig, setBundleIncludeConfig] = useState(true);
+  const [bundleKeepOperationalState, setBundleKeepOperationalState] = useState(false);
+  const [bundlePreview, setBundlePreview] = useState<AutomationBundleImportResult | null>(null);
 
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
@@ -642,6 +661,87 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const useMaterialForMoment = (asset: AutomationMaterialAsset) => {
     setMomentMaterials((current) => linesOf([current, asset.key].filter(Boolean).join('\n')).join('\n'));
     toast('已填入朋友圈素材', 'ok');
+  };
+
+  const downloadAutomationBundle = async () => {
+    setBusy('bundle-export');
+    try {
+      const { bundle } = await api.exportAutomationBundle();
+      const text = JSON.stringify(bundle, null, 2);
+      const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `woc-automation-bundle-${compactDateForFile()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast('自动化资产包已导出', 'ok');
+    } catch (e: any) {
+      toast(e.message || '导出资产包失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const parseBundleImportText = () => {
+    try {
+      return JSON.parse(bundleImportText);
+    } catch {
+      toast('资产包 JSON 格式不正确', 'error');
+      return null;
+    }
+  };
+
+  const previewAutomationBundleImport = async () => {
+    const bundle = parseBundleImportText();
+    if (!bundle) return;
+    setBusy('bundle-preview');
+    try {
+      const { result } = await api.importAutomationBundle({
+        bundle,
+        dryRun: true,
+        mode: bundleMode,
+        includeConfig: bundleIncludeConfig,
+        keepOperationalState: bundleKeepOperationalState,
+      });
+      setBundlePreview(result);
+      toast(`资产包预览完成：${bundleCount(result)}`, result.errors.length ? 'error' : 'ok');
+    } catch (e: any) {
+      toast(e.message || '预览资产包失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const applyAutomationBundleImport = async () => {
+    const bundle = parseBundleImportText();
+    if (!bundle) return;
+    const ok = await confirm({
+      title: '导入自动化资产包？',
+      body: bundleKeepOperationalState ? '将保留队列和草稿的审核/领取状态。请确认当前 Mac Runner 不会误处理。' : '队列和朋友圈草稿会以未审核草稿导入，不会被 Mac Runner 立即执行。',
+      confirmText: '确认导入',
+    });
+    if (!ok) return;
+    setBusy('bundle-import');
+    try {
+      const { result } = await api.importAutomationBundle({
+        bundle,
+        dryRun: false,
+        mode: bundleMode,
+        includeConfig: bundleIncludeConfig,
+        keepOperationalState: bundleKeepOperationalState,
+      });
+      setBundlePreview(result);
+      setBundleImportText('');
+      toast(`资产包已导入：${bundleCount(result)}`, result.errors.length ? 'error' : 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '导入资产包失败', 'error');
+    } finally {
+      setBusy('');
+    }
   };
 
   const useBridgeEventForReply = async (event: WecomBridgeEvent) => {
@@ -1903,6 +2003,55 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </div>
               ))}
             </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>资产包备份</b>
+              <span className="tag">{bundlePreview ? bundleCount(bundlePreview) : 'JSON'}</span>
+            </div>
+            <div className="auto-actions inline">
+              <button className="btn btn-primary s-btn" disabled={busy === 'bundle-export'} onClick={downloadAutomationBundle}>
+                导出资产包
+              </button>
+              <select className="input compact-input" value={bundleMode} onChange={(e) => setBundleMode(e.target.value as AutomationBundleMode)}>
+                <option value="upsert">按名称更新</option>
+                <option value="append">全部追加</option>
+              </select>
+            </div>
+            <textarea
+              className="input textarea"
+              placeholder="粘贴 woc-automation-bundle JSON"
+              value={bundleImportText}
+              onChange={(e) => {
+                setBundleImportText(e.target.value);
+                setBundlePreview(null);
+              }}
+            />
+            <div className="auto-actions inline">
+              <label className="auto-check inline-check">
+                <input type="checkbox" checked={bundleIncludeConfig} onChange={(e) => setBundleIncludeConfig(e.target.checked)} />
+                <span>导入规则、人设和开关</span>
+              </label>
+              <label className="auto-check inline-check">
+                <input type="checkbox" checked={bundleKeepOperationalState} onChange={(e) => setBundleKeepOperationalState(e.target.checked)} />
+                <span>保留队列运行状态</span>
+              </label>
+            </div>
+            <div className="auto-actions inline">
+              <button className="btn s-btn" disabled={busy === 'bundle-preview' || !bundleImportText.trim()} onClick={previewAutomationBundleImport}>
+                预览导入
+              </button>
+              <button className="btn s-btn" disabled={busy === 'bundle-import' || !bundleImportText.trim()} onClick={applyAutomationBundleImport}>
+                确认导入
+              </button>
+            </div>
+            {bundlePreview && (
+              <div className="muted small auto-snippet">
+                {bundleCount(bundlePreview)}
+                {bundlePreview.errors.length ? ` · ${bundlePreview.errors.slice(0, 2).join(' / ')}` : ''}
+              </div>
+            )}
           </section>
 
           <section className="auto-panel">

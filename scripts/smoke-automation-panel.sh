@@ -357,6 +357,89 @@ json_assert_path asset.approved
 request_json DELETE "/api/admin/automation/materials/$material_id"
 json_assert_path ok
 
+say "Export, preview and import automation bundle"
+bundle_payload="$(python3 - "$stamp" "$reply_image_file" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+image_path = sys.argv[2]
+bundle = {
+    "schema": "wechat-on-cloud.automation-bundle",
+    "version": 1,
+    "exportedAt": "2026-07-05T00:00:00.000Z",
+    "config": {
+        "settings": {"enabled": True, "aiDraftEnabled": True, "automaticRuleRepliesEnabled": True, "massSendEnabled": True, "momentsEnabled": True, "maximumAutomaticSendsPerHour": 20, "perConversationCooldownMinutes": 10, "requireConfirmForSend": True},
+        "persona": "Smoke bundle persona",
+        "knowledgeNotes": "Smoke bundle notes",
+        "rules": [{"name": f"smoke-bundle-rule-{stamp}", "enabled": True, "approved": True, "priority": 20, "triggers": [f"bundle trigger {stamp}"], "responseSteps": [{"type": "text", "text": "bundle reply", "sendEnter": True}]}],
+        "knowledgeItems": [{"title": f"smoke-bundle-knowledge-{stamp}", "category": "faq", "source": "smoke-bundle", "tags": ["bundle"], "triggers": ["bundle"], "content": "bundle knowledge content"}],
+    },
+    "audienceContacts": [{"name": f"Smoke Bundle Audience {stamp}", "type": "group", "source": "smoke-bundle", "tags": ["bundle"], "note": "bundle audience"}],
+    "materialAssets": [{"key": f"smoke-bundle-poster-{stamp}", "title": "Smoke Bundle Poster", "kind": "image", "source": "smoke-bundle", "localPath": image_path, "tags": ["bundle"], "description": "bundle material"}],
+    "massSendJobs": [{"title": f"smoke-bundle-mass-{stamp}", "message": "bundle mass message", "approved": True, "status": "queued", "items": [{"recipientName": f"Smoke Bundle Contact {stamp}", "status": "pending"}]}],
+    "momentDrafts": [{"title": f"smoke-bundle-moment-{stamp}", "text": "bundle moment text", "approved": True, "status": "ready", "materials": [f"smoke-bundle-poster-{stamp}"]}],
+}
+print(json.dumps({"bundle": bundle, "mode": "upsert", "includeConfig": False, "keepOperationalState": False}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/bundle/import "$(python3 - "$bundle_payload" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+payload["dryRun"] = True
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)"
+json_assert_eq result.imported.knowledgeItems 1
+json_assert_eq result.imported.audienceContacts 1
+json_assert_eq result.imported.materialAssets 1
+json_assert_eq result.imported.massSendJobs 1
+json_assert_eq result.imported.momentDrafts 1
+request_json POST /api/admin/automation/bundle/import "$(python3 - "$bundle_payload" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+payload["dryRun"] = False
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)"
+json_assert_eq result.imported.knowledgeItems 1
+json_assert_path result.ids.knowledgeItems[0]
+bundle_rule_id="$(json_get result.ids.rules[0])"
+bundle_knowledge_id="$(json_get result.ids.knowledgeItems[0])"
+bundle_audience_id="$(json_get result.ids.audienceContacts[0])"
+bundle_material_id="$(json_get result.ids.materialAssets[0])"
+bundle_mass_job_id="$(json_get result.ids.massSendJobs[0])"
+bundle_moment_id="$(json_get result.ids.momentDrafts[0])"
+request_json GET /api/admin/automation/bundle
+json_assert_path bundle.summary.materialAssets
+request_json GET /api/admin/automation/config
+bundle_config_cleanup="$(python3 - "$body_file" "$bundle_rule_id" <<'PY'
+import json
+import sys
+
+file, rule_id = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+config = payload["config"]
+config["rules"] = [rule for rule in config.get("rules", []) if rule.get("id") != rule_id]
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+request_json DELETE "/api/admin/automation/knowledge/$bundle_knowledge_id"
+json_assert_path ok
+request_json DELETE "/api/admin/automation/audience/$bundle_audience_id"
+json_assert_path ok
+request_json DELETE "/api/admin/automation/materials/$bundle_material_id"
+json_assert_path ok
+request_json PATCH "/api/admin/automation/mass-jobs/$bundle_mass_job_id" '{"status":"cancelled","approved":false}'
+json_assert_eq job.status cancelled
+request_json PATCH "/api/admin/automation/moment-drafts/$bundle_moment_id" '{"status":"archived","approved":false}'
+json_assert_eq draft.status archived
+request_json PUT /api/admin/automation/config "$bundle_config_cleanup"
+json_assert_path config.rules
+
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
   say "Check WeCom Mac handler dry-run"
   WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" < "$ROOT/doc/examples/wecom-bridge-reply.sample.json" > "$body_file"
