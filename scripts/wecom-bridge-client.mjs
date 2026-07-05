@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r49-worker-capabilities';
+const CLIENT_VERSION = 'automation-lab-r50-capability-gated-claims';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -13,7 +13,7 @@ Environment:
   WOC_PANEL_URL / PANEL_URL / WECHATONCLOUD_PANEL_URL   e.g. http://nasbot.cloud:36081
   AUTOMATION_BRIDGE_TOKEN / WECOM_BRIDGE_TOKEN          bridge token from NAS compose
   WECOM_REQUIRE_HANDLER_VERIFICATION=1                  require positive handler verification before success ack
-  WECOM_BRIDGE_CAPABILITIES=reply,mass,moment,...       explicit worker capabilities for heartbeat
+  WECOM_BRIDGE_CAPABILITIES=reply,mass,moment,...       explicit worker capabilities for heartbeat and claim/ack gates
 
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
@@ -250,21 +250,29 @@ function normalizeCapability(value) {
 }
 
 function workerCapabilities(options, mode) {
-  const capabilities = new Set(['reply', 'mass', 'moment', 'prepare', 'material-map']);
   const explicit = [
     ...splitList(options.capabilities || options.capability || ''),
     ...splitList(process.env.WECOM_BRIDGE_CAPABILITIES || process.env.WECOM_WORKER_CAPABILITIES || ''),
   ];
+  const capabilities = new Set(explicit.length ? [] : ['reply', 'mass', 'moment', 'prepare', 'material-map']);
   for (const item of explicit) {
     const capability = normalizeCapability(item);
     if (capability) capabilities.add(capability);
   }
+  if (explicit.length) return Array.from(capabilities);
   if (mode === 'send' || envBool('WECOM_ALLOW_SEND', 'WECOM_ACCEPT_REMOTE_SEND')) capabilities.add('send');
   if (!['0', 'false', 'no', 'off'].includes(String(process.env.WECOM_VERIFY_TARGET || '').trim().toLowerCase())) capabilities.add('target-match');
   if (envBool('WECOM_REQUIRE_TARGET_MATCH')) capabilities.add('target-match');
   if (envBool('WECOM_REQUIRE_HANDLER_VERIFICATION', 'WECOM_REQUIRE_VERIFICATION')) capabilities.add('handler-verification');
   if (envBool('WECOM_VISUAL_VERIFICATION', 'WECOM_OCR_VERIFICATION')) capabilities.add('visual-verification');
   return Array.from(capabilities);
+}
+
+function workerPayload(options, mode = runnerMode(options, 'manual')) {
+  return {
+    workerId: workerId(options),
+    capabilities: workerCapabilities(options, mode),
+  };
 }
 
 function runStatusFromHandled(handled) {
@@ -661,7 +669,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
         deliveryStatus: 'delivered',
-        workerId: workerId(options),
+        ...workerPayload(options, 'send'),
       }),
     );
     return;
@@ -673,7 +681,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
         deliveryStatus: 'claimed',
-        workerId: workerId(options),
+        ...workerPayload(options, 'prepare'),
         claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
       }),
     );
@@ -686,7 +694,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
         deliveryStatus: 'released',
-        workerId: workerId(options),
+        ...workerPayload(options),
         reason: String(options.reason || options.message || 'released by Mac bridge client'),
       }),
     );
@@ -699,7 +707,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(eventId)}`, {
         deliveryStatus: 'failed',
-        workerId: workerId(options),
+        ...workerPayload(options),
         error: String(options.error || options.message || 'Mac handler failed'),
       }),
     );
@@ -712,7 +720,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'claimed',
-        workerId: workerId(options),
+        ...workerPayload(options, 'prepare'),
         claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
       }),
     );
@@ -725,7 +733,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'released',
-        workerId: workerId(options),
+        ...workerPayload(options),
         reason: String(options.reason || options.message || 'released by Mac bridge client'),
       }),
     );
@@ -738,7 +746,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'sent',
-        workerId: workerId(options),
+        ...workerPayload(options, 'send'),
       }),
     );
     return;
@@ -750,7 +758,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'failed',
-        workerId: workerId(options),
+        ...workerPayload(options),
         error: String(options.error || options.message || 'Mac mass handler failed'),
       }),
     );
@@ -763,7 +771,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'claimed',
-        workerId: workerId(options),
+        ...workerPayload(options, 'prepare'),
         claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
       }),
     );
@@ -776,7 +784,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'released',
-        workerId: workerId(options),
+        ...workerPayload(options),
         reason: String(options.reason || options.message || 'released by Mac bridge client'),
       }),
     );
@@ -789,7 +797,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'prepared',
-        workerId: workerId(options),
+        ...workerPayload(options, 'prepare'),
       }),
     );
     return;
@@ -801,7 +809,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'published',
-        workerId: workerId(options),
+        ...workerPayload(options, 'send'),
       }),
     );
     return;
@@ -813,7 +821,7 @@ async function main() {
     printJson(
       await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(taskId)}`, {
         deliveryStatus: 'failed',
-        workerId: workerId(options),
+        ...workerPayload(options),
         error: String(options.error || options.message || 'Mac moment handler failed'),
       }),
     );
@@ -849,7 +857,7 @@ async function main() {
       if (claim) {
         const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'claimed',
-          workerId: workerId(options),
+          ...workerPayload(options, markDelivered ? 'send' : 'prepare'),
           claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
         });
         runnable = claimed.event || reply;
@@ -873,13 +881,13 @@ async function main() {
       if (ok && markDelivered) {
         item.delivered = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'delivered',
-          workerId: workerId(options),
+          ...workerPayload(options, 'send'),
         });
       }
       if (!ok && reportFailure) {
         item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'failed',
-          workerId: workerId(options),
+          ...workerPayload(options),
           error: item.error || `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
         });
       }
@@ -925,7 +933,7 @@ async function main() {
       if (claim) {
         const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'claimed',
-          workerId: workerId(options),
+          ...workerPayload(options, markSent ? 'send' : 'prepare'),
           claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
         });
         runnable = claimed.task || task;
@@ -949,13 +957,13 @@ async function main() {
       if (ok && markSent) {
         item.sent = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'sent',
-          workerId: workerId(options),
+          ...workerPayload(options, 'send'),
         });
       }
       if (!ok && reportFailure) {
         item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'failed',
-          workerId: workerId(options),
+          ...workerPayload(options),
           error: item.error || `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
         });
       }
@@ -1003,7 +1011,7 @@ async function main() {
       if (claim) {
         const claimed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'claimed',
-          workerId: workerId(options),
+          ...workerPayload(options, markPublished ? 'send' : 'prepare'),
           claimTtlSeconds: intOpt(options['claim-ttl-seconds'] || options.ttl, 300, 30, 86400),
         });
         runnable = claimed.task || task;
@@ -1027,19 +1035,19 @@ async function main() {
       if (ok && markPrepared) {
         item.prepared = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'prepared',
-          workerId: workerId(options),
+          ...workerPayload(options, 'prepare'),
         });
       }
       if (ok && markPublished) {
         item.published = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'published',
-          workerId: workerId(options),
+          ...workerPayload(options, 'send'),
         });
       }
       if (!ok && reportFailure) {
         item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'failed',
-          workerId: workerId(options),
+          ...workerPayload(options),
           error: item.error || `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
         });
       }

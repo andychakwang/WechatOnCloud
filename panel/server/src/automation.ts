@@ -1691,6 +1691,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     if (event.replyClaimedAt && !isBridgeReplyClaimExpired(event, now) && event.replyClaimedBy && event.replyClaimedBy !== workerId) {
       throw new Error(`回复已由 ${event.replyClaimedBy} 领取，未超时前不能重复领取`);
     }
+    requireBridgeWorkerCapabilities(raw, workerId, ['reply'], '领取回复');
     event.replyClaimedAt = now;
     event.replyClaimedBy = workerId;
     event.replyClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
@@ -1726,6 +1727,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
       event.replyClaimedAt = now;
       event.replyClaimedBy = str(raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? actor.username, 120).trim() || actor.username;
     }
+    requireBridgeWorkerCapabilities(raw, event.replyClaimedBy || actor.username, ['reply', 'send'], '交付回复');
     event.replyClaimExpiresAt = undefined;
     event.replyFailedAt = undefined;
     event.replyFailedBy = undefined;
@@ -2766,6 +2768,7 @@ export function patchWecomBridgeMassTaskDelivery(
     } catch (e: any) {
       throw new Error(e?.message || '群发任务暂不可领取');
     }
+    requireBridgeWorkerCapabilities(raw, workerId, ['mass'], '领取群发');
     item.bridgeClaimedAt = now;
     item.bridgeClaimedBy = workerId;
     item.bridgeClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
@@ -2819,6 +2822,7 @@ export function patchWecomBridgeMassTaskDelivery(
   if (deliveryStatus === 'sent' || deliveryStatus === 'delivered') {
     if (item.status === 'sent') return { job: cloneMassSendJob(job), item: { ...item } };
     if (item.status !== 'pending') throw new Error('只有待发送目标可以标记为已发送');
+    requireBridgeWorkerCapabilities(raw, workerId, ['mass', 'send'], '发送群发');
     item.status = 'sent';
     item.sentAt = now;
     item.error = undefined;
@@ -2973,6 +2977,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     const risk = assessRisk([draft.text, draft.imageNotes]);
     if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
     if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
+    requireBridgeWorkerCapabilities(raw, workerId, ['moment'], '领取朋友圈');
     draft.bridgeClaimedAt = now;
     draft.bridgeClaimedBy = workerId;
     draft.bridgeClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
@@ -3018,6 +3023,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     const risk = assessRisk([draft.text, draft.imageNotes]);
     if (risk.level === 'block') throw new Error(`风险拦截：${risk.reasons.join('；')}`);
     if (risk.level === 'review') throw new Error(`朋友圈内容需要人工复核：${risk.reasons.join('；')}`);
+    requireBridgeWorkerCapabilities(raw, workerId, ['moment', 'prepare'], '准备朋友圈');
     draft.status = 'prepared';
     draft.lastPreparedAt = now;
     draft.bridgeFailedAt = undefined;
@@ -3039,6 +3045,7 @@ export function patchWecomBridgeMomentTaskDelivery(
   if (deliveryStatus === 'published') {
     if (!draft.approved) throw new Error('朋友圈草稿尚未审核，不能标记发布');
     if (draft.status === 'archived') throw new Error('朋友圈草稿已归档');
+    requireBridgeWorkerCapabilities(raw, workerId, ['moment', 'send'], '发布朋友圈');
     draft.status = 'published';
     draft.publishedAt = now;
     draft.bridgeFailedAt = undefined;
@@ -4754,6 +4761,29 @@ function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offline
 
 function bridgeWorkerCan(worker: Pick<WecomBridgeWorker, 'capabilities'>, capability: WecomBridgeWorkerCapability): boolean {
   return worker.capabilities.length === 0 || worker.capabilities.includes(capability);
+}
+
+function bridgeClaimCapabilities(raw: any, workerId: string): WecomBridgeWorkerCapability[] | null {
+  const inline = normalizeBridgeWorkerCapabilities(raw?.capabilities ?? raw?.capability ?? raw?.workerCapabilities);
+  if (inline.length > 0) return inline;
+  const source = str(raw?.source ?? raw?.sourceName ?? '', 80).trim().toLowerCase();
+  const candidates = data.bridgeWorkers
+    .filter((worker) => worker.workerId === workerId && (!source || worker.source.toLowerCase() === source))
+    .sort((a, b) => Date.parse(b.lastSeenAt || b.updatedAt) - Date.parse(a.lastSeenAt || a.updatedAt));
+  return candidates[0]?.capabilities ? [...candidates[0].capabilities] : null;
+}
+
+function requireBridgeWorkerCapabilities(
+  raw: any,
+  workerId: string,
+  capabilities: WecomBridgeWorkerCapability[],
+  actionLabel: string,
+) {
+  const reported = bridgeClaimCapabilities(raw, workerId);
+  if (!reported || reported.length === 0) return;
+  const missing = capabilities.filter((capability) => !reported.includes(capability));
+  if (!missing.length) return;
+  throw new Error(`Bridge worker「${workerId}」缺少${actionLabel}能力：${missing.join(', ')}`);
 }
 
 function bridgeWorkersCapabilityState(workers: WecomBridgeWorkerStatus[], capability: WecomBridgeWorkerCapability) {
