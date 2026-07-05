@@ -207,6 +207,22 @@ export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 
+export interface WecomBridgeTargetVerification {
+  required?: boolean;
+  verified?: boolean;
+  expectedName?: string;
+  matchedName?: string;
+  conversationMatched?: boolean;
+  inputReady?: boolean;
+  activeApp?: string;
+  windowTitle?: string;
+  ocrText?: string;
+  visualSummary?: string;
+  confidence?: number;
+  error?: string;
+  checkedAt?: string;
+}
+
 export interface WecomBridgeRunReportItem {
   id: string;
   target: WecomBridgeRunReportItemTarget;
@@ -218,6 +234,7 @@ export interface WecomBridgeRunReportItem {
   exitCode?: number;
   signal?: string;
   error?: string;
+  verification?: WecomBridgeTargetVerification;
 }
 
 export interface WecomBridgeRunReport {

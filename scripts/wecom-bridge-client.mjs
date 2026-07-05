@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r40-retry-limit';
+const CLIENT_VERSION = 'automation-lab-r41-verification-report';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -21,7 +21,7 @@ Commands:
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   runner-policy [--worker-id name]
-  report-run [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--status completed|failed]
+  report-run [--target replies|mass|moments|all] [--mode dry-run|prepare|send] [--status completed|failed] [--items-json '[...]']
   pull-replies [--limit 50]
   claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
   release-reply <eventId> [--worker-id name] [--reason text]
@@ -230,6 +230,147 @@ function runSummary(target, handled, total) {
   return `${target} total=${total} handled=${handled.length} failed=${failed}`;
 }
 
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseJsonText(text, label) {
+  const raw = String(text || '').trim();
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new BridgeError(`Invalid JSON in ${label}: ${error.message}`);
+  }
+}
+
+async function readJsonOption(value, label) {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  if (raw.startsWith('@')) return parseJsonText(await readFile(raw.slice(1), 'utf8'), label);
+  if (raw.startsWith('[') || raw.startsWith('{')) return parseJsonText(raw, label);
+  return parseJsonText(await readFile(raw, 'utf8'), label);
+}
+
+function parseHandlerJsonOutput(stdout) {
+  const text = String(stdout || '').trim();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i];
+      if (!line.startsWith('{') && !line.startsWith('[')) continue;
+      try {
+        return JSON.parse(line);
+      } catch {
+        // Keep scanning; handler logs may contain non-JSON lines.
+      }
+    }
+  }
+  return undefined;
+}
+
+function handlerVerification(result, fallbackName) {
+  const data = result?.handlerResult;
+  if (!isRecord(data)) return undefined;
+  const nested =
+    isRecord(data.verification)
+      ? data.verification
+      : isRecord(data.targetVerification)
+        ? data.targetVerification
+        : isRecord(data.visualCheck)
+          ? data.visualCheck
+          : undefined;
+  const source = nested || data;
+  const signalKeys = nested
+    ? [
+        'required',
+        'verificationRequired',
+        'verified',
+        'targetVerified',
+        'conversationVerified',
+        'conversationMatched',
+        'matched',
+        'inputReady',
+        'inputFocused',
+        'expectedName',
+        'expectedConversationName',
+        'targetName',
+        'matchedName',
+        'matchedConversationName',
+        'actualName',
+        'actualConversationName',
+        'activeApp',
+        'appName',
+        'applicationName',
+        'windowTitle',
+        'ocrText',
+        'visibleText',
+        'screenText',
+        'visualSummary',
+        'summary',
+        'confidence',
+        'matchConfidence',
+        'score',
+        'error',
+        'reason',
+        'verificationError',
+        'checkedAt',
+        'verifiedAt',
+        'timestamp',
+      ]
+    : [
+        'verified',
+        'targetVerified',
+        'conversationVerified',
+        'conversationMatched',
+        'matched',
+        'inputReady',
+        'inputFocused',
+        'expectedName',
+        'expectedConversationName',
+        'targetName',
+        'matchedName',
+        'matchedConversationName',
+        'actualName',
+        'actualConversationName',
+        'activeApp',
+        'appName',
+        'applicationName',
+        'windowTitle',
+        'ocrText',
+        'visibleText',
+        'screenText',
+        'visualSummary',
+        'confidence',
+        'matchConfidence',
+        'score',
+        'verificationError',
+        'checkedAt',
+        'verifiedAt',
+        'timestamp',
+      ];
+  if (!signalKeys.some((key) => Object.prototype.hasOwnProperty.call(source, key))) return undefined;
+
+  const allowedKeys = new Set(signalKeys.concat(['summary', 'error', 'reason', 'required', 'verificationRequired']));
+  const payload = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (!allowedKeys.has(key)) continue;
+    payload[key] = value;
+  }
+  if (
+    fallbackName &&
+    !Object.prototype.hasOwnProperty.call(payload, 'expectedName') &&
+    !Object.prototype.hasOwnProperty.call(payload, 'expectedConversationName') &&
+    !Object.prototype.hasOwnProperty.call(payload, 'targetName')
+  ) {
+    payload.expectedName = fallbackName;
+  }
+  return payload;
+}
+
 async function postRunReport(options, payload) {
   return await requestJson(options, 'POST', '/api/automation/bridge/wecom/run-report', {
     source: String(options.source || process.env.WECOM_BRIDGE_SOURCE || DEFAULT_SOURCE),
@@ -255,9 +396,10 @@ function materialMapPath(options) {
 
 async function runHandler(command, reply) {
   return new Promise((resolve, reject) => {
+    let stdout = '';
     const child = spawn(command, {
       shell: true,
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
         WECOM_BRIDGE_REPLY_ID: reply.id || '',
@@ -269,17 +411,21 @@ async function runHandler(command, reply) {
         WECOM_BRIDGE_REPLY_IMAGE_STEP_COUNT: String(Array.isArray(reply.replySteps) ? reply.replySteps.filter((step) => step?.type === 'image').length : 0),
       },
     });
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
     child.on('error', reject);
-    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal }));
+    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal, stdout, handlerResult: parseHandlerJsonOutput(stdout) }));
     child.stdin.end(`${JSON.stringify(reply)}\n`);
   });
 }
 
 async function runMassHandler(command, task) {
   return new Promise((resolve, reject) => {
+    let stdout = '';
     const child = spawn(command, {
       shell: true,
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
         WECOM_BRIDGE_MASS_TASK_ID: task.id || '',
@@ -290,17 +436,21 @@ async function runMassHandler(command, task) {
         WECOM_BRIDGE_MASS_MESSAGE: task.message || '',
       },
     });
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
     child.on('error', reject);
-    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal }));
+    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal, stdout, handlerResult: parseHandlerJsonOutput(stdout) }));
     child.stdin.end(`${JSON.stringify(task)}\n`);
   });
 }
 
 async function runMomentHandler(command, task) {
   return new Promise((resolve, reject) => {
+    let stdout = '';
     const child = spawn(command, {
       shell: true,
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: ['pipe', 'pipe', 'inherit'],
       env: {
         ...process.env,
         WECOM_BRIDGE_MOMENT_TASK_ID: task.id || '',
@@ -311,8 +461,11 @@ async function runMomentHandler(command, task) {
         WECOM_BRIDGE_MOMENT_MATERIALS: Array.isArray(task.materials) ? task.materials.join('\n') : '',
       },
     });
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
     child.on('error', reject);
-    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal }));
+    child.on('close', (code, signal) => resolve({ code: code ?? 1, signal, stdout, handlerResult: parseHandlerJsonOutput(stdout) }));
     child.stdin.end(`${JSON.stringify(task)}\n`);
   });
 }
@@ -382,6 +535,7 @@ async function main() {
   if (command === 'report-run') {
     const startedAt = String(options['started-at'] || options.startedAt || new Date().toISOString());
     const finishedAt = String(options['finished-at'] || options.finishedAt || new Date().toISOString());
+    const items = await readJsonOption(options['items-json'] || options.itemsJson || options.items, '--items-json');
     const report = await postRunReport(options, {
       target: String(options.target || process.env.WECOM_RUNNER_TARGET || 'unknown'),
       status: String(options.status || 'completed'),
@@ -396,6 +550,7 @@ async function main() {
       failedMomentTasks: intOpt(options['failed-moment-tasks'], 0, 0, 100000),
       error: String(options.error || ''),
       summary: String(options.summary || ''),
+      ...(items !== undefined ? { items } : {}),
     });
     printJson(report);
     return;
@@ -636,6 +791,8 @@ async function main() {
         signal: result.signal,
         claimed: claim,
       };
+      const verification = handlerVerification(result, reply.conversationName);
+      if (verification) item.verification = verification;
       if (ok && markDelivered) {
         item.delivered = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'delivered',
@@ -708,6 +865,8 @@ async function main() {
         signal: result.signal,
         claimed: claim,
       };
+      const verification = handlerVerification(result, task.recipientName);
+      if (verification) item.verification = verification;
       if (ok && markSent) {
         item.sent = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'sent',
@@ -782,6 +941,8 @@ async function main() {
         signal: result.signal,
         claimed: claim,
       };
+      const verification = handlerVerification(result, task.title);
+      if (verification) item.verification = verification;
       if (ok && markPrepared) {
         item.prepared = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'prepared',

@@ -182,6 +182,22 @@ export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 
+export interface WecomBridgeTargetVerification {
+  required?: boolean;
+  verified?: boolean;
+  expectedName?: string;
+  matchedName?: string;
+  conversationMatched?: boolean;
+  inputReady?: boolean;
+  activeApp?: string;
+  windowTitle?: string;
+  ocrText?: string;
+  visualSummary?: string;
+  confidence?: number;
+  error?: string;
+  checkedAt?: string;
+}
+
 export interface WecomBridgeRunReportItem {
   id: string;
   target: WecomBridgeRunReportItemTarget;
@@ -193,6 +209,7 @@ export interface WecomBridgeRunReportItem {
   exitCode?: number;
   signal?: string;
   error?: string;
+  verification?: WecomBridgeTargetVerification;
 }
 
 export interface WecomBridgeRunReport {
@@ -3638,6 +3655,7 @@ function normalizeBridgeRunReportItem(raw: any): WecomBridgeRunReportItem {
   const action = str(base.action ?? base.status ?? base.deliveryStatus, 80).trim();
   const signal = str(base.signal, 80).trim();
   const error = str(base.error ?? base.message ?? base.reason, 500).trim();
+  const verification = normalizeBridgeTargetVerification(base, name);
   const item: WecomBridgeRunReportItem = {
     id,
     target,
@@ -3650,7 +3668,93 @@ function normalizeBridgeRunReportItem(raw: any): WecomBridgeRunReportItem {
   if (Number.isFinite(Number(base.exitCode))) item.exitCode = Math.max(0, Math.trunc(Number(base.exitCode)));
   if (signal) item.signal = signal;
   if (error) item.error = error;
+  if (verification) item.verification = verification;
   return item;
+}
+
+function normalizeBridgeTargetVerification(raw: any, fallbackName = ''): WecomBridgeTargetVerification | undefined {
+  const wrapper = raw && typeof raw === 'object' ? raw : {};
+  const base =
+    wrapper.verification && typeof wrapper.verification === 'object'
+      ? wrapper.verification
+      : wrapper.targetVerification && typeof wrapper.targetVerification === 'object'
+        ? wrapper.targetVerification
+        : wrapper.visualCheck && typeof wrapper.visualCheck === 'object'
+          ? wrapper.visualCheck
+          : wrapper;
+  const required =
+    typeof base.required === 'boolean'
+      ? base.required
+      : typeof base.verificationRequired === 'boolean'
+        ? base.verificationRequired
+        : typeof wrapper.verificationRequired === 'boolean'
+          ? wrapper.verificationRequired
+          : undefined;
+  const verified =
+    typeof base.verified === 'boolean'
+      ? base.verified
+      : typeof base.targetVerified === 'boolean'
+        ? base.targetVerified
+        : typeof base.conversationVerified === 'boolean'
+          ? base.conversationVerified
+          : undefined;
+  const conversationMatched =
+    typeof base.conversationMatched === 'boolean'
+      ? base.conversationMatched
+      : typeof base.matched === 'boolean'
+        ? base.matched
+        : typeof base.conversationVerified === 'boolean'
+          ? base.conversationVerified
+          : undefined;
+  const inputReady =
+    typeof base.inputReady === 'boolean'
+      ? base.inputReady
+      : typeof base.inputFocused === 'boolean'
+        ? base.inputFocused
+        : undefined;
+  const rawExpectedName = str(base.expectedName ?? base.expectedConversationName ?? base.targetName, 240).trim();
+  const expectedName = rawExpectedName || fallbackName;
+  const matchedName = str(base.matchedName ?? base.matchedConversationName ?? base.actualName ?? base.actualConversationName, 240).trim();
+  const activeApp = str(base.activeApp ?? base.appName ?? base.applicationName, 120).trim();
+  const windowTitle = str(base.windowTitle ?? base.title, 240).trim();
+  const ocrText = str(base.ocrText ?? base.visibleText ?? base.screenText, 1000).trim();
+  const visualSummary = str(base.visualSummary ?? base.summary ?? base.visualCheckSummary, 500).trim();
+  const error = str(base.error ?? base.reason ?? base.verificationError, 500).trim();
+  const rawConfidence = Number(base.confidence ?? base.matchConfidence ?? base.score);
+  const confidence = Number.isFinite(rawConfidence) ? Math.max(0, Math.min(1, rawConfidence > 1 ? rawConfidence / 100 : rawConfidence)) : undefined;
+  const checkedAt = base.checkedAt || base.verifiedAt || base.timestamp ? normalizeIsoDate(base.checkedAt ?? base.verifiedAt ?? base.timestamp, new Date().toISOString()) : undefined;
+
+  const hasAny =
+    required !== undefined ||
+    verified !== undefined ||
+    conversationMatched !== undefined ||
+    inputReady !== undefined ||
+    !!rawExpectedName ||
+    !!matchedName ||
+    !!activeApp ||
+    !!windowTitle ||
+    !!ocrText ||
+    !!visualSummary ||
+    confidence !== undefined ||
+    !!error ||
+    !!checkedAt;
+  if (!hasAny) return undefined;
+
+  const verification: WecomBridgeTargetVerification = {};
+  if (required !== undefined) verification.required = required;
+  if (verified !== undefined) verification.verified = verified;
+  if (expectedName) verification.expectedName = expectedName;
+  if (matchedName) verification.matchedName = matchedName;
+  if (conversationMatched !== undefined) verification.conversationMatched = conversationMatched;
+  if (inputReady !== undefined) verification.inputReady = inputReady;
+  if (activeApp) verification.activeApp = activeApp;
+  if (windowTitle) verification.windowTitle = windowTitle;
+  if (ocrText) verification.ocrText = ocrText;
+  if (visualSummary) verification.visualSummary = visualSummary;
+  if (confidence !== undefined) verification.confidence = confidence;
+  if (error) verification.error = error;
+  if (checkedAt) verification.checkedAt = checkedAt;
+  return verification;
 }
 
 function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
@@ -4355,7 +4459,13 @@ function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
 }
 
 function cloneBridgeRunReport(report: WecomBridgeRunReport): WecomBridgeRunReport {
-  return { ...report, items: report.items.map((item) => ({ ...item })) };
+  return {
+    ...report,
+    items: report.items.map((item) => ({
+      ...item,
+      verification: item.verification ? { ...item.verification } : undefined,
+    })),
+  };
 }
 
 function cloneRunnerPolicy(policy: WecomBridgeRunnerPolicy): WecomBridgeRunnerPolicy {

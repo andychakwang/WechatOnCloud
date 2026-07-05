@@ -195,6 +195,22 @@ const BRIDGE_RUN_ITEM_TARGET_LABEL: Record<string, string> = {
   unknown: '未知',
 };
 
+function bridgeRunVerificationSummary(item: { verification?: WecomBridgeRunReport['items'][number]['verification'] }): string {
+  const verification = item.verification;
+  if (!verification) return '';
+  const parts: string[] = [];
+  if (verification.verified === true) parts.push('校验通过');
+  else if (verification.verified === false) parts.push('校验失败');
+  else if (verification.required) parts.push('待校验');
+  if (verification.matchedName) parts.push(`命中 ${verification.matchedName}`);
+  else if (verification.expectedName) parts.push(`目标 ${verification.expectedName}`);
+  if (verification.windowTitle) parts.push(`窗口 ${verification.windowTitle}`);
+  else if (verification.activeApp) parts.push(`应用 ${verification.activeApp}`);
+  if (verification.inputReady === false) parts.push('输入框未就绪');
+  if (verification.error) parts.push(verification.error);
+  return parts.slice(0, 4).join(' · ');
+}
+
 const BRIDGE_RUNNER_MODE_LABEL: Record<WecomBridgeRunnerMode, string> = {
   'dry-run': '只预览',
   prepare: '领取并准备',
@@ -1871,7 +1887,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         .map((item) => {
                           const label = BRIDGE_RUN_ITEM_TARGET_LABEL[item.target] || item.target;
                           const result = item.ok === false ? '失败' : item.dryRun ? '预览' : item.ok === true ? '成功' : '记录';
-                          return `${label} · ${item.name || item.id} · ${item.action || result}`;
+                          const verification = bridgeRunVerificationSummary(item);
+                          return `${label} · ${item.name || item.id} · ${item.action || result}${verification ? ` · ${verification}` : ''}`;
                         })
                         .join('；');
                       return (

@@ -17,11 +17,12 @@ cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
 body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
 material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
+verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
 reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$verification_handler_file"
 }
 trap cleanup EXIT
 
@@ -648,6 +649,102 @@ PY
   json_assert_path report.id
   request_json GET /api/admin/automation/bridge-runs?limit=10
   json_assert_path reports[0].id
+
+  verification_items_json="$(python3 - <<'PY'
+import json
+print(json.dumps([{
+    "id": "smoke-verified-item",
+    "target": "reply",
+    "conversationName": "Smoke Verified Conversation",
+    "action": "prepared",
+    "ok": True,
+    "verification": {
+        "required": True,
+        "verified": True,
+        "expectedName": "Smoke Verified Conversation",
+        "matchedName": "Smoke Verified Conversation",
+        "conversationMatched": True,
+        "inputReady": True,
+        "activeApp": "企业微信",
+        "windowTitle": "企业微信 - Smoke Verified Conversation",
+        "ocrText": "Smoke Verified Conversation\\n输入框",
+        "visualSummary": "窗口标题和 OCR 均命中目标会话",
+        "confidence": 0.98,
+    },
+}], ensure_ascii=False))
+PY
+)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" report-run \
+    --worker-id smoke-worker \
+    --target replies \
+    --mode prepare \
+    --handled-replies 1 \
+    --items-json "$verification_items_json" \
+    --summary "smoke verification report" > "$body_file"
+  json_assert_path report.items[0].verification.verified
+  json_assert_eq report.items[0].verification.matchedName "Smoke Verified Conversation"
+  json_assert_eq report.items[0].verification.windowTitle "企业微信 - Smoke Verified Conversation"
+  request_json GET /api/admin/automation/bridge-runs?limit=10
+  json_assert_eq reports[0].items[0].verification.matchedName "Smoke Verified Conversation"
+  json_assert_path reports[0].items[0].verification.inputReady
+
+  say "Check Bridge handler verification capture"
+  cat > "$verification_handler_file" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+payload="$(cat)"
+node - "$payload" <<'NODE'
+const payload = JSON.parse(process.argv[2] || '{}');
+const name = String(payload.conversationName || payload.senderName || '').trim();
+console.log(JSON.stringify({
+  ok: true,
+  verification: {
+    required: true,
+    verified: true,
+    matchedName: name,
+    conversationMatched: true,
+    inputReady: true,
+    activeApp: '企业微信',
+    windowTitle: `企业微信 - ${name}`,
+    ocrText: `${name}\n输入框`,
+    confidence: 0.99,
+  },
+}));
+NODE
+SH
+  chmod +x "$verification_handler_file"
+  handler_capture_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-handler-capture-{stamp}",
+        "conversationName": "Smoke Handler Capture",
+        "senderName": "Smoke Sender",
+        "inboundText": "请验证 handler stdout 校验快照。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/events "$handler_capture_payload"
+  json_assert_path result.events[0].id
+  handler_capture_event_id="$(json_get result.events[0].id)"
+  request_json PATCH "/api/admin/automation/bridge-events/$handler_capture_event_id" '{"status":"planned","replyDraft":"handler capture reply","replyApproved":true}'
+  json_assert_path event.replyApproved
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" run-approved \
+    --worker-id smoke-worker \
+    --handler "$verification_handler_file" \
+    --limit 20 \
+    --claim \
+    --report-run > "$body_file"
+  json_assert_path handled[0].verification.verified
+  json_assert_eq handled[0].verification.matchedName "Smoke Handler Capture"
+  json_assert_eq runReport.report.items[0].verification.windowTitle "企业微信 - Smoke Handler Capture"
+  request_json PATCH "/api/admin/automation/bridge-events/$handler_capture_event_id" '{"status":"archived"}'
+  json_assert_eq event.status archived
 
   say "Push WeCom inbound message through Bridge"
   bridge_event_payload="$(python3 - "$stamp" <<'PY'
