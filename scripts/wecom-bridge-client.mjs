@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r30-material-registry';
+const CLIENT_VERSION = 'automation-lab-r33-material-map';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -17,6 +17,7 @@ Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
+  material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   runner-policy [--worker-id name]
@@ -45,6 +46,7 @@ Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
   node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
   node scripts/wecom-bridge-client.mjs import-materials doc/examples/wecom-materials.sample.json
+  node scripts/wecom-bridge-client.mjs material-map --kind image --output ~/.config/wechat-on-cloud/wecom-materials.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs runner-policy --worker-id mac-mini-01
@@ -241,6 +243,16 @@ function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function materialMapPath(options) {
+  const params = new URLSearchParams();
+  for (const key of ['kind', 'tag', 'source']) {
+    const value = String(options[key] || '').trim();
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return `/api/automation/bridge/wecom/material-map${query ? `?${query}` : ''}`;
+}
+
 async function runHandler(command, reply) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
@@ -330,6 +342,16 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeMaterialPayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/materials', payload));
+    return;
+  }
+
+  if (command === 'material-map') {
+    const result = await requestJson(options, 'GET', materialMapPath(options));
+    const output = positional[0] || options.output || options.file;
+    if (output && output !== '-') {
+      await writeFile(output, `${JSON.stringify(result.materialMap || result, null, 2)}\n`, 'utf8');
+    }
+    printJson(result);
     return;
   }
 

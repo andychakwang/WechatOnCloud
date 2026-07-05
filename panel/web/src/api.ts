@@ -247,11 +247,13 @@ export interface AutomationBridgeRunnerGuide {
   defaultWorkerId: string;
   runnerScript: string;
   installScript: string;
+  materialMapPath?: string;
   modes: string[];
   targets: string[];
   envFile: string;
   commands: {
     writeEnv: string;
+    syncMaterialMap?: string;
     printConfig: string;
     dryRunAll: string;
     prepareAll: string;
@@ -271,6 +273,7 @@ export interface AutomationBridgeStatus {
   knowledgeEndpoint: string;
   audienceEndpoint: string;
   materialEndpoint: string;
+  materialMapEndpoint: string;
   eventEndpoint: string;
   replyEndpoint: string;
   massTaskEndpoint: string;

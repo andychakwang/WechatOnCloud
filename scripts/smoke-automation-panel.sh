@@ -16,11 +16,12 @@ stamp="$(date +%Y%m%d%H%M%S)"
 cookie_jar="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-cookie.XXXXXX")"
 body_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-body.XXXXXX.json")"
 reply_image_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-reply-image.XXXXXX.png")"
+material_map_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-material-map.XXXXXX.json")"
 reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file"
 }
 trap cleanup EXIT
 
@@ -279,10 +280,17 @@ json_assert_path bridge.runnerGuide.commands.writeEnv
 json_assert_path bridge.runnerGuide.commands.dryRunAll
 json_assert_path bridge.audienceEndpoint
 json_assert_path bridge.materialEndpoint
+json_assert_path bridge.materialMapEndpoint
 json_assert_path bridge.runReportEndpoint
 json_assert_path bridge.runnerPolicyEndpoint
+json_assert_path bridge.runnerGuide.commands.syncMaterialMap
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MATERIAL_MAP_FILE="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_MATERIAL_MAP_FILE" >&2
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
@@ -374,7 +382,7 @@ name = sys.argv[1]
 print(json.dumps({
     "source": "smoke-wecom-mac",
     "type": "group",
-    "approveImported": False,
+    "approveImported": True,
     "mode": "upsert",
     "contacts": [{
         "name": name,
@@ -570,7 +578,7 @@ path = sys.argv[2]
 print(json.dumps({
     "source": "smoke-wecom-bridge",
     "kind": "image",
-    "approveImported": False,
+    "approveImported": True,
     "mode": "upsert",
     "assets": [{
         "key": f"smoke-bridge-poster-{stamp}",
@@ -585,7 +593,29 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-materials - <<<"$bridge_material_payload" > "$body_file"
   json_assert_path result.assets[0].id
   json_assert_eq result.assets[0].kind image
+  bridge_material_key="$(json_get result.assets[0].key)"
   bridge_material_id="$(json_get result.assets[0].id)"
+  request_bridge_json GET "/api/automation/bridge/wecom/material-map?kind=image"
+  json_assert_path materialMap.materials[0].key
+  json_assert_path materialMap.map
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" material-map --kind image --output "$material_map_file" > "$body_file"
+  json_assert_path materialMap.materials[0].localPath
+  python3 - "$material_map_file" "$bridge_material_key" "$reply_image_file" <<'PY'
+import json
+import sys
+
+file, expected_key, expected_path = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+materials = payload.get("materials", [])
+matches = [item for item in materials if item.get("key") == expected_key]
+if not matches:
+    raise SystemExit(f"material map file missing key {expected_key}")
+if matches[0].get("localPath") != expected_path or matches[0].get("path") != expected_path:
+    raise SystemExit(f"material map file path mismatch for {expected_key}")
+if payload.get("map", {}).get(expected_key) != expected_path:
+    raise SystemExit(f"plain map missing key {expected_key}")
+PY
   request_json DELETE "/api/admin/automation/materials/$bridge_material_id"
   json_assert_path ok
 

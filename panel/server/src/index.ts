@@ -92,6 +92,7 @@ import {
   importAutomationAudience,
   listAutomationAudience,
   listAutomationMaterials,
+  getWecomBridgeMaterialMap,
   importAutomationMaterials,
   patchAutomationMaterialAsset,
   deleteAutomationMaterialAsset,
@@ -140,6 +141,7 @@ const COOKIE = 'woc_sess';
 const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
 const AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT = '/api/automation/bridge/wecom/audience';
 const AUTOMATION_BRIDGE_MATERIAL_ENDPOINT = '/api/automation/bridge/wecom/materials';
+const AUTOMATION_BRIDGE_MATERIAL_MAP_ENDPOINT = '/api/automation/bridge/wecom/material-map';
 const AUTOMATION_BRIDGE_EVENT_ENDPOINT = '/api/automation/bridge/wecom/events';
 const AUTOMATION_BRIDGE_REPLY_ENDPOINT = '/api/automation/bridge/wecom/replies';
 const AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT = '/api/automation/bridge/wecom/mass-tasks';
@@ -233,6 +235,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
   const panelUrl = requestPublicOrigin(req) || 'http://nasbot.cloud:36081';
   const policy = getWecomBridgeRunnerPolicy();
   const configPath = '~/.config/wechat-on-cloud/wecom-bridge.env';
+  const materialMapPath = '$HOME/.config/wechat-on-cloud/wecom-materials.json';
+  const materialMapCommandPath = '~/.config/wechat-on-cloud/wecom-materials.json';
   const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
   const defaultWorkerId = 'mac-bridge-01';
   const envFile = [
@@ -246,6 +250,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_RUNNER_LIMIT=${shellSingle(String(policy.limit))}`,
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
+    `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
     `WECOM_BRIDGE_INTERVAL_SEC=${shellSingle(String(policy.heartbeatIntervalSeconds))}`,
     `WECOM_BRIDGE_WORKER_ID=${shellSingle(defaultWorkerId)}`,
   ].join('\n');
@@ -257,11 +262,13 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     defaultWorkerId,
     runnerScript: 'scripts/wecom-bridge-runner.sh',
     installScript: 'scripts/install-wecom-bridge-launchagent.sh',
+    materialMapPath,
     modes: ['dry-run', 'prepare', 'send'],
     targets: ['replies', 'mass', 'moments', 'all'],
     envFile,
     commands: {
       writeEnv: `mkdir -p ~/.config/wechat-on-cloud\ncat > ${configPath} <<'EOF'\n${envFile}\nEOF\nchmod 600 ${configPath}`,
+      syncMaterialMap: `node scripts/wecom-bridge-client.mjs material-map --kind image --output ${materialMapCommandPath}`,
       printConfig: 'scripts/wecom-bridge-runner.sh print-config',
       dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       prepareAll: 'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
@@ -287,6 +294,7 @@ function automationBridgeStatus(req?: FastifyRequest) {
     knowledgeEndpoint: AUTOMATION_BRIDGE_ENDPOINT,
     audienceEndpoint: AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT,
     materialEndpoint: AUTOMATION_BRIDGE_MATERIAL_ENDPOINT,
+    materialMapEndpoint: AUTOMATION_BRIDGE_MATERIAL_MAP_ENDPOINT,
     eventEndpoint: AUTOMATION_BRIDGE_EVENT_ENDPOINT,
     replyEndpoint: AUTOMATION_BRIDGE_REPLY_ENDPOINT,
     massTaskEndpoint: AUTOMATION_BRIDGE_MASS_TASK_ENDPOINT,
@@ -581,6 +589,11 @@ app.post(AUTOMATION_BRIDGE_MATERIAL_ENDPOINT, async (req, reply) => {
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 导入素材资产失败' });
   }
+});
+
+app.get(AUTOMATION_BRIDGE_MATERIAL_MAP_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  return { materialMap: getWecomBridgeMaterialMap(req.query as any) };
 });
 
 app.post(AUTOMATION_BRIDGE_EVENT_ENDPOINT, async (req, reply) => {

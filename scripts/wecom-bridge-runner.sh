@@ -14,6 +14,11 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+if [[ -n "${WECOM_MATERIAL_MAP_FILE:-}" ]]; then
+  WECOM_MATERIAL_MAP_FILE="${WECOM_MATERIAL_MAP_FILE/#\~/$HOME}"
+  export WECOM_MATERIAL_MAP_FILE
+fi
+
 CLIENT="${WECOM_BRIDGE_CLIENT:-$ROOT/scripts/wecom-bridge-client.mjs}"
 HANDLER="${WECOM_REPLY_HANDLER:-$ROOT/scripts/wecom-mac-reply-handler.sh}"
 MASS_HANDLER="${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}"
@@ -44,6 +49,8 @@ Optional:
   WECOM_CLAIM_TTL_SECONDS=300
   WECOM_BRIDGE_WORKER_ID=mac-mini-01
   WECOM_HANDLER_MODE=dry-run|prepare|send
+  WECOM_MATERIAL_MAP_FILE=~/.config/wechat-on-cloud/wecom-materials.json
+  WECOM_SYNC_MATERIAL_MAP=1                 set 0 to disable material-map refresh
   WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
   WECOM_MOMENT_HANDLER=./scripts/wecom-mac-moment-handler.sh
   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
@@ -68,7 +75,7 @@ case "$cmd" in
     exit 0
     ;;
   print-config)
-    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT"
+    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nMATERIAL_MAP_FILE=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "${WECOM_MATERIAL_MAP_FILE:-}"
     exit 0
     ;;
   run-once)
@@ -156,6 +163,13 @@ NODE
 fi
 
 validate_runner_config
+
+if [[ -n "${WECOM_MATERIAL_MAP_FILE:-}" && "${WECOM_SYNC_MATERIAL_MAP:-1}" != "0" ]]; then
+  mkdir -p "$(dirname "$WECOM_MATERIAL_MAP_FILE")"
+  if ! node "$CLIENT" material-map --kind image --output "$WECOM_MATERIAL_MAP_FILE" >/dev/null; then
+    echo "WARN: failed to sync material map to $WECOM_MATERIAL_MAP_FILE; continuing with existing file if present." >&2
+  fi
+fi
 
 node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
 

@@ -98,6 +98,27 @@ export interface AutomationMaterialImportResult {
   errors: string[];
 }
 
+export interface WecomBridgeMaterialMapItem {
+  key: string;
+  path: string;
+  localPath: string;
+  title: string;
+  kind: AutomationMaterialKind;
+  source: string;
+  tags: string[];
+  description: string;
+  url?: string;
+}
+
+export interface WecomBridgeMaterialMap {
+  generatedAt: string;
+  source: string;
+  format: 'materials';
+  materials: WecomBridgeMaterialMapItem[];
+  map: Record<string, string>;
+  skipped: { key: string; title: string; reason: string }[];
+}
+
 export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
 type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
 type WecomBridgeMassDeliveryStatus = 'claimed' | 'failed' | 'sent' | 'delivered' | 'released';
@@ -1779,6 +1800,54 @@ export function listAutomationMaterials(limit = 200, query = '', tag = ''): Auto
     .slice(-n)
     .reverse()
     .map(cloneMaterialAsset);
+}
+
+export function getWecomBridgeMaterialMap(raw: any = {}): WecomBridgeMaterialMap {
+  const generatedAt = new Date().toISOString();
+  const rawKind = String(raw?.kind ?? raw?.type ?? '').trim().toLowerCase();
+  const kind = rawKind && rawKind !== 'all' && rawKind !== '*' ? normalizeMaterialKind(rawKind) : null;
+  const tag = str(raw?.tag, 60).trim().toLowerCase();
+  const source = str(raw?.source, 80).trim().toLowerCase();
+  const includeSkipped = raw?.includeSkipped !== false && raw?.includeSkipped !== '0' && raw?.includeSkipped !== 'false';
+  const materials: WecomBridgeMaterialMapItem[] = [];
+  const map: Record<string, string> = {};
+  const skipped: WecomBridgeMaterialMap['skipped'] = [];
+
+  for (const asset of data.materialAssets) {
+    if (!asset.enabled || !asset.approved) continue;
+    if (kind && asset.kind !== kind) continue;
+    if (tag && !asset.tags.some((name) => name.toLowerCase() === tag)) continue;
+    if (source && asset.source.toLowerCase() !== source) continue;
+    const key = asset.key.trim();
+    if (!key) continue;
+    const localPath = asset.localPath.trim();
+    if (!localPath) {
+      if (includeSkipped) skipped.push({ key, title: asset.title, reason: 'missing_local_path' });
+      continue;
+    }
+    const item: WecomBridgeMaterialMapItem = {
+      key,
+      path: localPath,
+      localPath,
+      title: asset.title,
+      kind: asset.kind,
+      source: asset.source,
+      tags: [...asset.tags],
+      description: asset.description,
+      ...(asset.url ? { url: asset.url } : {}),
+    };
+    materials.push(item);
+    map[key] = localPath;
+  }
+
+  return {
+    generatedAt,
+    source: 'wechat-on-cloud-material-registry',
+    format: 'materials',
+    materials,
+    map,
+    skipped,
+  };
 }
 
 export function importAutomationMaterials(actor: User, raw: any): AutomationMaterialImportResult {

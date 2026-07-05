@@ -1388,6 +1388,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   素材 <code>{location.origin + bridge.materialEndpoint}</code>
                 </div>
                 <div className="muted small">
+                  素材映射 <code>{location.origin + bridge.materialMapEndpoint}</code>
+                </div>
+                <div className="muted small">
                   消息 <code>{location.origin + bridge.eventEndpoint}</code>
                 </div>
                 <div className="muted small">
@@ -1527,6 +1530,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           复制
                         </button>
                       </div>
+                      {bridgeGuide.commands.syncMaterialMap && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>同步素材映射</b>
+                            <code>{bridgeGuide.commands.syncMaterialMap}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.syncMaterialMap!, '素材映射命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
                       <div className="bridge-command-row">
                         <div>
                           <b>领取并准备</b>
