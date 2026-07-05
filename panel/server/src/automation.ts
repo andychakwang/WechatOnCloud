@@ -3600,6 +3600,7 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
 
   for (const itemTarget of rpaPackageTargets(target)) {
     const pullOptions = rpaPackagePullOptions(raw, workerId, itemTarget);
+    if (!rpaPackageTargetAllowedForWorker(pullOptions, workerId, itemTarget)) continue;
     if (itemTarget === 'replies') pulled.push(...listApprovedWecomBridgeReplies(limit, pullOptions).map((task) => ({ target: 'reply' as const, task })));
     if (itemTarget === 'mass') pulled.push(...listApprovedWecomBridgeMassTasks(limit, pullOptions).map((task) => ({ target: 'mass' as const, task })));
     if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(limit, pullOptions).map((task) => ({ target: 'moment' as const, task })));
@@ -5905,6 +5906,19 @@ function rpaPackagePullOptions(raw: WecomRpaPackageExportOptions, workerId: stri
     options.requireSendable = true;
   }
   return options;
+}
+
+function rpaPackageTargetCapability(target: 'replies' | 'mass' | 'moments'): WecomBridgeWorkerCapability {
+  if (target === 'replies') return 'reply';
+  if (target === 'mass') return 'mass';
+  return 'moment';
+}
+
+function rpaPackageTargetAllowedForWorker(raw: any, workerId: string, target: 'replies' | 'mass' | 'moments'): boolean {
+  if (!isBridgeWorkerEnabledForPull(raw)) return false;
+  const reported = bridgeClaimCapabilities(raw, workerId);
+  if (!reported || reported.length === 0) return true;
+  return reported.includes(rpaPackageTargetCapability(target));
 }
 
 function rpaTextLength(text: string): number {

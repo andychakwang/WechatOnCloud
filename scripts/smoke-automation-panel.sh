@@ -2049,6 +2049,30 @@ if not any(t.get("target") == "moment" and t.get("draftId") == moment_draft_id f
     raise SystemExit("admin moment RPA task missing")
 PY
 
+  request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=json&workerId=smoke-worker&capabilities=reply"
+  python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
+import json
+import sys
+
+file, event_id, mass_job_id, moment_draft_id = sys.argv[1:5]
+with open(file, "r", encoding="utf-8") as fh:
+    package = json.load(fh)["package"]
+counts = package.get("counts", {})
+if counts.get("replies", 0) < 1:
+    raise SystemExit("reply-capable RPA package should include reply tasks")
+if counts.get("mass") != 0:
+    raise SystemExit("reply-capable RPA package should not include mass tasks")
+if counts.get("moments") != 0:
+    raise SystemExit("reply-capable RPA package should not include moment tasks")
+tasks = package.get("tasks", [])
+if not any(t.get("target") == "reply" and t.get("id") == event_id for t in tasks):
+    raise SystemExit("reply-capable RPA package missing reply task")
+if any(t.get("target") == "mass" or t.get("jobId") == mass_job_id for t in tasks):
+    raise SystemExit("reply-capable RPA package leaked mass task")
+if any(t.get("target") == "moment" or t.get("draftId") == moment_draft_id for t in tasks):
+    raise SystemExit("reply-capable RPA package leaked moment task")
+PY
+
   request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=jsonl"
   python3 - "$body_file" "$all_event_id" "$all_mass_job_id" "$all_moment_draft_id" <<'PY'
 import json
