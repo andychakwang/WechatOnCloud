@@ -1,0 +1,15 @@
+{
+  "source": "wecom-mac-bridge",
+  "kind": "image",
+  "approveImported": false,
+  "mode": "upsert",
+  "assets": [
+    {
+      "key": "demo-poster",
+      "title": "Demo Poster",
+      "localPath": "/Users/andy/Pictures/wecom-demo-material.png",
+      "tags": ["demo", "poster"],
+      "description": "Local Mac image path used by imageKey reply steps and moment drafts."
+    }
+  ]
+}

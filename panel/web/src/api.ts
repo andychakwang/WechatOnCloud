@@ -152,6 +152,33 @@ export interface AutomationAudienceImportResult {
   errors: string[];
 }
 
+export type AutomationMaterialKind = 'image' | 'video' | 'file' | 'link' | 'text' | 'other';
+
+export interface AutomationMaterialAsset {
+  id: string;
+  key: string;
+  title: string;
+  kind: AutomationMaterialKind;
+  source: string;
+  tags: string[];
+  description: string;
+  localPath: string;
+  url: string;
+  enabled: boolean;
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastImportedAt?: string;
+}
+
+export interface AutomationMaterialImportResult {
+  assets: AutomationMaterialAsset[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface WecomBridgeWorkerStatus {
   id: string;
   workerId: string;
@@ -243,6 +270,7 @@ export interface AutomationBridgeStatus {
   endpoint: string;
   knowledgeEndpoint: string;
   audienceEndpoint: string;
+  materialEndpoint: string;
   eventEndpoint: string;
   replyEndpoint: string;
   massTaskEndpoint: string;
@@ -306,6 +334,12 @@ export interface AutomationOverview {
     total: number;
     approved: number;
     enabled: number;
+  };
+  materials: {
+    total: number;
+    enabled: number;
+    approved: number;
+    images: number;
   };
   audience: {
     total: number;
@@ -589,6 +623,36 @@ export const api = {
     }),
   deleteAutomationAudience: (contactId: string) =>
     req<{ ok: true }>(`/api/admin/automation/audience/${contactId}`, {
+      method: 'DELETE',
+    }),
+  listAutomationMaterials: (limit = 200, query = '', tag = '') =>
+    req<{ assets: AutomationMaterialAsset[] }>(
+      `/api/admin/automation/materials?limit=${encodeURIComponent(limit)}&query=${encodeURIComponent(query)}&tag=${encodeURIComponent(tag)}`,
+    ),
+  importAutomationMaterials: (payload: {
+    source?: string;
+    kind?: AutomationMaterialKind;
+    type?: AutomationMaterialKind;
+    approveImported?: boolean;
+    enabled?: boolean;
+    mode?: 'append' | 'upsert';
+    assets?: any[];
+    materials?: any[];
+    items?: any[];
+    rawText?: string;
+    text?: string;
+  }) =>
+    req<{ result: AutomationMaterialImportResult }>('/api/admin/automation/materials/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  patchAutomationMaterial: (assetId: string, payload: Partial<AutomationMaterialAsset>) =>
+    req<{ asset: AutomationMaterialAsset }>(`/api/admin/automation/materials/${assetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteAutomationMaterial: (assetId: string) =>
+    req<{ ok: true }>(`/api/admin/automation/materials/${assetId}`, {
       method: 'DELETE',
     }),
   patchAutomationKnowledge: (itemId: string, payload: Partial<AutomationKnowledgeItem>) =>

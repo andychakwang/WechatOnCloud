@@ -71,6 +71,33 @@ export interface AutomationAudienceImportResult {
   errors: string[];
 }
 
+export type AutomationMaterialKind = 'image' | 'video' | 'file' | 'link' | 'text' | 'other';
+
+export interface AutomationMaterialAsset {
+  id: string;
+  key: string;
+  title: string;
+  kind: AutomationMaterialKind;
+  source: string;
+  tags: string[];
+  description: string;
+  localPath: string;
+  url: string;
+  enabled: boolean;
+  approved: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastImportedAt?: string;
+}
+
+export interface AutomationMaterialImportResult {
+  assets: AutomationMaterialAsset[];
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
 type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
 type WecomBridgeMassDeliveryStatus = 'claimed' | 'failed' | 'sent' | 'delivered' | 'released';
@@ -198,6 +225,12 @@ export interface AutomationOverview {
     total: number;
     approved: number;
     enabled: number;
+  };
+  materials: {
+    total: number;
+    enabled: number;
+    approved: number;
+    images: number;
   };
   audience: {
     total: number;
@@ -398,6 +431,7 @@ export interface AutomationAuditEvent {
 
 interface AutomationData extends AutomationConfig {
   audienceContacts: AutomationAudienceContact[];
+  materialAssets: AutomationMaterialAsset[];
   bridgeEvents: WecomBridgeEvent[];
   bridgeWorkers: WecomBridgeWorker[];
   bridgeRunReports: WecomBridgeRunReport[];
@@ -411,6 +445,7 @@ const FILE = process.env.PANEL_AUTOMATION_DATA || '/data/automation.json';
 const MAX_AUDIT_EVENTS = 1000;
 const MAX_KNOWLEDGE_ITEMS = 500;
 const MAX_AUDIENCE_CONTACTS = 2000;
+const MAX_MATERIAL_ASSETS = 1000;
 const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
@@ -446,6 +481,7 @@ const DEFAULT_DATA: AutomationData = {
   rules: [],
   knowledgeItems: [],
   audienceContacts: [],
+  materialAssets: [],
   bridgeEvents: [],
   bridgeWorkers: [],
   bridgeRunReports: [],
@@ -532,6 +568,12 @@ export function getAutomationOverview(): AutomationOverview {
       approved: data.knowledgeItems.filter((item) => item.approved).length,
       enabled: data.knowledgeItems.filter((item) => item.enabled).length,
     },
+    materials: {
+      total: data.materialAssets.length,
+      approved: data.materialAssets.filter((asset) => asset.approved).length,
+      enabled: data.materialAssets.filter((asset) => asset.enabled).length,
+      images: data.materialAssets.filter((asset) => asset.kind === 'image').length,
+    },
     audience: {
       total: data.audienceContacts.length,
       enabled: data.audienceContacts.filter((contact) => contact.enabled).length,
@@ -613,6 +655,7 @@ export function updateAutomationConfig(raw: any): AutomationConfig {
       rules: raw?.rules ?? data.rules,
       knowledgeItems: raw?.knowledgeItems ?? data.knowledgeItems,
       audienceContacts: data.audienceContacts,
+      materialAssets: data.materialAssets,
       bridgeEvents: data.bridgeEvents,
       bridgeWorkers: data.bridgeWorkers,
       bridgeRunReports: data.bridgeRunReports,
@@ -1188,6 +1231,142 @@ export function deleteAutomationAudienceContact(actor: User, contactId: string):
     action: 'audience_deleted',
     actor: actor.username,
     message: `删除受众「${removed.name}」`,
+  });
+  return { ok: true };
+}
+
+export function listAutomationMaterials(limit = 200, query = '', tag = ''): AutomationMaterialAsset[] {
+  const n = clampInt(limit, 1, 1000, 200);
+  const q = String(query || '').trim().toLowerCase();
+  const t = String(tag || '').trim().toLowerCase();
+  return data.materialAssets
+    .filter((asset) => {
+      const haystack = [asset.key, asset.title, asset.source, asset.description, asset.localPath, asset.url, ...asset.tags].join('\n').toLowerCase();
+      if (q && !haystack.includes(q)) return false;
+      if (t && !asset.tags.some((tagName) => tagName.toLowerCase() === t)) return false;
+      return true;
+    })
+    .slice(-n)
+    .reverse()
+    .map(cloneMaterialAsset);
+}
+
+export function importAutomationMaterials(actor: User, raw: any): AutomationMaterialImportResult {
+  const now = new Date().toISOString();
+  const source = str(raw?.source || raw?.sourceName || 'wecom-mac', 80).trim() || 'wecom-mac';
+  const defaultKind = normalizeMaterialKind(raw?.kind ?? raw?.type) || 'image';
+  const defaultApproved = raw?.approveImported === true || raw?.approved === true;
+  const defaultEnabled = raw?.enabled !== false;
+  const mode = raw?.mode === 'append' ? 'append' : 'upsert';
+  const rawItems = extractMaterialImportItems(raw).slice(0, 500);
+  const result: AutomationMaterialImportResult = {
+    assets: [],
+    imported: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [],
+  };
+
+  for (const [index, rawItem] of rawItems.entries()) {
+    try {
+      const asset = normalizeMaterialAsset(
+        {
+          ...rawItem,
+          source: rawItem?.source || source,
+          kind: rawItem?.kind || rawItem?.type || defaultKind,
+          enabled: typeof rawItem?.enabled === 'boolean' ? rawItem.enabled : defaultEnabled,
+          approved: typeof rawItem?.approved === 'boolean' ? rawItem.approved : defaultApproved,
+          createdAt: now,
+          updatedAt: now,
+          lastImportedAt: now,
+        },
+        false,
+        now,
+      );
+      if (!asset.key.trim()) throw new Error('素材 key 为空');
+      if (!asset.localPath.trim() && !asset.url.trim() && !asset.description.trim()) throw new Error('素材至少需要本机路径、URL 或说明');
+      const existingIndex =
+        mode === 'upsert'
+          ? data.materialAssets.findIndex((x) => x.source.toLowerCase() === asset.source.toLowerCase() && x.key.toLowerCase() === asset.key.toLowerCase())
+          : -1;
+      if (existingIndex >= 0) {
+        const existing = data.materialAssets[existingIndex];
+        const saved: AutomationMaterialAsset = {
+          ...asset,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          updatedAt: now,
+          lastImportedAt: now,
+        };
+        data.materialAssets[existingIndex] = saved;
+        result.updated += 1;
+        result.assets.push(cloneMaterialAsset(saved));
+      } else {
+        data.materialAssets.push(asset);
+        result.imported += 1;
+        result.assets.push(cloneMaterialAsset(asset));
+      }
+    } catch (e: any) {
+      result.skipped += 1;
+      result.errors.push(`第 ${index + 1} 条跳过：${e?.message || e}`);
+    }
+  }
+
+  if (data.materialAssets.length > MAX_MATERIAL_ASSETS) {
+    data.materialAssets = data.materialAssets.slice(-MAX_MATERIAL_ASSETS);
+  }
+  if (result.imported || result.updated) {
+    persist();
+    addAutomationAudit({
+      action: 'materials_imported',
+      actor: actor.username,
+      message: `导入素材资产：新增 ${result.imported} 个，更新 ${result.updated} 个，跳过 ${result.skipped} 个`,
+    });
+  }
+  return result;
+}
+
+export function patchAutomationMaterialAsset(actor: User, assetId: string, raw: any): AutomationMaterialAsset {
+  const current = data.materialAssets.find((asset) => asset.id === assetId);
+  if (!current) throw new Error('素材资产不存在');
+  const now = new Date().toISOString();
+  const next = normalizeMaterialAsset(
+    {
+      ...current,
+      ...raw,
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: now,
+      lastImportedAt: current.lastImportedAt,
+    },
+    true,
+    now,
+  );
+  if (!next.key.trim()) throw new Error('素材 key 不能为空');
+  if (!next.localPath.trim() && !next.url.trim() && !next.description.trim()) throw new Error('素材至少需要本机路径、URL 或说明');
+  const duplicate = data.materialAssets.find(
+    (asset) => asset.id !== current.id && asset.source.toLowerCase() === next.source.toLowerCase() && asset.key.toLowerCase() === next.key.toLowerCase(),
+  );
+  if (duplicate) throw new Error(`同来源下已存在素材 key：${next.key}`);
+  Object.assign(current, next);
+  persist();
+  addAutomationAudit({
+    action: 'material_updated',
+    actor: actor.username,
+    message: `更新素材资产「${current.key}」：${current.enabled ? '启用' : '停用'}，${current.approved ? '已审核' : '未审核'}`,
+  });
+  return cloneMaterialAsset(current);
+}
+
+export function deleteAutomationMaterialAsset(actor: User, assetId: string): { ok: true } {
+  const index = data.materialAssets.findIndex((asset) => asset.id === assetId);
+  if (index < 0) throw new Error('素材资产不存在');
+  const [removed] = data.materialAssets.splice(index, 1);
+  persist();
+  addAutomationAudit({
+    action: 'material_deleted',
+    actor: actor.username,
+    message: `删除素材资产「${removed.key}」`,
   });
   return { ok: true };
 }
@@ -2171,6 +2350,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const rulesRaw = Array.isArray(raw?.rules) ? raw.rules : [];
   const knowledgeRaw = Array.isArray(raw?.knowledgeItems) ? raw.knowledgeItems : [];
   const audienceRaw = Array.isArray(raw?.audienceContacts) ? raw.audienceContacts : [];
+  const materialRaw = Array.isArray(raw?.materialAssets) ? raw.materialAssets : [];
   const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
   const bridgeWorkersRaw = Array.isArray(raw?.bridgeWorkers) ? raw.bridgeWorkers : [];
   const bridgeRunReportsRaw = Array.isArray(raw?.bridgeRunReports) ? raw.bridgeRunReports : [];
@@ -2183,6 +2363,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     rules: rulesRaw.slice(0, 200).map((r: any) => normalizeRule(r, preserveIds, now)),
     knowledgeItems: knowledgeRaw.slice(-MAX_KNOWLEDGE_ITEMS).map((item: any) => normalizeKnowledgeItem(item, preserveIds, now)),
     audienceContacts: audienceRaw.slice(-MAX_AUDIENCE_CONTACTS).map((contact: any) => normalizeAudienceContact(contact, preserveIds, now)),
+    materialAssets: materialRaw.slice(-MAX_MATERIAL_ASSETS).map((asset: any) => normalizeMaterialAsset(asset, preserveIds, now)),
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
     bridgeRunReports: bridgeRunReportsRaw.slice(-MAX_BRIDGE_RUN_REPORTS).map((report: any) => normalizeBridgeRunReport(report, preserveIds, now)),
@@ -2273,6 +2454,31 @@ function normalizeAudienceContact(raw: any, preserveIds: boolean, now: string): 
     tags: normalizeStringList(raw?.tags ?? raw?.labels ?? raw?.groups ?? raw?.segments, 60, 30),
     source: str(raw?.source || 'manual', 80).trim() || 'manual',
     note: str(raw?.note ?? raw?.notes ?? raw?.description ?? raw?.memo, 500).trim(),
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : true,
+    approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
+    createdAt,
+    updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
+    lastImportedAt: typeof raw?.lastImportedAt === 'string' && raw.lastImportedAt ? raw.lastImportedAt : undefined,
+  };
+}
+
+function normalizeMaterialAsset(raw: any, preserveIds: boolean, now: string): AutomationMaterialAsset {
+  const key = normalizeMaterialKey(raw?.key ?? raw?.imageKey ?? raw?.materialKey ?? raw?.assetKey ?? raw?.name ?? raw?.title) || '';
+  const localPath = str(raw?.localPath ?? raw?.path ?? raw?.imagePath ?? raw?.filePath, 1000).trim();
+  const url = str(raw?.url ?? raw?.href ?? raw?.link, 1000).trim();
+  const description = str(raw?.description ?? raw?.note ?? raw?.notes ?? raw?.caption ?? raw?.text, 1000).trim();
+  const title = str(raw?.title ?? raw?.name ?? raw?.label ?? key, 120).trim() || key || '未命名素材';
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  return {
+    id: preserveIds && typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    key,
+    title,
+    kind: normalizeMaterialKind(raw?.kind ?? raw?.type ?? raw?.category) || guessMaterialKind(localPath || url),
+    source: str(raw?.source || 'manual', 80).trim() || 'manual',
+    tags: normalizeStringList(raw?.tags ?? raw?.labels ?? raw?.keywords, 60, 30),
+    description,
+    localPath,
+    url,
     enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : true,
     approved: typeof raw?.approved === 'boolean' ? raw.approved : false,
     createdAt,
@@ -2894,6 +3100,13 @@ function cloneAudienceContact(contact: AutomationAudienceContact): AutomationAud
   };
 }
 
+function cloneMaterialAsset(asset: AutomationMaterialAsset): AutomationMaterialAsset {
+  return {
+    ...asset,
+    tags: [...asset.tags],
+  };
+}
+
 function cloneBridgeEvent(event: WecomBridgeEvent): WecomBridgeEvent {
   return { ...event, replySteps: event.replySteps?.map((step) => ({ ...step })) };
 }
@@ -3030,6 +3243,28 @@ function normalizeKnowledgeCategory(value: unknown): AutomationKnowledgeCategory
   return 'other';
 }
 
+function normalizeMaterialKind(value: unknown): AutomationMaterialKind | null {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (!raw) return null;
+  if (['image', 'img', 'picture', 'photo', 'poster', '图片', '海报', '配图'].includes(raw)) return 'image';
+  if (['video', 'movie', '视频'].includes(raw)) return 'video';
+  if (['file', 'document', 'doc', '文件', '文档'].includes(raw)) return 'file';
+  if (['link', 'url', '链接'].includes(raw)) return 'link';
+  if (['text', 'copy', 'caption', '文案'].includes(raw)) return 'text';
+  if (raw === 'other' || raw === '其它' || raw === '其他') return 'other';
+  return 'other';
+}
+
+function guessMaterialKind(value: string): AutomationMaterialKind {
+  const lower = value.toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|heic|bmp|tiff?)($|\?)/.test(lower)) return 'image';
+  if (/\.(mp4|mov|m4v|avi|webm)($|\?)/.test(lower)) return 'video';
+  if (/^https?:\/\//.test(lower)) return 'link';
+  return 'image';
+}
+
 function extractKnowledgeImportItems(raw: any, fallbackCategory: AutomationKnowledgeCategory): any[] {
   if (Array.isArray(raw)) return raw;
   if (Array.isArray(raw?.items)) return raw.items;
@@ -3062,8 +3297,29 @@ function extractAudienceImportItems(raw: any): any[] {
   return parseAudienceText(rawText);
 }
 
+function extractMaterialImportItems(raw: any): any[] {
+  if (Array.isArray(raw)) return raw.map(materialItemFromRaw);
+  if (Array.isArray(raw?.assets)) return raw.assets.map(materialItemFromRaw);
+  if (Array.isArray(raw?.materials)) return raw.materials.map(materialItemFromRaw);
+  if (Array.isArray(raw?.items)) return raw.items.map(materialItemFromRaw);
+  const rawText = typeof raw?.rawText === 'string' ? raw.rawText : typeof raw?.text === 'string' ? raw.text : '';
+  if (!rawText.trim()) return [];
+
+  const parsed = tryParseJson(rawText);
+  if (Array.isArray(parsed)) return parsed.map(materialItemFromRaw);
+  if (parsed && Array.isArray(parsed.assets)) return parsed.assets.map(materialItemFromRaw);
+  if (parsed && Array.isArray(parsed.materials)) return parsed.materials.map(materialItemFromRaw);
+  if (parsed && Array.isArray(parsed.items)) return parsed.items.map(materialItemFromRaw);
+  if (parsed && typeof parsed === 'object') return [parsed];
+  return parseMaterialText(rawText);
+}
+
 function audienceItemFromRaw(item: any): any {
   return typeof item === 'string' ? { name: item } : item;
+}
+
+function materialItemFromRaw(item: any): any {
+  return typeof item === 'string' ? parseMaterialLine(item) : item;
 }
 
 function extractBridgeEventItems(raw: any): any[] {
@@ -3141,6 +3397,69 @@ function parseAudienceLine(line: string): any {
     tags: parts[1] || undefined,
     note: parts.slice(2).join(' · '),
   };
+}
+
+function parseMaterialText(text: string): any[] {
+  return str(text, 120000)
+    .split(/\n/g)
+    .map((line) => line.trim().replace(/^[-*•]\s*/, ''))
+    .filter(Boolean)
+    .slice(0, 1000)
+    .map((line) => parseMaterialLine(line));
+}
+
+function parseMaterialLine(line: string): any {
+  const mapped: Record<string, string> = {};
+  const kv = line.match(/^(key|imageKey|materialKey|素材|素材key|标题|title|name|path|localPath|url|tags|kind|type|note|description)\s*[:：]\s*(.+)$/i);
+  if (kv) {
+    mapped[kv[1].toLowerCase()] = kv[2].trim();
+    return {
+      key: mapped.key || mapped.imagekey || mapped.materialkey || mapped['素材'] || mapped['素材key'],
+      title: mapped.title || mapped.name || mapped['标题'],
+      kind: mapped.kind || mapped.type,
+      localPath: mapped.path || mapped.localpath,
+      url: mapped.url,
+      tags: mapped.tags,
+      description: mapped.note || mapped.description,
+    };
+  }
+  const parts = line
+    .split(/\t|\|/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    if (parts.length === 2) {
+      const locator = materialLocatorFrom(parts[1]);
+      return {
+        key: parts[0],
+        title: locator ? parts[0] : parts[1],
+        localPath: locator?.localPath,
+        url: locator?.url,
+        description: locator ? '' : parts[1],
+      };
+    }
+    return {
+      key: parts[0],
+      title: parts[1],
+      localPath: parts[2],
+      tags: parts[3],
+      description: parts.slice(4).join(' · '),
+    };
+  }
+  const [key, rest] = line.split(/\s*=>\s*|\s*,\s*/, 2);
+  return {
+    key: key?.trim() || line,
+    localPath: rest?.trim() || '',
+  };
+}
+
+function materialLocatorFrom(value: string): { localPath?: string; url?: string } | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return { url: raw };
+  if (/^(\/|~\/|\.\/|\.\.\/)/.test(raw)) return { localPath: raw };
+  if (/\.(png|jpe?g|gif|webp|heic|bmp|tiff?|mp4|mov|m4v|avi|webm|pdf|docx?|xlsx?|pptx?|zip)$/i.test(raw)) return { localPath: raw };
+  return null;
 }
 
 function normalizeStringList(raw: any, maxLen: number, limit: number): string[] {

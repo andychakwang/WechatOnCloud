@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r29-material-key-mapping';
+const CLIENT_VERSION = 'automation-lab-r30-material-registry';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -16,6 +16,7 @@ Environment:
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
+  import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   push-events <file|-> [--source name]
   heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
   runner-policy [--worker-id name]
@@ -43,6 +44,7 @@ Commands:
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
   node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
+  node scripts/wecom-bridge-client.mjs import-materials doc/examples/wecom-materials.sample.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
   node scripts/wecom-bridge-client.mjs heartbeat --mode prepare
   node scripts/wecom-bridge-client.mjs runner-policy --worker-id mac-mini-01
@@ -190,6 +192,18 @@ function normalizeAudiencePayload(input, options) {
   return { source, type, mode, approveImported, contacts: [input] };
 }
 
+function normalizeMaterialPayload(input, options) {
+  const source = String(options.source || input?.source || DEFAULT_SOURCE);
+  const kind = String(options.kind || options.type || input?.kind || input?.type || 'image');
+  const mode = String(options.mode || input?.mode || 'upsert');
+  const approveImported = boolOpt(options, 'approve-imported', 'approve') || input?.approveImported === true;
+  if (Array.isArray(input)) return { source, kind, mode, approveImported, assets: input };
+  if (Array.isArray(input?.assets)) return { ...input, source, kind: input.kind || input.type || kind, mode, approveImported };
+  if (Array.isArray(input?.materials)) return { ...input, source, kind: input.kind || input.type || kind, mode, approveImported };
+  if (Array.isArray(input?.items)) return { ...input, source, kind: input.kind || input.type || kind, mode, approveImported };
+  return { source, kind, mode, approveImported, assets: [input] };
+}
+
 function normalizeEventPayload(input, options) {
   const source = String(options.source || input?.source || DEFAULT_SOURCE);
   if (Array.isArray(input)) return { source, events: input };
@@ -309,6 +323,13 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeAudiencePayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/audience', payload));
+    return;
+  }
+
+  if (command === 'import-materials') {
+    const input = await readJsonInput(positional[0] || options.file || '-');
+    const payload = normalizeMaterialPayload(input, options);
+    printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/materials', payload));
     return;
   }
 

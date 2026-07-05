@@ -12,6 +12,8 @@ import {
   type AutomationAudienceContactType,
   type AutomationKnowledgeCategory,
   type AutomationKnowledgeItem,
+  type AutomationMaterialAsset,
+  type AutomationMaterialKind,
   type AutomationOverview,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
@@ -164,6 +166,15 @@ const AUDIENCE_TYPE_LABEL: Record<AutomationAudienceContactType, string> = {
   unknown: '未分类',
 };
 
+const MATERIAL_KIND_LABEL: Record<AutomationMaterialKind, string> = {
+  image: '图片',
+  video: '视频',
+  file: '文件',
+  link: '链接',
+  text: '文案',
+  other: '其他',
+};
+
 const BRIDGE_RUN_TARGET_LABEL: Record<string, string> = {
   replies: 'AI 回复',
   mass: '群发',
@@ -280,6 +291,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const { toast, confirm } = useUI();
   const [config, setConfig] = useState<AutomationConfig | null>(null);
   const [audienceContacts, setAudienceContacts] = useState<AutomationAudienceContact[]>([]);
+  const [materialAssets, setMaterialAssets] = useState<AutomationMaterialAsset[]>([]);
   const [jobs, setJobs] = useState<MassSendJob[]>([]);
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
@@ -327,6 +339,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [audienceType, setAudienceType] = useState<AutomationAudienceContactType>('unknown');
   const [audienceApproveImported, setAudienceApproveImported] = useState(false);
   const [audienceImportText, setAudienceImportText] = useState('');
+  const [materialSource, setMaterialSource] = useState('wecom-mac');
+  const [materialKind, setMaterialKind] = useState<AutomationMaterialKind>('image');
+  const [materialApproveImported, setMaterialApproveImported] = useState(false);
+  const [materialImportText, setMaterialImportText] = useState('');
 
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
@@ -334,10 +350,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { overview }, { contacts }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }, { policy }] = await Promise.all([
+      const [{ config }, { overview }, { contacts }, { assets }, { jobs }, { drafts }, { events }, { events: bridgeEvents }, { reports }, { policy }] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
         api.listAutomationAudience(200),
+        api.listAutomationMaterials(200),
         api.listMassSendJobs(),
         api.listMomentDrafts(),
         api.automationAudit(30),
@@ -349,6 +366,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setConfig(config);
       setOverview(overview);
       setAudienceContacts(contacts);
+      setMaterialAssets(assets);
       setJobs(jobs);
       setDrafts(drafts);
       setAudit(events);
@@ -557,6 +575,73 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (names.length === 0) return toast('没有可填入的受众', 'error');
     setMassRecipients((current) => linesOf([current, names.join('\n')].filter(Boolean).join('\n')).join('\n'));
     toast(`已填入 ${names.length} 个群发目标`, 'ok');
+  };
+
+  const importMaterials = async () => {
+    const rawText = materialImportText.trim();
+    if (!rawText) return toast('请先粘贴素材台账', 'error');
+    setBusy('material-import');
+    try {
+      const { result } = await api.importAutomationMaterials({
+        source: materialSource.trim() || 'wecom-mac',
+        kind: materialKind,
+        approveImported: materialApproveImported,
+        enabled: true,
+        mode: 'upsert',
+        rawText,
+      });
+      setMaterialImportText('');
+      toast(`素材已导入：新增 ${result.imported}，更新 ${result.updated}`, 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '导入素材失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const patchMaterial = async (asset: AutomationMaterialAsset, payload: Partial<AutomationMaterialAsset>) => {
+    setBusy(`material-${asset.id}`);
+    try {
+      const { asset: saved } = await api.patchAutomationMaterial(asset.id, payload);
+      setMaterialAssets((list) => list.map((item) => (item.id === saved.id ? saved : item)));
+      toast('素材已更新', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '更新素材失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const removeMaterial = async (asset: AutomationMaterialAsset) => {
+    const ok = await confirm({
+      title: `删除素材「${asset.key}」？`,
+      body: '删除的是云端素材台账记录，不会删除 Mac 本机文件，也不会影响已经下发的任务。',
+      danger: true,
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    setBusy(`material-${asset.id}`);
+    try {
+      await api.deleteAutomationMaterial(asset.id);
+      setMaterialAssets((list) => list.filter((item) => item.id !== asset.id));
+      toast('素材已删除', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '删除素材失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const copyMaterialReplyToken = (asset: AutomationMaterialAsset) => {
+    copyBridgeText(`[image-key ${asset.key}]`, '回复素材片段');
+  };
+
+  const useMaterialForMoment = (asset: AutomationMaterialAsset) => {
+    setMomentMaterials((current) => linesOf([current, asset.key].filter(Boolean).join('\n')).join('\n'));
+    toast('已填入朋友圈素材', 'ok');
   };
 
   const useBridgeEventForReply = async (event: WecomBridgeEvent) => {
@@ -981,7 +1066,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </div>
               <div className="auto-overview-metric">{overview.knowledge.approved}/{overview.knowledge.total}</div>
               <div className="muted small">
-                已审核资料 · 受众 {overview.audience.approved}/{overview.audience.total} · 规则 {overview.rules.approved}/{overview.rules.total}
+                已审核资料 · 素材 {overview.materials.approved}/{overview.materials.total} · 受众 {overview.audience.approved}/{overview.audience.total} · 规则{' '}
+                {overview.rules.approved}/{overview.rules.total}
               </div>
             </div>
             <div className="auto-overview-card">
@@ -1140,6 +1226,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </div>
                 <div className="muted small">
                   受众 <code>{location.origin + bridge.audienceEndpoint}</code>
+                </div>
+                <div className="muted small">
+                  素材 <code>{location.origin + bridge.materialEndpoint}</code>
                 </div>
                 <div className="muted small">
                   消息 <code>{location.origin + bridge.eventEndpoint}</code>
@@ -1389,6 +1478,76 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </div>
               ))}
               {knowledgeItems.length === 0 && <div className="muted small">暂无接入资料</div>}
+            </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>素材资产</b>
+              <span>
+                <span className="tag">{materialAssets.length} 个素材</span>
+                <span className="tag tag-on">{materialAssets.filter((item) => item.enabled && item.approved).length} 可用</span>
+              </span>
+            </div>
+            <div className="auto-grid two compact">
+              <input className="input" placeholder="来源，例如 wecom-mac" value={materialSource} onChange={(e) => setMaterialSource(e.target.value)} />
+              <select className="input" value={materialKind} onChange={(e) => setMaterialKind(e.target.value as AutomationMaterialKind)}>
+                {(Object.keys(MATERIAL_KIND_LABEL) as AutomationMaterialKind[]).map((key) => (
+                  <option key={key} value={key}>
+                    {MATERIAL_KIND_LABEL[key]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <textarea
+              className="input textarea"
+              placeholder="一行一个：素材key | 标题 | Mac本机路径或URL | 标签 | 说明。也支持 JSON：assets/materials/items 数组。"
+              value={materialImportText}
+              onChange={(e) => setMaterialImportText(e.target.value)}
+            />
+            <div className="auto-actions inline">
+              <label className="auto-check inline-check">
+                <input type="checkbox" checked={materialApproveImported} onChange={(e) => setMaterialApproveImported(e.target.checked)} />
+                <span>导入后标记为已审核</span>
+              </label>
+              <button className="btn s-btn" disabled={busy === 'material-import' || !materialImportText.trim()} onClick={importMaterials}>
+                导入素材
+              </button>
+            </div>
+            <div className="auto-list">
+              {materialAssets.slice(0, 8).map((asset) => (
+                <div key={asset.id} className="auto-list-item">
+                  <div>
+                    <b>{asset.key}</b>
+                    <div className="muted small">
+                      {asset.title} · {MATERIAL_KIND_LABEL[asset.kind]} · {asset.source} · {asset.enabled ? '启用' : '停用'} · {asset.approved ? '已审核' : '未审核'}
+                    </div>
+                    {(asset.localPath || asset.url || asset.tags.length > 0 || asset.description) && (
+                      <div className="muted small auto-snippet">
+                        {[asset.localPath || asset.url, asset.tags.length ? `标签 ${asset.tags.slice(0, 6).join('、')}` : '', asset.description].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="auto-actions">
+                    <button className="btn-text" disabled={busy === `material-${asset.id}`} onClick={() => patchMaterial(asset, { approved: !asset.approved })}>
+                      {asset.approved ? '撤审' : '审核'}
+                    </button>
+                    <button className="btn-text" disabled={busy === `material-${asset.id}`} onClick={() => patchMaterial(asset, { enabled: !asset.enabled })}>
+                      {asset.enabled ? '停用' : '启用'}
+                    </button>
+                    <button className="btn-text" onClick={() => copyMaterialReplyToken(asset)}>
+                      回复片段
+                    </button>
+                    <button className="btn-text" onClick={() => useMaterialForMoment(asset)}>
+                      朋友圈
+                    </button>
+                    <button className="btn-text danger" disabled={busy === `material-${asset.id}`} onClick={() => removeMaterial(asset)}>
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {materialAssets.length === 0 && <div className="muted small">暂无素材资产</div>}
             </div>
           </section>
 

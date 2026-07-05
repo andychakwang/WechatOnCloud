@@ -244,6 +244,7 @@ request_json GET /api/admin/automation/overview
 json_assert_path overview.generatedAt
 json_assert_path overview.settings
 json_assert_path overview.audience.total
+json_assert_path overview.materials.total
 json_assert_path overview.bridge.pendingReplies
 json_assert_path overview.bridge.runnerPolicy.mode
 json_assert_path overview.mass.itemsPending
@@ -253,6 +254,7 @@ json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.commands.writeEnv
 json_assert_path bridge.runnerGuide.commands.dryRunAll
 json_assert_path bridge.audienceEndpoint
+json_assert_path bridge.materialEndpoint
 json_assert_path bridge.runReportEndpoint
 json_assert_path bridge.runnerPolicyEndpoint
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
@@ -326,6 +328,35 @@ json_assert_path contact.approved
 request_json DELETE "/api/admin/automation/audience/$audience_id"
 json_assert_path ok
 
+say "Import and remove automation material asset"
+material_key="smoke-poster-$stamp"
+material_payload="$(python3 - "$material_key" "$reply_image_file" <<'PY'
+import json
+import sys
+
+key = sys.argv[1]
+path = sys.argv[2]
+print(json.dumps({
+    "source": "smoke-wecom-mac",
+    "kind": "image",
+    "approveImported": False,
+    "mode": "upsert",
+    "rawText": f"{key} | {path}",
+}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/materials/import "$material_payload"
+json_assert_path result.assets[0].id
+json_assert_eq result.assets[0].key "$material_key"
+json_assert_eq result.assets[0].kind image
+material_id="$(json_get result.assets[0].id)"
+request_json GET /api/admin/automation/materials
+json_assert_path assets[0].id
+request_json PATCH "/api/admin/automation/materials/$material_id" '{"approved":true,"enabled":true}'
+json_assert_path asset.approved
+request_json DELETE "/api/admin/automation/materials/$material_id"
+json_assert_path ok
+
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]]; then
   say "Check WeCom Mac handler dry-run"
   WECOM_HANDLER_MODE=dry-run "$WECOM_REPLY_HANDLER" < "$ROOT/doc/examples/wecom-bridge-reply.sample.json" > "$body_file"
@@ -377,6 +408,35 @@ PY
   json_assert_path result.contacts[0].id
   bridge_audience_id="$(json_get result.contacts[0].id)"
   request_json DELETE "/api/admin/automation/audience/$bridge_audience_id"
+  json_assert_path ok
+
+  say "Import materials through Bridge"
+  bridge_material_payload="$(python3 - "$stamp" "$reply_image_file" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+path = sys.argv[2]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "kind": "image",
+    "approveImported": False,
+    "mode": "upsert",
+    "assets": [{
+        "key": f"smoke-bridge-poster-{stamp}",
+        "title": "Smoke Bridge Poster",
+        "localPath": path,
+        "tags": ["bridge"],
+        "description": "Bridge material smoke",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-materials - <<<"$bridge_material_payload" > "$body_file"
+  json_assert_path result.assets[0].id
+  json_assert_eq result.assets[0].kind image
+  bridge_material_id="$(json_get result.assets[0].id)"
+  request_json DELETE "/api/admin/automation/materials/$bridge_material_id"
   json_assert_path ok
 
   say "Report WeCom Bridge worker heartbeat"
