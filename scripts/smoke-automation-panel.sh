@@ -725,6 +725,11 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" mark-failed "$bridge_event_id" --error "smoke handler failed once" > "$body_file"
   json_assert_path event.replyFailedAt
   json_assert_path event.replyError
+  request_json POST /api/admin/automation/bridge-recovery '{"dryRun":true,"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false}'
+  json_assert_eq result.dryRun True
+  json_assert_eq result.totalChanged 1
+  json_assert_eq result.changes[0].target reply
+  json_assert_eq result.changes[0].action retry-failed
   request_json POST /api/admin/automation/bridge-recovery '{"releaseClaims":"expired","retryFailed":true,"includeMass":false,"includeMoments":false}'
   json_assert_eq result.replies.retriedFailed 1
   json_assert_eq result.changes[0].target reply

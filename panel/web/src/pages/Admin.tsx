@@ -5,6 +5,7 @@ import {
   api,
   APP_LABELS,
   appProfile,
+  type AutomationBridgeRecoveryResult,
   type AutomationStep,
   type AutomationBridgeStatus,
   type AutomationConfig,
@@ -26,6 +27,7 @@ import {
   type InstanceWithStatus,
   type VolEntry,
   type AppType,
+  type BridgeRecoveryReleaseMode,
   type VersionInfo,
   type WecomBridgeEvent,
   type WecomBridgeMomentPasteMode,
@@ -206,6 +208,17 @@ const BRIDGE_RUNNER_TARGET_LABEL: Record<WecomBridgeRunnerTarget, string> = {
   all: '全队列',
 };
 
+const BRIDGE_RECOVERY_RELEASE_LABEL: Record<BridgeRecoveryReleaseMode, string> = {
+  expired: '超时领取',
+  all: '全部领取',
+  none: '不释放',
+};
+
+const BRIDGE_RECOVERY_ACTION_LABEL: Record<string, string> = {
+  'release-claim': '释放领取',
+  'retry-failed': '重试失败',
+};
+
 const AUTOMATION_RISK_LABEL: Record<string, string> = {
   automation_off: '总开关关闭',
   bridge_workers_offline: 'Mac 离线',
@@ -235,6 +248,13 @@ function bundleCount(result?: AutomationBundleImportResult | null): string {
   const imported = Object.values(result.imported || {}).reduce((sum, value) => sum + value, 0);
   const updated = Object.values(result.updated || {}).reduce((sum, value) => sum + value, 0);
   return `新增 ${imported} · 更新 ${updated} · 跳过 ${result.skipped}`;
+}
+
+function bridgeRecoveryCount(result?: AutomationBridgeRecoveryResult | null): { released: number; retried: number; total: number } {
+  if (!result) return { released: 0, retried: 0, total: 0 };
+  const released = result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims;
+  const retried = result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed;
+  return { released, retried, total: result.totalChanged };
 }
 
 function compactDateForFile(date = new Date()): string {
@@ -336,6 +356,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
   const [runnerPolicy, setRunnerPolicy] = useState<WecomBridgeRunnerPolicy | null>(null);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
+  const [recoveryReleaseClaims, setRecoveryReleaseClaims] = useState<BridgeRecoveryReleaseMode>('expired');
+  const [recoveryRetryFailed, setRecoveryRetryFailed] = useState(true);
+  const [recoveryIncludeReplies, setRecoveryIncludeReplies] = useState(true);
+  const [recoveryIncludeMass, setRecoveryIncludeMass] = useState(true);
+  const [recoveryIncludeMoments, setRecoveryIncludeMoments] = useState(true);
+  const [recoveryPreview, setRecoveryPreview] = useState<AutomationBridgeRecoveryResult | null>(null);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -478,19 +504,48 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const bridgeRecoveryPayload = (dryRun: boolean) => ({
+    dryRun,
+    releaseClaims: recoveryReleaseClaims,
+    retryFailed: recoveryRetryFailed,
+    includeReplies: recoveryIncludeReplies,
+    includeMass: recoveryIncludeMass,
+    includeMoments: recoveryIncludeMoments,
+  });
+
+  const previewBridgeRecovery = async () => {
+    setBusy('bridge-recovery-preview');
+    try {
+      const { result } = await api.recoverAutomationBridgeOutbox(bridgeRecoveryPayload(true));
+      setRecoveryPreview(result);
+      const count = bridgeRecoveryCount(result);
+      toast(`恢复预览：${count.total} 项，释放 ${count.released}，重试 ${count.retried}`, 'ok');
+    } catch (e: any) {
+      toast(e.message || '预览 Bridge 出箱恢复失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const recoverBridgeOutbox = async () => {
+    const releaseText = BRIDGE_RECOVERY_RELEASE_LABEL[recoveryReleaseClaims];
+    const scopes = [
+      recoveryIncludeReplies ? 'AI 回复' : '',
+      recoveryIncludeMass ? '群发' : '',
+      recoveryIncludeMoments ? '朋友圈' : '',
+    ].filter(Boolean);
     const ok = await confirm({
       title: '恢复 Bridge 出箱？',
-      body: '会释放已超时领取，并把失败的 AI 回复、群发目标和朋友圈草稿放回待处理队列；不会直接发送内容。',
+      body: `范围：${scopes.join('、') || '未选择'}；领取：${releaseText}；失败项：${recoveryRetryFailed ? '重试' : '不处理'}。不会直接发送内容。`,
       confirmText: '恢复',
     });
     if (!ok) return;
     setBusy('bridge-recovery');
     try {
-      const { result } = await api.recoverAutomationBridgeOutbox({ releaseClaims: 'expired', retryFailed: true });
-      const released = result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims;
-      const retried = result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed;
-      toast(`Bridge 出箱已恢复：释放 ${released}，重试 ${retried}`, 'ok');
+      const { result } = await api.recoverAutomationBridgeOutbox(bridgeRecoveryPayload(false));
+      setRecoveryPreview(result);
+      const count = bridgeRecoveryCount(result);
+      toast(`Bridge 出箱已恢复：释放 ${count.released}，重试 ${count.retried}`, 'ok');
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '恢复 Bridge 出箱失败', 'error');
@@ -1448,9 +1503,6 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         </div>
                       </div>
                       <div className="auto-actions inline">
-                        <button className="btn-text" disabled={busy === 'bridge-recovery'} onClick={recoverBridgeOutbox}>
-                          恢复出箱
-                        </button>
                         <button className="btn-text" disabled={busy === 'runner-policy'} onClick={saveRunnerPolicy}>
                           保存策略
                         </button>
@@ -1537,6 +1589,80 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     </label>
                   </div>
                 )}
+                <div className="bridge-runner-guide">
+                  <div className="bridge-runner-head">
+                    <div>
+                      <b>Bridge 出箱恢复</b>
+                      <div className="muted small">
+                        {recoveryPreview
+                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${bridgeRecoveryCount(recoveryPreview).total} 项`
+                          : '待预览'}
+                      </div>
+                    </div>
+                    <div className="auto-actions inline">
+                      <button className="btn-text" disabled={busy === 'bridge-recovery-preview'} onClick={previewBridgeRecovery}>
+                        预览
+                      </button>
+                      <button className="btn-text" disabled={busy === 'bridge-recovery'} onClick={recoverBridgeOutbox}>
+                        执行
+                      </button>
+                    </div>
+                  </div>
+                  <div className="auto-grid three compact">
+                    <label>
+                      <span className="field-label">领取</span>
+                      <select className="input" value={recoveryReleaseClaims} onChange={(e) => setRecoveryReleaseClaims(e.target.value as BridgeRecoveryReleaseMode)}>
+                        <option value="expired">超时领取</option>
+                        <option value="all">全部领取</option>
+                        <option value="none">不释放</option>
+                      </select>
+                    </label>
+                    <div className="auto-field">
+                      <span className="field-label">失败项</span>
+                      <label className="auto-check">
+                        <input type="checkbox" checked={recoveryRetryFailed} onChange={(e) => setRecoveryRetryFailed(e.target.checked)} />
+                        <span>重试失败</span>
+                      </label>
+                    </div>
+                    <div className="auto-field">
+                      <span className="field-label">队列</span>
+                      <div className="chip-row">
+                        <label className="auto-check">
+                          <input type="checkbox" checked={recoveryIncludeReplies} onChange={(e) => setRecoveryIncludeReplies(e.target.checked)} />
+                          <span>AI 回复</span>
+                        </label>
+                        <label className="auto-check">
+                          <input type="checkbox" checked={recoveryIncludeMass} onChange={(e) => setRecoveryIncludeMass(e.target.checked)} />
+                          <span>群发</span>
+                        </label>
+                        <label className="auto-check">
+                          <input type="checkbox" checked={recoveryIncludeMoments} onChange={(e) => setRecoveryIncludeMoments(e.target.checked)} />
+                          <span>朋友圈</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                  {recoveryPreview && (
+                    <div className="auto-list compact">
+                      {recoveryPreview.changes.slice(0, 5).map((change, index) => (
+                        <div className="auto-list-item" key={`${change.target}-${change.id}-${change.action}-${index}`}>
+                          <div>
+                            <b>
+                              {BRIDGE_RUN_ITEM_TARGET_LABEL[change.target] || change.target} · {change.name || change.id}
+                            </b>
+                            <div className="muted small">
+                              {BRIDGE_RECOVERY_ACTION_LABEL[change.action] || change.action}
+                              {change.reason ? ` · ${change.reason}` : ''}
+                            </div>
+                          </div>
+                          <span className="tag tag-warn">{recoveryPreview.dryRun ? '预览' : '已处理'}</span>
+                        </div>
+                      ))}
+                      {recoveryPreview.totalChanged > 5 && <div className="muted small">还有 {recoveryPreview.totalChanged - 5} 项</div>}
+                      {recoveryPreview.totalChanged === 0 && <div className="muted small">没有待恢复项</div>}
+                    </div>
+                  )}
+                </div>
                 {bridgeGuide && (
                   <div className="bridge-runner-guide">
                     <div className="bridge-runner-head">
