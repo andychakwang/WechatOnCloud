@@ -1389,6 +1389,44 @@ PY
 )"
   WECOM_HANDLER_MODE=dry-run "$WECOM_MOMENT_HANDLER" <<<"$moment_handler_payload" > "$body_file"
   json_assert_path ok
+  moment_material_payload="$(python3 - "$reply_image_file" <<'PY'
+import json
+import sys
+
+image_path = sys.argv[1]
+print(json.dumps({
+    "id": "smoke-moment-materials",
+    "draftId": "smoke-moment-materials",
+    "title": "smoke moment material handler",
+    "text": "这是一条带素材映射的朋友圈草稿，不会发布。",
+    "imageNotes": "需要两张配图。",
+    "materials": [
+        "smoke-poster",
+        {"materialKey": "direct-poster", "localPath": image_path},
+        "missing-moment-key",
+    ],
+}, ensure_ascii=False))
+PY
+)"
+  WECOM_HANDLER_MODE=dry-run WECOM_MATERIAL_MAP="{\"smoke-poster\":\"$reply_image_file\"}" "$WECOM_MOMENT_HANDLER" <<<"$moment_material_payload" > "$body_file"
+  json_assert_eq materialCount 3
+  json_assert_eq resolvedMaterialCount 2
+  json_assert_eq materials[0].localPath "$reply_image_file"
+  json_assert_eq materials[0].resolvedFromMap True
+  json_assert_eq materials[1].source direct-path
+  json_assert_array_contains missingMaterialRefs missing-moment-key
+  set +e
+  WECOM_HANDLER_MODE=prepare WECOM_MATERIAL_MAP='{}' "$WECOM_MOMENT_HANDLER" <<<"$moment_material_payload" > "$body_file" 2> "$handler_error_file"
+  moment_material_status=$?
+  set -e
+  if [[ "$moment_material_status" -ne 4 ]]; then
+    echo "ERROR: moment handler should reject missing materials before AppleScript, got $moment_material_status" >&2
+    sed -n '1,120p' "$body_file" >&2
+    sed -n '1,120p' "$handler_error_file" >&2
+    exit 1
+  fi
+  grep -q "Bridge moment material assets are not ready" "$handler_error_file"
+  grep -q "missing-moment-key" "$handler_error_file"
 
   say "Enable automation mass-send for Bridge task smoke"
   request_json GET /api/admin/automation/config

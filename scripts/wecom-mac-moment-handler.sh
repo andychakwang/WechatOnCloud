@@ -9,6 +9,8 @@ set -euo pipefail
 #   WECOM_APP_NAME='企业微信'                  macOS app name
 #   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
 #   WECOM_VERIFY_TARGET=1                     include window-title verification in handler JSON
+#   WECOM_MATERIAL_MAP='{"poster":"/Users/me/Pictures/poster.png"}'
+#   WECOM_MATERIAL_MAP_FILE=/path/to/wecom-materials.json
 
 APP_NAME="${WECOM_APP_NAME:-企业微信}"
 MODE="${WECOM_HANDLER_MODE:-prepare}"
@@ -32,14 +34,90 @@ fi
 
 parsed="$(TASK_JSON="$task_json" node <<'NODE'
 const payload = JSON.parse(process.env.TASK_JSON || '{}');
+const fs = require('node:fs');
 const title = String(payload.title || '').trim();
 const text = String(payload.text || '').trim();
 const imageNotes = String(payload.imageNotes || '').trim();
-const materials = Array.isArray(payload.materials) ? payload.materials.map(String).filter(Boolean) : [];
+function normalizeKey(value) {
+  return String(value ?? '').trim();
+}
+function materialPathFromItem(item) {
+  if (typeof item === 'string') return '';
+  return String(item?.localPath ?? item?.path ?? item?.filePath ?? item?.imagePath ?? '').trim();
+}
+function materialKeyFromItem(item, fallback = '') {
+  if (typeof item === 'string') return normalizeKey(item);
+  return normalizeKey(item?.materialKey ?? item?.imageKey ?? item?.assetKey ?? item?.key ?? item?.id ?? item?.name ?? fallback);
+}
+function readMaterialMap() {
+  const map = new Map();
+  const add = (key, path) => {
+    const k = normalizeKey(key);
+    const p = String(path ?? '').trim();
+    if (!k || !p) return;
+    map.set(k, p);
+    map.set(k.toLowerCase(), p);
+  };
+  const absorb = (value) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string') continue;
+        add(materialKeyFromItem(item), materialPathFromItem(item));
+      }
+      return;
+    }
+    if (typeof value !== 'object') return;
+    if (Array.isArray(value.assets)) absorb(value.assets);
+    if (Array.isArray(value.materials)) absorb(value.materials);
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'assets' || key === 'materials') continue;
+      if (typeof item === 'string') {
+        add(key, item);
+      } else if (item && typeof item === 'object') {
+        add(materialKeyFromItem(item, key), materialPathFromItem(item));
+      }
+    }
+  };
+  const parse = (raw, source) => {
+    const sourceText = String(raw || '').trim();
+    if (!sourceText) return;
+    try {
+      absorb(JSON.parse(sourceText));
+    } catch (error) {
+      throw new Error(`Invalid material map JSON from ${source}: ${error.message}`);
+    }
+  };
+  parse(process.env.WECOM_MATERIAL_MAP, 'WECOM_MATERIAL_MAP');
+  const file = String(process.env.WECOM_MATERIAL_MAP_FILE || '').trim();
+  if (file) parse(fs.readFileSync(file, 'utf8'), file);
+  return map;
+}
+function normalizeMaterial(raw, index, materialMap) {
+  const directPath = materialPathFromItem(raw);
+  const key = materialKeyFromItem(raw, `material-${index + 1}`);
+  const rawText = typeof raw === 'string' ? raw.trim() : '';
+  const pathLike = rawText && (rawText.startsWith('/') || rawText.startsWith('./') || rawText.startsWith('../') || rawText.startsWith('~'));
+  const mappedPath = key ? (materialMap.get(key) || materialMap.get(key.toLowerCase()) || '') : '';
+  const localPath = directPath || mappedPath || (pathLike ? rawText : '');
+  const exists = !!localPath && fs.existsSync(localPath);
+  return {
+    key,
+    localPath,
+    exists,
+    resolvedFromMap: !!mappedPath && !directPath,
+    source: directPath ? 'direct-path' : mappedPath ? 'material-map' : pathLike ? 'path-like' : 'key',
+  };
+}
 if (!text) {
   console.error('ERROR: Bridge moment task is missing text.');
   process.exit(2);
 }
+const materialMap = readMaterialMap();
+const rawMaterials = Array.isArray(payload.materials) ? payload.materials : [];
+const materials = rawMaterials
+  .map((item, index) => normalizeMaterial(item, index, materialMap))
+  .filter((item) => item.key || item.localPath);
 process.stdout.write(JSON.stringify({
   id: payload.id || payload.draftId || '',
   draftId: payload.draftId || payload.id || '',
@@ -48,6 +126,10 @@ process.stdout.write(JSON.stringify({
   imageNotes,
   materials,
   textChars: [...text].length,
+  materialCount: materials.length,
+  resolvedMaterialCount: materials.filter((item) => item.localPath && item.exists).length,
+  missingMaterialRefs: materials.filter((item) => !item.localPath).map((item) => item.key),
+  missingMaterialPaths: materials.filter((item) => item.localPath && !item.exists).map((item) => item.localPath),
 }));
 NODE
 )"
@@ -60,6 +142,18 @@ materials_count="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.
 if [[ "$MODE" == "dry-run" ]]; then
   node -e 'const p=JSON.parse(process.argv[1]); p.ok=true; p.mode="dry-run"; console.log(JSON.stringify(p, null, 2))' "$parsed"
   exit 0
+fi
+
+material_errors="$(node -e '
+const p = JSON.parse(process.argv[1]);
+const refs = (p.missingMaterialRefs || []).filter(Boolean).map((key) => `unmapped material key: ${key}`);
+const paths = (p.missingMaterialPaths || []).filter(Boolean).map((path) => `missing material file: ${path}`);
+process.stdout.write([...refs, ...paths].join("\n"));
+' "$parsed")"
+if [[ -n "$material_errors" ]]; then
+  echo "ERROR: Bridge moment material assets are not ready:" >&2
+  echo "$material_errors" >&2
+  exit 4
 fi
 
 if ! command -v osascript >/dev/null 2>&1; then
@@ -166,7 +260,7 @@ APPLESCRIPT
 
 verification_json="$(target_verification "$title" 0)"
 node -e '
-const verification = process.argv[6] ? JSON.parse(process.argv[6]) : undefined;
+const verification = process.argv[7] ? JSON.parse(process.argv[7]) : undefined;
 console.log(JSON.stringify({
   ok: true,
   mode: "prepare",
@@ -175,6 +269,7 @@ console.log(JSON.stringify({
   title: process.argv[3],
   textChars: Number(process.argv[4]),
   materialsCount: Number(process.argv[5]),
+  resolvedMaterialsCount: Number(process.argv[6]),
   ...(verification ? { verification } : {}),
 }, null, 2));
-' "$PASTE_MODE" "$APP_NAME" "$title" "$text_chars" "$materials_count" "$verification_json"
+' "$PASTE_MODE" "$APP_NAME" "$title" "$text_chars" "$materials_count" "$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.resolvedMaterialCount || 0))' "$parsed")" "$verification_json"
