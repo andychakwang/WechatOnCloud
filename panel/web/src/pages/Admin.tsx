@@ -313,8 +313,13 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
   replies: number;
   mass: number;
   moments: number;
+  limit: number;
+  ready: boolean;
+  blockedByPreflight: boolean;
+  reason: string;
   label: string;
 } {
+  if (queue.handoff?.rpa) return queue.handoff.rpa;
   const replies = queue.items.filter((item) => item.target === 'reply').length;
   const mass = queue.items.filter((item) => item.target === 'mass').length;
   const moments = queue.items.filter((item) => item.target === 'moment').length;
@@ -331,6 +336,10 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
     replies,
     mass,
     moments,
+    limit: 50,
+    ready: total > 0,
+    blockedByPreflight: false,
+    reason: total > 0 ? '可生成 RPA 运行包预览。' : '暂无可交给 Mac/RPA 的任务。',
     label: active.length === 1 ? active[0].label : '全队列',
   };
 }
@@ -662,13 +671,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (download) params.set('download', '1');
     return params.toString();
   };
-  const previewWecomRpaPackage = async (targetOverride?: WecomRpaPackageTarget) => {
+  const previewWecomRpaPackage = async (targetOverride?: WecomRpaPackageTarget, limitOverride?: number) => {
     const target = targetOverride || rpaPackageTarget;
+    const limit = limitOverride ?? wecomRpaPackageLimit();
     setBusy('rpa-package');
     try {
       const { package: pkg } = await api.exportWecomRpaPackage({
         target,
-        limit: wecomRpaPackageLimit(),
+        limit,
         format: 'json',
         includeSource: rpaPackageIncludeSource,
       });
@@ -686,7 +696,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       return;
     }
     setRpaPackageTarget(actionQueueRpa.target);
-    await previewWecomRpaPackage(actionQueueRpa.target);
+    setRpaPackageLimit(String(actionQueueRpa.limit));
+    await previewWecomRpaPackage(actionQueueRpa.target, actionQueueRpa.limit);
   };
   const downloadWecomRpaPackage = (format: WecomRpaPackageFormat) => {
     window.open(`/api/admin/automation/rpa-package?${wecomRpaPackageQuery(format, true)}`, '_blank', 'noopener,noreferrer');
@@ -1586,9 +1597,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               <div className="auto-action-queue-tools">
                 <span className="muted small">
                   RPA {actionQueueRpa?.total || 0} · 回复 {actionQueueRpa?.replies || 0} · 群发 {actionQueueRpa?.mass || 0} · 朋友圈 {actionQueueRpa?.moments || 0}
+                  {actionQueueRpa?.blockedByPreflight ? ' · 预检阻断' : ''}
                 </span>
-                <button className="btn-text" disabled={busy === 'rpa-package' || !actionQueueRpa?.total} onClick={previewActionQueueRpaPackage}>
-                  生成 {actionQueueRpa?.label || '全队列'}包
+                <button
+                  className="btn-text"
+                  disabled={busy === 'rpa-package' || !actionQueueRpa?.total}
+                  title={actionQueueRpa?.reason || ''}
+                  onClick={previewActionQueueRpaPackage}
+                >
+                  预览 {actionQueueRpa?.label || '全队列'}包
                 </button>
               </div>
             </div>

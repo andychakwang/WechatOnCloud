@@ -511,6 +511,20 @@ export interface AutomationActionQueueItem {
 export interface AutomationActionQueue {
   generatedAt: string;
   summary: Record<AutomationActionQueuePriority, number> & { total: number };
+  handoff: {
+    rpa: {
+      target: WecomRpaPackageTarget;
+      label: string;
+      total: number;
+      replies: number;
+      mass: number;
+      moments: number;
+      limit: number;
+      ready: boolean;
+      blockedByPreflight: boolean;
+      reason: string;
+    };
+  };
   items: AutomationActionQueueItem[];
 }
 
@@ -1375,13 +1389,14 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
 
 export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   const n = clampInt(limit, 1, 100, 20);
+  const rpaScanLimit = 200;
   const generatedAt = new Date().toISOString();
   const nowMs = Date.parse(generatedAt);
   const preflight = getAutomationPreflightReport();
   const overview = getAutomationOverview();
   const policy = getWecomBridgeRunnerPolicy();
   const items: AutomationActionQueueItem[] = [];
-  const sendableReplyIds = new Set(listApprovedWecomBridgeReplies(200, { requireSendable: true }).map((event) => event.id));
+  const sendableReplyIds = new Set(listApprovedWecomBridgeReplies(rpaScanLimit, { requireSendable: true }).map((event) => event.id));
 
   const staleSeconds = (value?: string): number | undefined => {
     if (!value) return undefined;
@@ -1424,7 +1439,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     });
   }
 
-  const replies = listApprovedWecomBridgeReplies(Math.min(20, n * 2));
+  const replies = listApprovedWecomBridgeReplies(rpaScanLimit);
   for (const event of replies) {
     const sendable = sendableReplyIds.has(event.id);
     const replyText = event.replyDraft || bridgeReplyTextFromSteps(bridgeReplySteps(event));
@@ -1450,7 +1465,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   const massTasks: WecomBridgeMassSendTask[] = [];
   if (data.settings.enabled && data.settings.massSendEnabled) {
     for (const job of data.massSendJobs) {
-      if (massTasks.length >= Math.min(20, n * 2)) break;
+      if (massTasks.length >= rpaScanLimit) break;
       if (!isMassJobBridgeRunnable(job)) continue;
       const item = job.items.find((candidate) => candidate.status === 'pending');
       if (!item || (item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, generatedAt))) continue;
@@ -1485,7 +1500,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     });
   }
 
-  for (const task of listApprovedWecomBridgeMomentTasks(Math.min(20, n * 2))) {
+  for (const task of listApprovedWecomBridgeMomentTasks(rpaScanLimit)) {
     const draft = data.momentDrafts.find((candidate) => candidate.id === task.draftId);
     add({
       id: `moment:${task.id}`,
@@ -1524,6 +1539,36 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   }
 
   const priorityRank: Record<AutomationActionQueuePriority, number> = { block: 0, high: 1, normal: 2, low: 3 };
+  const rpaCounts = {
+    replies: items.filter((item) => item.target === 'reply').length,
+    mass: items.filter((item) => item.target === 'mass').length,
+    moments: items.filter((item) => item.target === 'moment').length,
+  };
+  const rpaTotal = rpaCounts.replies + rpaCounts.mass + rpaCounts.moments;
+  const rpaActiveTargets = [
+    { target: 'replies' as const, count: rpaCounts.replies, label: 'AI 回复' },
+    { target: 'mass' as const, count: rpaCounts.mass, label: '群发' },
+    { target: 'moments' as const, count: rpaCounts.moments, label: '朋友圈' },
+  ].filter((item) => item.count > 0);
+  const rpaTarget = rpaActiveTargets.length === 1 ? rpaActiveTargets[0].target : 'all';
+  const rpaBlocked = preflight.summary.block > 0;
+  const handoff: AutomationActionQueue['handoff'] = {
+    rpa: {
+      target: rpaTarget,
+      label: rpaActiveTargets.length === 1 ? rpaActiveTargets[0].label : '全队列',
+      total: rpaTotal,
+      ...rpaCounts,
+      limit: Math.min(200, Math.max(50, rpaTotal || 50)),
+      ready: rpaTotal > 0 && !rpaBlocked,
+      blockedByPreflight: rpaBlocked,
+      reason:
+        rpaTotal <= 0
+          ? '暂无可交给 Mac/RPA 的回复、群发或朋友圈任务。'
+          : rpaBlocked
+            ? '存在预检阻断；可以先导出预览包排查，但执行前应处理阻断项。'
+            : '可生成 RPA 运行包交给 Mac 企业微信工具预览或执行。',
+    },
+  };
   const selected = items
     .sort(
       (a, b) =>
@@ -1541,7 +1586,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     { block: 0, high: 0, normal: 0, low: 0, total: 0 } as AutomationActionQueue['summary'],
   );
 
-  return { generatedAt, summary, items: selected };
+  return { generatedAt, summary, handoff, items: selected };
 }
 
 export function updateAutomationConfig(raw: any): AutomationConfig {

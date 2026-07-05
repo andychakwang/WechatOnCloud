@@ -619,6 +619,20 @@ export interface AutomationActionQueueItem {
 export interface AutomationActionQueue {
   generatedAt: string;
   summary: Record<AutomationActionQueuePriority, number> & { total: number };
+  handoff?: {
+    rpa: {
+      target: WecomRpaPackageTarget;
+      label: string;
+      total: number;
+      replies: number;
+      mass: number;
+      moments: number;
+      limit: number;
+      ready: boolean;
+      blockedByPreflight: boolean;
+      reason: string;
+    };
+  };
   items: AutomationActionQueueItem[];
 }
 
