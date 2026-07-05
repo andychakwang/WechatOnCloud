@@ -1597,6 +1597,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <div className="muted small">
                           {BRIDGE_RUNNER_TARGET_LABEL[runnerPolicy.target]} · {BRIDGE_RUNNER_MODE_LABEL[runnerPolicy.mode]} · 每轮 {runnerPolicy.limit}
                           {runnerPolicy.requireTargetMatch ? ' · 目标硬校验' : ''}
+                          {runnerPolicy.requireHandlerVerification ? ' · 交付校验' : ''}
                         </div>
                       </div>
                       <div className="auto-actions inline">
@@ -1691,6 +1692,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         onChange={(e) => setRunnerPolicy({ ...runnerPolicy, requireTargetMatch: e.target.checked })}
                       />
                       <span>回复和群发在粘贴/发送前必须命中目标窗口标题</span>
+                    </label>
+                    <label className="auto-check">
+                      <input
+                        type="checkbox"
+                        checked={runnerPolicy.requireHandlerVerification}
+                        onChange={(e) => setRunnerPolicy({ ...runnerPolicy, requireHandlerVerification: e.target.checked })}
+                      />
+                      <span>handler 回传目标/视觉校验通过后才标记任务交付成功</span>
                     </label>
                   </div>
                 )}

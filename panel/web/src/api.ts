@@ -322,6 +322,7 @@ export interface WecomBridgeRunnerPolicy {
   momentPasteMode: WecomBridgeMomentPasteMode;
   allowSend: boolean;
   requireTargetMatch: boolean;
+  requireHandlerVerification: boolean;
   updatedAt: string;
   updatedBy: string;
 }

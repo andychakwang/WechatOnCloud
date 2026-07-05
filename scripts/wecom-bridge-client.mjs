@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r47-policy-target-gate';
+const CLIENT_VERSION = 'automation-lab-r48-handler-verification-gate';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -12,6 +12,7 @@ WeCom Bridge client for WechatOnCloud automation panel.
 Environment:
   WOC_PANEL_URL / PANEL_URL / WECHATONCLOUD_PANEL_URL   e.g. http://nasbot.cloud:36081
   AUTOMATION_BRIDGE_TOKEN / WECOM_BRIDGE_TOKEN          bridge token from NAS compose
+  WECOM_REQUIRE_HANDLER_VERIFICATION=1                  require positive handler verification before success ack
 
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
@@ -99,6 +100,10 @@ function parseArgs(argv) {
 
 function boolOpt(options, ...names) {
   return names.some((name) => options[name] === true || options[name] === 'true' || options[name] === '1' || options[name] === 'yes');
+}
+
+function envBool(...names) {
+  return names.some((name) => ['1', 'true', 'yes', 'on'].includes(String(process.env[name] || '').trim().toLowerCase()));
 }
 
 function intOpt(value, fallback, min, max) {
@@ -369,6 +374,34 @@ function handlerVerification(result, fallbackName) {
     payload.expectedName = fallbackName;
   }
   return payload;
+}
+
+function requiresHandlerVerification(options) {
+  return (
+    boolOpt(options, 'require-handler-verification', 'require-verification', 'require-positive-verification') ||
+    envBool('WECOM_REQUIRE_HANDLER_VERIFICATION', 'WECOM_REQUIRE_POSITIVE_VERIFICATION')
+  );
+}
+
+function handlerVerificationGate(options, verification) {
+  if (!requiresHandlerVerification(options)) return { ok: true };
+  if (!isRecord(verification)) {
+    return { ok: false, error: 'handler verification required but missing' };
+  }
+  const negativeKeys = ['verified', 'targetVerified', 'conversationVerified', 'conversationMatched', 'matched', 'inputReady', 'inputFocused'].filter(
+    (key) => verification[key] === false,
+  );
+  if (negativeKeys.length > 0) {
+    return { ok: false, error: `handler verification failed: ${negativeKeys.join(', ')}` };
+  }
+  if (
+    ['verified', 'targetVerified', 'conversationVerified', 'conversationMatched', 'matched', 'inputReady', 'inputFocused'].some(
+      (key) => verification[key] === true,
+    )
+  ) {
+    return { ok: true };
+  }
+  return { ok: false, error: 'handler verification required but has no positive signal' };
 }
 
 async function postRunReport(options, payload) {
@@ -780,7 +813,9 @@ async function main() {
         runnable = claimed.event || reply;
       }
       const result = await runHandler(handler, runnable);
-      const ok = result.code === 0;
+      const verification = handlerVerification(result, reply.conversationName);
+      const gate = result.code === 0 ? handlerVerificationGate(options, verification) : { ok: true };
+      const ok = result.code === 0 && gate.ok;
       const item = {
         target: 'reply',
         id: reply.id,
@@ -791,8 +826,8 @@ async function main() {
         signal: result.signal,
         claimed: claim,
       };
-      const verification = handlerVerification(result, reply.conversationName);
       if (verification) item.verification = verification;
+      if (!gate.ok) item.error = gate.error;
       if (ok && markDelivered) {
         item.delivered = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'delivered',
@@ -803,7 +838,7 @@ async function main() {
         item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/replies/${encodeURIComponent(reply.id)}`, {
           deliveryStatus: 'failed',
           workerId: workerId(options),
-          error: `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
+          error: item.error || `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
         });
       }
       handled.push(item);
@@ -854,7 +889,9 @@ async function main() {
         runnable = claimed.task || task;
       }
       const result = await runMassHandler(handler, runnable);
-      const ok = result.code === 0;
+      const verification = handlerVerification(result, task.recipientName);
+      const gate = result.code === 0 ? handlerVerificationGate(options, verification) : { ok: true };
+      const ok = result.code === 0 && gate.ok;
       const item = {
         target: 'mass',
         id: task.id,
@@ -865,8 +902,8 @@ async function main() {
         signal: result.signal,
         claimed: claim,
       };
-      const verification = handlerVerification(result, task.recipientName);
       if (verification) item.verification = verification;
+      if (!gate.ok) item.error = gate.error;
       if (ok && markSent) {
         item.sent = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'sent',
@@ -877,7 +914,7 @@ async function main() {
         item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/mass-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'failed',
           workerId: workerId(options),
-          error: `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
+          error: item.error || `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
         });
       }
       handled.push(item);
@@ -930,7 +967,9 @@ async function main() {
         runnable = claimed.task || task;
       }
       const result = await runMomentHandler(handler, runnable);
-      const ok = result.code === 0;
+      const verification = handlerVerification(result, task.title);
+      const gate = result.code === 0 ? handlerVerificationGate(options, verification) : { ok: true };
+      const ok = result.code === 0 && gate.ok;
       const item = {
         target: 'moment',
         id: task.id,
@@ -941,8 +980,8 @@ async function main() {
         signal: result.signal,
         claimed: claim,
       };
-      const verification = handlerVerification(result, task.title);
       if (verification) item.verification = verification;
+      if (!gate.ok) item.error = gate.error;
       if (ok && markPrepared) {
         item.prepared = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'prepared',
@@ -959,7 +998,7 @@ async function main() {
         item.failed = await requestJson(options, 'PATCH', `/api/automation/bridge/wecom/moment-tasks/${encodeURIComponent(task.id)}`, {
           deliveryStatus: 'failed',
           workerId: workerId(options),
-          error: `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
+          error: item.error || `handler exited with ${result.code}${result.signal ? ` (${result.signal})` : ''}`,
         });
       }
       handled.push(item);

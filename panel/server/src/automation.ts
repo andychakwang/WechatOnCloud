@@ -302,6 +302,7 @@ export interface WecomBridgeRunnerPolicy {
   momentPasteMode: WecomBridgeMomentPasteMode;
   allowSend: boolean;
   requireTargetMatch: boolean;
+  requireHandlerVerification: boolean;
   updatedAt: string;
   updatedBy: string;
 }
@@ -642,6 +643,7 @@ const DEFAULT_RUNNER_POLICY: WecomBridgeRunnerPolicy = {
   momentPasteMode: 'clipboard-only',
   allowSend: false,
   requireTargetMatch: false,
+  requireHandlerVerification: false,
   updatedAt: '',
   updatedBy: 'system',
 };
@@ -3851,6 +3853,12 @@ function normalizeBridgeTargetVerification(raw: any, fallbackName = ''): WecomBr
   return verification;
 }
 
+function truthyFlag(value: unknown): boolean {
+  if (value === true) return true;
+  const text = String(value ?? '').trim().toLowerCase();
+  return text === '1' || text === 'true' || text === 'yes' || text === 'on';
+}
+
 function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
   const base = raw && typeof raw === 'object' ? raw : {};
   let mode = normalizeBridgeRunnerMode(base.mode ?? base.runnerMode) || DEFAULT_RUNNER_POLICY.mode;
@@ -3869,12 +3877,8 @@ function normalizeRunnerPolicy(raw: any, now: string): WecomBridgeRunnerPolicy {
     ),
     momentPasteMode: normalizeMomentPasteMode(base.momentPasteMode ?? base.pasteMode) || DEFAULT_RUNNER_POLICY.momentPasteMode,
     allowSend: base.allowSend === true,
-    requireTargetMatch:
-      base.requireTargetMatch === true ||
-      base.requireTargetMatch === '1' ||
-      base.requireTargetMatch === 'true' ||
-      base.requireTargetMatch === 'yes' ||
-      base.requireTargetMatch === 'on',
+    requireTargetMatch: truthyFlag(base.requireTargetMatch),
+    requireHandlerVerification: truthyFlag(base.requireHandlerVerification ?? base.requireVerification ?? base.requirePositiveVerification),
     updatedAt: typeof base.updatedAt === 'string' && base.updatedAt ? base.updatedAt : now,
     updatedBy: str(base.updatedBy || 'system', 80).trim() || 'system',
   };

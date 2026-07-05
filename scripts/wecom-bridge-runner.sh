@@ -52,6 +52,7 @@ Optional:
   WECOM_MATERIAL_MAP_FILE=~/.config/wechat-on-cloud/wecom-materials.json
   WECOM_SYNC_MATERIAL_MAP=1                 set 0 to disable material-map refresh
   WECOM_REQUIRE_TARGET_MATCH=1              abort reply/mass before paste if target title mismatches
+  WECOM_REQUIRE_HANDLER_VERIFICATION=1      require handler verification before marking delivered/sent/prepared
   WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
   WECOM_MOMENT_HANDLER=./scripts/wecom-mac-moment-handler.sh
   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
@@ -414,6 +415,7 @@ if [[ "${WECOM_USE_REMOTE_POLICY:-}" == "1" || "${WECOM_USE_REMOTE_POLICY:-}" ==
         BRIDGE_INTERVAL_SEC) export WECOM_BRIDGE_INTERVAL_SEC="$value" ;;
         ALLOW_SEND) remote_allow_send="$value" ;;
         REQUIRE_TARGET_MATCH) export WECOM_REQUIRE_TARGET_MATCH="$value" ;;
+        REQUIRE_HANDLER_VERIFICATION) export WECOM_REQUIRE_HANDLER_VERIFICATION="$value" ;;
       esac
     done < <(node - "$policy_file" <<'NODE'
 const fs = require('node:fs');
@@ -428,6 +430,7 @@ const out = {
   BRIDGE_INTERVAL_SEC: policy.heartbeatIntervalSeconds,
   ALLOW_SEND: policy.allowSend ? '1' : '',
   REQUIRE_TARGET_MATCH: policy.requireTargetMatch ? '1' : '0',
+  REQUIRE_HANDLER_VERIFICATION: policy.requireHandlerVerification ? '1' : '0',
 };
 for (const [key, value] of Object.entries(out)) {
   if (value !== undefined && value !== null && String(value).length > 0) {

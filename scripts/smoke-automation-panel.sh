@@ -305,6 +305,11 @@ if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_REQUIRE_TARGET_MATCH="
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_REQUIRE_HANDLER_VERIFICATION="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_REQUIRE_HANDLER_VERIFICATION" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && grep -qF "$AUTOMATION_BRIDGE_TOKEN" "$body_file"; then
   echo "ERROR: Bridge runner guide leaked the real AUTOMATION_BRIDGE_TOKEN" >&2
   exit 1
@@ -777,15 +782,17 @@ PY
   say "Update and fetch WeCom Bridge runner policy"
   request_json GET /api/admin/automation/runner-policy
   json_assert_path policy.mode
-  runner_policy_payload='{"mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false,"requireTargetMatch":true}'
+  runner_policy_payload='{"mode":"dry-run","target":"replies","limit":3,"claimTtlSeconds":180,"heartbeatIntervalSeconds":45,"momentPasteMode":"clipboard-only","allowSend":false,"requireTargetMatch":true,"requireHandlerVerification":true}'
   request_json PUT /api/admin/automation/runner-policy "$runner_policy_payload"
   json_assert_eq policy.target replies
   json_assert_eq policy.limit 3
   json_assert_eq policy.requireTargetMatch True
+  json_assert_eq policy.requireHandlerVerification True
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" runner-policy --worker-id smoke-worker > "$body_file"
   json_assert_eq policy.target replies
   json_assert_eq env.WECOM_RUNNER_TARGET replies
   json_assert_eq env.WECOM_REQUIRE_TARGET_MATCH 1
+  json_assert_eq env.WECOM_REQUIRE_HANDLER_VERIFICATION 1
 
   say "Check WeCom Bridge runner doctor"
   WOC_PANEL_URL="$PANEL_URL" \
@@ -909,6 +916,69 @@ PY
   json_assert_eq handled[0].verification.matchedName "Smoke Handler Capture"
   json_assert_eq runReport.report.items[0].verification.windowTitle "企业微信 - Smoke Handler Capture"
   request_json PATCH "/api/admin/automation/bridge-events/$handler_capture_event_id" '{"status":"archived"}'
+  json_assert_eq event.status archived
+
+  say "Check Bridge handler verification gate"
+  cat > "$verification_handler_file" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+payload="$(cat)"
+node - "$payload" <<'NODE'
+const payload = JSON.parse(process.argv[2] || '{}');
+const name = String(payload.conversationName || payload.senderName || '').trim();
+console.log(JSON.stringify({
+  ok: true,
+  verification: {
+    required: true,
+    verified: false,
+    matchedName: 'Wrong Conversation',
+    conversationMatched: false,
+    inputReady: true,
+    activeApp: '企业微信',
+    windowTitle: `企业微信 - Wrong Conversation for ${name}`,
+    confidence: 0,
+  },
+}));
+NODE
+SH
+  chmod +x "$verification_handler_file"
+  handler_gate_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+print(json.dumps({
+    "source": "smoke-wecom-bridge",
+    "events": [{
+        "externalId": f"smoke-handler-gate-{stamp}",
+        "conversationName": "Smoke Handler Gate",
+        "senderName": "Smoke Sender",
+        "inboundText": "请验证 handler 交付门禁。",
+    }],
+}, ensure_ascii=False))
+PY
+)"
+  request_bridge_json POST /api/automation/bridge/wecom/events "$handler_gate_payload"
+  json_assert_path result.events[0].id
+  handler_gate_event_id="$(json_get result.events[0].id)"
+  request_json PATCH "/api/admin/automation/bridge-events/$handler_gate_event_id" '{"status":"planned","replyDraft":"handler gate reply","replyApproved":true}'
+  WECOM_REQUIRE_HANDLER_VERIFICATION=1 WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" run-approved \
+    --worker-id smoke-worker \
+    --handler "$verification_handler_file" \
+    --limit 20 \
+    --claim \
+    --mark-delivered \
+    --report-failure \
+    --report-run > "$body_file"
+  json_assert_eq handled[0].ok False
+  json_assert_eq handled[0].action failed
+  json_assert_eq handled[0].verification.verified False
+  json_assert_path handled[0].error
+  json_assert_path handled[0].failed.event.replyFailedAt
+  json_assert_eq handled[0].failed.event.replyFailedBy smoke-worker
+  json_assert_missing_or_empty handled[0].failed.event.replyDeliveredAt
+  json_assert_eq runReport.report.status failed
+  request_json PATCH "/api/admin/automation/bridge-events/$handler_gate_event_id" '{"status":"archived"}'
   json_assert_eq event.status archived
 
   say "Push WeCom inbound message through Bridge"
