@@ -35,6 +35,10 @@ MATERIAL_MAP_KIND="${WECOM_MATERIAL_MAP_KIND:-image}"
 MATERIAL_MAP_TAG="${WECOM_MATERIAL_MAP_TAG:-}"
 MATERIAL_MAP_SOURCE="${WECOM_MATERIAL_MAP_SOURCE:-}"
 MATERIAL_MAP_INCLUDE_SKIPPED="${WECOM_MATERIAL_MAP_INCLUDE_SKIPPED:-1}"
+WECOM_CLI_EXECUTABLE="${WECOM_CLI_EXECUTABLE:-wecom-cli}"
+WECOM_CLI_CONFIG_DIR="${WECOM_CLI_CONFIG_DIR:-}"
+WECOM_CLI_TMP_DIR="${WECOM_CLI_TMP_DIR:-}"
+WECOM_CLI_LOG_LEVEL="${WECOM_CLI_LOG_LEVEL:-}"
 
 usage() {
   cat <<'EOF'
@@ -66,6 +70,10 @@ Optional:
   WECOM_MATERIAL_MAP_SOURCE=source            optional cloud material source filter
   WECOM_MATERIAL_MAP_INCLUDE_SKIPPED=1        include unmapped cloud assets in sync report
   WECOM_SYNC_MATERIAL_MAP=1                 set 0 to disable material-map refresh
+  WECOM_CLI_EXECUTABLE=wecom-cli            Enterprise WeChat CLI executable used by the Mac app
+  WECOM_CLI_CONFIG_DIR=...                  optional @wecom/cli config directory
+  WECOM_CLI_TMP_DIR=...                     optional @wecom/cli tmp directory
+  WECOM_CLI_LOG_LEVEL=...                   optional @wecom/cli log level
   WECOM_REQUIRE_TARGET_MATCH=1              abort reply/mass before paste if target title mismatches
   WECOM_REQUIRE_HANDLER_VERIFICATION=1      require handler verification before marking delivered/sent/prepared
   WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
@@ -74,6 +82,7 @@ Optional:
   WECOM_ALLOW_SEND=1                       required for send
   WECOM_DOCTOR_REMOTE=0                    skip remote policy auth check in doctor
   WECOM_DOCTOR_APP=0                       skip WeCom AppleScript window check in doctor
+  WECOM_DOCTOR_CLI=0                       skip @wecom/cli installation/auth check in doctor
   WECOM_DOCTOR_REPORT=1                    report doctor result to the panel
 
 Modes:
@@ -95,7 +104,7 @@ case "$cmd" in
     exit 0
     ;;
   print-config)
-    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nENGINE=%s\nUSE_RPA_PACKAGE=%s\nRPA_PACKAGE_SAVE_DIR=%s\nMATERIAL_MAP_FILE=%s\nMATERIAL_MAP_KIND=%s\nMATERIAL_MAP_TAG=%s\nMATERIAL_MAP_SOURCE=%s\nMATERIAL_MAP_INCLUDE_SKIPPED=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "$RUNNER_ENGINE" "$USE_RPA_PACKAGE" "$RPA_PACKAGE_SAVE_DIR" "${WECOM_MATERIAL_MAP_FILE:-}" "$MATERIAL_MAP_KIND" "$MATERIAL_MAP_TAG" "$MATERIAL_MAP_SOURCE" "$MATERIAL_MAP_INCLUDE_SKIPPED"
+    printf 'ROOT=%s\nENV_FILE=%s\nCLIENT=%s\nHANDLER=%s\nMASS_HANDLER=%s\nMOMENT_HANDLER=%s\nMODE=%s\nTARGET=%s\nLIMIT=%s\nENGINE=%s\nUSE_RPA_PACKAGE=%s\nRPA_PACKAGE_SAVE_DIR=%s\nMATERIAL_MAP_FILE=%s\nMATERIAL_MAP_KIND=%s\nMATERIAL_MAP_TAG=%s\nMATERIAL_MAP_SOURCE=%s\nMATERIAL_MAP_INCLUDE_SKIPPED=%s\nWECOM_CLI_EXECUTABLE=%s\nWECOM_CLI_CONFIG_DIR=%s\nWECOM_CLI_TMP_DIR=%s\nWECOM_CLI_LOG_LEVEL=%s\n' "$ROOT" "$ENV_FILE" "$CLIENT" "$HANDLER" "$MASS_HANDLER" "$MOMENT_HANDLER" "$MODE" "$TARGET" "$LIMIT" "$RUNNER_ENGINE" "$USE_RPA_PACKAGE" "$RPA_PACKAGE_SAVE_DIR" "${WECOM_MATERIAL_MAP_FILE:-}" "$MATERIAL_MAP_KIND" "$MATERIAL_MAP_TAG" "$MATERIAL_MAP_SOURCE" "$MATERIAL_MAP_INCLUDE_SKIPPED" "$WECOM_CLI_EXECUTABLE" "$WECOM_CLI_CONFIG_DIR" "$WECOM_CLI_TMP_DIR" "$WECOM_CLI_LOG_LEVEL"
     exit 0
     ;;
   doctor)
@@ -313,6 +322,43 @@ APPLESCRIPT
   fi
 }
 
+doctor_wecom_cli() {
+  if doctor_is_disabled "${WECOM_DOCTOR_CLI:-}"; then
+    doctor_warn "wecom-cli check skipped by WECOM_DOCTOR_CLI=0"
+    return
+  fi
+
+  local cli_cmd
+  if [[ "$WECOM_CLI_EXECUTABLE" == */* ]]; then
+    if [[ -x "$WECOM_CLI_EXECUTABLE" ]]; then
+      cli_cmd="$WECOM_CLI_EXECUTABLE"
+      doctor_ok "wecom-cli executable ready: $WECOM_CLI_EXECUTABLE"
+    else
+      doctor_warn "wecom-cli executable not executable: $WECOM_CLI_EXECUTABLE"
+      return
+    fi
+  elif cli_cmd="$(command -v "$WECOM_CLI_EXECUTABLE" 2>/dev/null)"; then
+    doctor_ok "wecom-cli executable found: $cli_cmd"
+  else
+    doctor_warn "wecom-cli not found; install with: npm install -g @wecom/cli"
+    return
+  fi
+
+  local version_out auth_out
+  if version_out="$(WECOM_CLI_CONFIG_DIR="$WECOM_CLI_CONFIG_DIR" WECOM_CLI_TMP_DIR="$WECOM_CLI_TMP_DIR" WECOM_CLI_LOG_LEVEL="$WECOM_CLI_LOG_LEVEL" "$cli_cmd" --version 2>&1)"; then
+    doctor_ok "wecom-cli version: $(printf '%s' "$version_out" | tr '\n' ' ' | sed 's/[[:space:]]\{1,\}/ /g' | cut -c1-160)"
+  else
+    doctor_warn "wecom-cli --version failed: $(printf '%s' "$version_out" | tr '\n' ' ' | sed 's/[[:space:]]\{1,\}/ /g' | cut -c1-160)"
+    return
+  fi
+
+  if auth_out="$(WECOM_CLI_CONFIG_DIR="$WECOM_CLI_CONFIG_DIR" WECOM_CLI_TMP_DIR="$WECOM_CLI_TMP_DIR" WECOM_CLI_LOG_LEVEL="$WECOM_CLI_LOG_LEVEL" "$cli_cmd" auth show --auth-status 2>&1)"; then
+    doctor_ok "wecom-cli auth reachable: $(printf '%s' "$auth_out" | tr '\n' ' ' | sed 's/[[:space:]]\{1,\}/ /g' | cut -c1-200)"
+  else
+    doctor_warn "wecom-cli auth not ready; run: $WECOM_CLI_EXECUTABLE init"
+  fi
+}
+
 run_doctor() {
   local started_at finished_at duration_ms report_status summary report_tmp
   local started_epoch
@@ -355,6 +401,7 @@ run_doctor() {
 
   doctor_remote_policy
   doctor_material_map
+  doctor_wecom_cli
   doctor_wecom_app
 
   printf '\nSummary: %s failure(s), %s warning(s)\n' "$DOCTOR_FAILURES" "$DOCTOR_WARNINGS"

@@ -339,6 +339,11 @@ json_assert_path bridge.runnerGuide.commands.installLaunchAgent
 json_assert_path bridge.runnerGuide.commands.launchAgentStatus
 json_assert_path bridge.runnerGuide.commands.tailLaunchAgentLog
 json_assert_path bridge.runnerGuide.commands.unloadLaunchAgent
+json_assert_eq bridge.runnerGuide.wecomCliExecutable wecom-cli
+json_assert_path bridge.runnerGuide.commands.wecomCliInstall
+json_assert_path bridge.runnerGuide.commands.wecomCliInit
+json_assert_path bridge.runnerGuide.commands.wecomCliCheck
+json_assert_path bridge.runnerGuide.commands.doctorWithoutCli
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -372,6 +377,21 @@ fi
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MATERIAL_MAP_FILE="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing WECOM_MATERIAL_MAP_FILE" >&2
   sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_CLI_EXECUTABLE="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_CLI_EXECUTABLE" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.wecomCliInstall)" != *"@wecom/cli"* ]]; then
+  echo "ERROR: Bridge runner guide wecom-cli install command is missing @wecom/cli" >&2
+  sed -n '1,160p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.wecomCliCheck)" != *"auth show --auth-status"* ]]; then
+  echo "ERROR: Bridge runner guide wecom-cli check command is missing auth status check" >&2
+  sed -n '1,160p' "$body_file" >&2
   exit 1
 fi
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_USE_RPA_PACKAGE="* ]]; then

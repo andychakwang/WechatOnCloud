@@ -2510,6 +2510,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                               <code>{bridgeGuide.launchAgentLabel}</code>
                             </>
                           ) : null}
+                          {bridgeGuide.wecomCliExecutable ? (
+                            <>
+                              {' · CLI '}
+                              <code>{bridgeGuide.wecomCliExecutable}</code>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                       <div className="auto-actions inline">
@@ -2575,6 +2581,39 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           </button>
                         </div>
                       )}
+                      {bridgeGuide.commands.wecomCliInstall && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>安装企微 CLI</b>
+                            <code>{bridgeGuide.commands.wecomCliInstall}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.wecomCliInstall!, '企微 CLI 安装命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
+                      {bridgeGuide.commands.wecomCliInit && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>初始化企微 CLI</b>
+                            <code>{bridgeGuide.commands.wecomCliInit}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.wecomCliInit!, '企微 CLI 初始化命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
+                      {bridgeGuide.commands.wecomCliCheck && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>检查企微 CLI</b>
+                            <code>{bridgeGuide.commands.wecomCliCheck}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.wecomCliCheck!, '企微 CLI 检查命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
                       <div className="bridge-command-row">
                         <div>
                           <b>接入体检</b>
@@ -2584,6 +2623,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           复制
                         </button>
                       </div>
+                      {bridgeGuide.commands.doctorWithoutCli && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>体检跳过 CLI</b>
+                            <code>{bridgeGuide.commands.doctorWithoutCli}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.doctorWithoutCli!, '跳过 CLI 体检命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
                       <div className="bridge-command-row">
                         <div>
                           <b>体检并回传</b>

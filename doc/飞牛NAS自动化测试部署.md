@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r80-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r81-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,9 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r80-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r80-2026-07-06`
-- 本版新增：Web「Mac Runner 接入」补齐 LaunchAgent 定时运行闭环，支持复制脱敏 dry-run、实际安装、状态查看、日志跟踪和停用命令；安装脚本会读取 bootstrap 写入的本机 env 文件，不需要把 Bridge token 再放到命令行里。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r81-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r81-2026-07-06`
+- 本版新增：Web「Mac Runner 接入」增加企微 CLI 接入探测，配置模板写入 `WECOM_CLI_EXECUTABLE`，面板可复制 `@wecom/cli` 安装、初始化和授权检查命令，`doctor` 会检查 CLI 安装与授权状态。
 
 ## 2026-07-06 R80 更新验收
 
@@ -278,7 +278,7 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 推荐用提交哈希固定脚本来源：
 
 ```bash
-WOC_VERSION=andy-automation-usable-r80-2026-07-06 \
+WOC_VERSION=andy-automation-usable-r81-2026-07-06 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```
@@ -327,7 +327,7 @@ PANEL_PASSWORD='测试面板密码' \
 
 它会验证登录、版本接口、自动化配置、自动化预检、缺失素材阻断、接入资料导入、受众资产、按受众筛选生成群发队列、素材资产台账、资产包导出/预览/导入、模拟决策、群发受控队列、朋友圈草稿和审计日志；创建出的测试队列会被取消，测试朋友圈草稿会被归档。
 
-如果本地同时设置了 `AUTOMATION_BRIDGE_TOKEN`，smoke 会额外验证 Bridge 资料推送、受众推送、素材台账推送、云端素材映射导出、Runner 自动同步素材映射并随心跳上报 mapped/skipped 状态、消息事件推送、带图片路径和素材 key 映射的顺序回复 `replySteps`、worker 心跳、Mac Runner 接入体检和体检回传、Mac handler dry-run、Mac handler 目标窗口校验快照、回复/群发发送前目标硬校验拦截、Bridge 自动回复 send 模式冷却拦截、Bridge client 交付校验门禁、Bridge runner dry-run、带目标会话/OCR 校验快照的运行报告明细、Bridge 出箱恢复预览、按 worker/失败原因/失败冷却/重试上限筛选恢复、cursor 分批继续和 all-target 汇总，并通过 `scripts/wecom-bridge-client.mjs` 验证批准回复、群发任务和朋友圈任务的拉取、领取、释放、失败回写与成功回写接口。
+如果本地同时设置了 `AUTOMATION_BRIDGE_TOKEN`，smoke 会额外验证 Bridge 资料推送、受众推送、素材台账推送、云端素材映射导出、Runner 自动同步素材映射并随心跳上报 mapped/skipped 状态、消息事件推送、带图片路径和素材 key 映射的顺序回复 `replySteps`、worker 心跳、Mac Runner 接入体检、企微 CLI 探测和体检回传、Mac handler dry-run、Mac handler 目标窗口校验快照、回复/群发发送前目标硬校验拦截、Bridge 自动回复 send 模式冷却拦截、Bridge client 交付校验门禁、Bridge runner dry-run、带目标会话/OCR 校验快照的运行报告明细、Bridge 出箱恢复预览、按 worker/失败原因/失败冷却/重试上限筛选恢复、cursor 分批继续和 all-target 汇总，并通过 `scripts/wecom-bridge-client.mjs` 验证批准回复、群发任务和朋友圈任务的拉取、领取、释放、失败回写与成功回写接口。
 
 ## 回滚与清理
 

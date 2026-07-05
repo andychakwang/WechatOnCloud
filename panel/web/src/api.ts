@@ -560,6 +560,9 @@ export interface AutomationBridgeRunnerGuide {
   launchAgentPlistPath?: string;
   launchAgentLogPath?: string;
   launchAgentErrorLogPath?: string;
+  wecomCliExecutable?: string;
+  wecomCliInstallCommand?: string;
+  wecomCliInitCommand?: string;
   modes: string[];
   targets: string[];
   envFile: string;
@@ -571,6 +574,10 @@ export interface AutomationBridgeRunnerGuide {
     printConfig: string;
     doctor: string;
     doctorReport: string;
+    doctorWithoutCli?: string;
+    wecomCliInstall?: string;
+    wecomCliInit?: string;
+    wecomCliCheck?: string;
     dryRunAll: string;
     dryRunRpaPackageAll?: string;
     prepareAll: string;

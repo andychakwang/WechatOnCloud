@@ -6,7 +6,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r78-material-map-heartbeat';
+const CLIENT_VERSION = 'automation-lab-r81-wecom-cli-doctor';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;

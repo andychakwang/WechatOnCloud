@@ -257,6 +257,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
   const launchAgentPlistPath = `~/Library/LaunchAgents/${launchAgentLabel}.plist`;
   const launchAgentLogPath = `~/Library/Logs/${launchAgentLabel}.log`;
   const launchAgentErrorLogPath = `~/Library/Logs/${launchAgentLabel}.err.log`;
+  const wecomCliExecutable = 'wecom-cli';
   const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
   const defaultWorkerId = 'mac-bridge-01';
   const envFile = [
@@ -274,6 +275,10 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
     "WECOM_MATERIAL_MAP_KIND='image'",
     "WECOM_MATERIAL_MAP_INCLUDE_SKIPPED='1'",
+    `WECOM_CLI_EXECUTABLE=${shellSingle(wecomCliExecutable)}`,
+    "# Optional: keep @wecom/cli auth/config isolated from other local tools.",
+    '# WECOM_CLI_CONFIG_DIR=$HOME/.config/wechat-on-cloud/wecom-cli',
+    '# WECOM_CLI_TMP_DIR=$HOME/.cache/wechat-on-cloud/wecom-cli',
     `WECOM_USE_RPA_PACKAGE=${shellSingle(policy.runnerEngine === 'rpa-package' ? '1' : '0')}`,
     'WECOM_RPA_PACKAGE_SAVE_DIR=$HOME/.config/wechat-on-cloud/rpa-packages',
     "WECOM_BRIDGE_CAPABILITIES='reply,mass,moment,prepare,material-map,target-match,handler-verification'",
@@ -320,6 +325,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     'cd "$workspace_dir"',
     'echo "Wrote $config_file"',
     'echo "Edit AUTOMATION_BRIDGE_TOKEN in $config_file, then run:"',
+    'echo "  npm install -g @wecom/cli"',
+    'echo "  wecom-cli init"',
     'echo "  scripts/wecom-bridge-runner.sh doctor"',
     'echo "  scripts/wecom-bridge-runner.sh run-once"',
     'echo "  scripts/install-wecom-bridge-launchagent.sh --dry-run --redact-secrets"',
@@ -340,6 +347,9 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     launchAgentPlistPath,
     launchAgentLogPath,
     launchAgentErrorLogPath,
+    wecomCliExecutable,
+    wecomCliInstallCommand: 'npm install -g @wecom/cli',
+    wecomCliInitCommand: `${wecomCliExecutable} init`,
     modes: ['dry-run', 'prepare', 'send'],
     targets: ['replies', 'mass', 'moments', 'all'],
     envFile,
@@ -351,6 +361,10 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       printConfig: 'scripts/wecom-bridge-runner.sh print-config',
       doctor: 'scripts/wecom-bridge-runner.sh doctor',
       doctorReport: 'WECOM_DOCTOR_REPORT=1 scripts/wecom-bridge-runner.sh doctor',
+      doctorWithoutCli: 'WECOM_DOCTOR_CLI=0 scripts/wecom-bridge-runner.sh doctor',
+      wecomCliInstall: 'npm install -g @wecom/cli',
+      wecomCliInit: `${wecomCliExecutable} init`,
+      wecomCliCheck: `${wecomCliExecutable} --version && ${wecomCliExecutable} auth show --auth-status`,
       dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       dryRunRpaPackageAll:
         'WECOM_USE_RPA_PACKAGE=1 WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
