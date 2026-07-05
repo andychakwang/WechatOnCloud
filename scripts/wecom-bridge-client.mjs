@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r36-recovery-preview';
+const CLIENT_VERSION = 'automation-lab-r37-worker-recovery';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -25,8 +25,8 @@ Commands:
   pull-replies [--limit 50]
   claim-reply <eventId> [--worker-id name] [--claim-ttl-seconds 300]
   release-reply <eventId> [--worker-id name] [--reason text]
-  mark-delivered <eventId>
-  mark-failed <eventId> [--error text]
+  mark-delivered <eventId> [--worker-id name]
+  mark-failed <eventId> [--worker-id name] [--error text]
   run-approved --handler "command" [--limit 10] [--claim] [--mark-delivered] [--report-failure] [--report-run]
   pull-mass-tasks [--limit 50]
   claim-mass-task <taskId> [--worker-id name] [--claim-ttl-seconds 300]

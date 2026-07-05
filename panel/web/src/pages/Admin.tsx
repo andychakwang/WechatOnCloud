@@ -361,6 +361,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [recoveryIncludeReplies, setRecoveryIncludeReplies] = useState(true);
   const [recoveryIncludeMass, setRecoveryIncludeMass] = useState(true);
   const [recoveryIncludeMoments, setRecoveryIncludeMoments] = useState(true);
+  const [recoveryWorkerId, setRecoveryWorkerId] = useState('');
   const [recoveryPreview, setRecoveryPreview] = useState<AutomationBridgeRecoveryResult | null>(null);
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
@@ -461,6 +462,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const knowledgeItems = cfg.knowledgeItems ?? [];
   const approvedKnowledgeCount = knowledgeItems.filter((item) => item.enabled && item.approved).length;
   const bridgeGuide = bridge?.runnerGuide;
+  const bridgeWorkerOptions = Array.from(new Map((bridge?.workers || []).map((worker) => [worker.workerId, worker])).values());
   const copyBridgeText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -511,6 +513,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     includeReplies: recoveryIncludeReplies,
     includeMass: recoveryIncludeMass,
     includeMoments: recoveryIncludeMoments,
+    workerId: recoveryWorkerId.trim() || undefined,
   });
 
   const previewBridgeRecovery = async () => {
@@ -534,9 +537,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       recoveryIncludeMass ? '群发' : '',
       recoveryIncludeMoments ? '朋友圈' : '',
     ].filter(Boolean);
+    const workerText = recoveryWorkerId.trim() || '全部 worker';
     const ok = await confirm({
       title: '恢复 Bridge 出箱？',
-      body: `范围：${scopes.join('、') || '未选择'}；领取：${releaseText}；失败项：${recoveryRetryFailed ? '重试' : '不处理'}。不会直接发送内容。`,
+      body: `范围：${scopes.join('、') || '未选择'}；Worker：${workerText}；领取：${releaseText}；失败项：${recoveryRetryFailed ? '重试' : '不处理'}。不会直接发送内容。`,
       confirmText: '恢复',
     });
     if (!ok) return;
@@ -1595,7 +1599,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       <b>Bridge 出箱恢复</b>
                       <div className="muted small">
                         {recoveryPreview
-                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${bridgeRecoveryCount(recoveryPreview).total} 项`
+                          ? `${recoveryPreview.dryRun ? '预览' : '已执行'} · ${recoveryPreview.workerId || '全部 worker'} · ${bridgeRecoveryCount(recoveryPreview).total} 项`
                           : '待预览'}
                       </div>
                     </div>
@@ -1608,13 +1612,24 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       </button>
                     </div>
                   </div>
-                  <div className="auto-grid three compact">
+                  <div className="auto-grid compact">
                     <label>
                       <span className="field-label">领取</span>
                       <select className="input" value={recoveryReleaseClaims} onChange={(e) => setRecoveryReleaseClaims(e.target.value as BridgeRecoveryReleaseMode)}>
                         <option value="expired">超时领取</option>
                         <option value="all">全部领取</option>
                         <option value="none">不释放</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span className="field-label">Worker</span>
+                      <select className="input" value={recoveryWorkerId} onChange={(e) => setRecoveryWorkerId(e.target.value)}>
+                        <option value="">全部 worker</option>
+                        {bridgeWorkerOptions.map((worker) => (
+                          <option value={worker.workerId} key={worker.workerId}>
+                            {worker.workerId}
+                          </option>
+                        ))}
                       </select>
                     </label>
                     <div className="auto-field">
@@ -1653,6 +1668,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             <div className="muted small">
                               {BRIDGE_RECOVERY_ACTION_LABEL[change.action] || change.action}
                               {change.reason ? ` · ${change.reason}` : ''}
+                              {change.workerId ? ` · ${change.workerId}` : ''}
                             </div>
                           </div>
                           <span className="tag tag-warn">{recoveryPreview.dryRun ? '预览' : '已处理'}</span>

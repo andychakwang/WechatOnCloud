@@ -145,6 +145,7 @@ export interface WecomBridgeEvent {
   replyClaimedBy?: string;
   replyClaimExpiresAt?: string;
   replyFailedAt?: string;
+  replyFailedBy?: string;
   replyError?: string;
   replyDeliveredAt?: string;
 }
@@ -222,6 +223,7 @@ export interface AutomationBridgeRecoveryChange {
   name?: string;
   action: 'release-claim' | 'retry-failed';
   reason?: string;
+  workerId?: string;
 }
 
 export interface AutomationBridgeRecoveryResult {
@@ -229,6 +231,7 @@ export interface AutomationBridgeRecoveryResult {
   dryRun: boolean;
   releaseClaims: BridgeRecoveryReleaseMode;
   retryFailed: boolean;
+  workerId?: string;
   replies: { releasedClaims: number; retriedFailed: number };
   mass: { releasedClaims: number; retriedFailed: number; resumedJobs: number };
   moments: { releasedClaims: number; retriedFailed: number };
@@ -419,6 +422,7 @@ export interface MassSendItem {
   bridgeClaimedAt?: string;
   bridgeClaimedBy?: string;
   bridgeClaimExpiresAt?: string;
+  bridgeFailedBy?: string;
 }
 
 export interface MassSendJobOptions {
@@ -475,6 +479,7 @@ export interface MomentDraft {
   bridgeClaimedBy?: string;
   bridgeClaimExpiresAt?: string;
   bridgeFailedAt?: string;
+  bridgeFailedBy?: string;
   bridgeError?: string;
 }
 
@@ -1419,6 +1424,7 @@ export function ingestWecomBridgeEvents(actor: User, raw: any): WecomBridgeEvent
           replyClaimedBy: existing.replyClaimedBy,
           replyClaimExpiresAt: existing.replyClaimExpiresAt,
           replyFailedAt: existing.replyFailedAt,
+          replyFailedBy: existing.replyFailedBy,
           replyError: existing.replyError,
           replyDeliveredAt: existing.replyDeliveredAt,
         };
@@ -1496,6 +1502,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     event.replyClaimedBy = workerId;
     event.replyClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
     event.replyFailedAt = undefined;
+    event.replyFailedBy = undefined;
     event.replyError = undefined;
   }
   if (raw?.markReleased === true || deliveryStatus === 'released') {
@@ -1504,11 +1511,16 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     event.replyClaimedBy = undefined;
     event.replyClaimExpiresAt = undefined;
     event.replyFailedAt = undefined;
+    event.replyFailedBy = undefined;
     event.replyError = undefined;
   }
   if (raw?.markFailed === true || deliveryStatus === 'failed') {
     if (!event.replyApproved) throw new Error('未批准的回复不能标记失败');
+    const failureWorkerId =
+      str(raw?.replyFailedBy ?? raw?.replyClaimedBy ?? raw?.workerId ?? raw?.clientId ?? event.replyClaimedBy ?? actor.username, 120).trim() ||
+      actor.username;
     event.replyFailedAt = now;
+    event.replyFailedBy = failureWorkerId;
     event.replyError = str(raw?.replyError ?? raw?.error ?? raw?.message ?? 'Mac 端执行失败', 1000).trim() || 'Mac 端执行失败';
     event.replyClaimedAt = undefined;
     event.replyClaimedBy = undefined;
@@ -1523,6 +1535,7 @@ export function patchWecomBridgeEvent(actor: User, eventId: string, raw: any): W
     }
     event.replyClaimExpiresAt = undefined;
     event.replyFailedAt = undefined;
+    event.replyFailedBy = undefined;
     event.replyError = undefined;
     event.replyDeliveredAt = now;
   }
@@ -1580,11 +1593,13 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
   const includeMass = payload.includeMass !== false;
   const includeMoments = payload.includeMoments !== false;
   const limit = clampInt(payload.limit, 1, 2000, 500);
+  const workerIdFilter = str(payload.workerId ?? payload.claimedBy ?? payload.worker ?? '', 120).trim();
   const result: AutomationBridgeRecoveryResult = {
     generatedAt: now,
     dryRun,
     releaseClaims,
     retryFailed,
+    workerId: workerIdFilter || undefined,
     replies: { releasedClaims: 0, retriedFailed: 0 },
     mass: { releasedClaims: 0, retriedFailed: 0, resumedJobs: 0 },
     moments: { releasedClaims: 0, retriedFailed: 0 },
@@ -1598,16 +1613,20 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     result.changes.push(change);
     return true;
   };
+  const workerMatches = (workerId?: string) => !workerIdFilter || workerId === workerIdFilter;
   const shouldReleaseReplyClaim = (event: WecomBridgeEvent) => {
     if (releaseClaims === 'none' || !event.replyClaimedAt) return false;
+    if (!workerMatches(event.replyClaimedBy)) return false;
     return releaseClaims === 'all' || isBridgeReplyClaimExpired(event, now);
   };
   const shouldReleaseMassClaim = (item: MassSendItem) => {
     if (releaseClaims === 'none' || !item.bridgeClaimedAt) return false;
+    if (!workerMatches(item.bridgeClaimedBy)) return false;
     return releaseClaims === 'all' || isMassItemBridgeClaimExpired(item, now);
   };
   const shouldReleaseMomentClaim = (draft: MomentDraft) => {
     if (releaseClaims === 'none' || !draft.bridgeClaimedAt) return false;
+    if (!workerMatches(draft.bridgeClaimedBy)) return false;
     return releaseClaims === 'all' || isMomentDraftBridgeClaimExpired(draft, now);
   };
   let changed = false;
@@ -1618,7 +1637,18 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
       if (event.status === 'archived' || !event.replyApproved || !hasRunnableBridgeReply(event) || event.replyDeliveredAt) continue;
       if (shouldReleaseReplyClaim(event)) {
         const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
-        if (!record({ target: 'reply', id: event.id, name: event.conversationName || event.senderName, action: 'release-claim', reason })) break;
+        if (
+          !record({
+            target: 'reply',
+            id: event.id,
+            name: event.conversationName || event.senderName,
+            action: 'release-claim',
+            reason,
+            workerId: event.replyClaimedBy,
+          })
+        ) {
+          break;
+        }
         result.replies.releasedClaims += 1;
         if (!dryRun) {
           event.replyClaimedAt = undefined;
@@ -1629,7 +1659,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         changed = true;
       }
       if (!canChange()) break;
-      if (retryFailed && event.replyFailedAt) {
+      if (retryFailed && event.replyFailedAt && workerMatches(event.replyFailedBy)) {
         if (
           !record({
             target: 'reply',
@@ -1637,6 +1667,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             name: event.conversationName || event.senderName,
             action: 'retry-failed',
             reason: 'failed_retry',
+            workerId: event.replyFailedBy,
           })
         ) {
           break;
@@ -1644,6 +1675,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         result.replies.retriedFailed += 1;
         if (!dryRun) {
           event.replyFailedAt = undefined;
+          event.replyFailedBy = undefined;
           event.replyError = undefined;
           event.replyClaimedAt = undefined;
           event.replyClaimedBy = undefined;
@@ -1664,20 +1696,43 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         if (!canChange()) break;
         if (item.status === 'pending' && shouldReleaseMassClaim(item)) {
           const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
-          if (!record({ target: 'mass', id: `${job.id}:${item.id}`, name: item.recipientName, action: 'release-claim', reason })) break;
+          if (
+            !record({
+              target: 'mass',
+              id: `${job.id}:${item.id}`,
+              name: item.recipientName,
+              action: 'release-claim',
+              reason,
+              workerId: item.bridgeClaimedBy,
+            })
+          ) {
+            break;
+          }
           result.mass.releasedClaims += 1;
           if (!dryRun) {
             item.bridgeClaimedAt = undefined;
             item.bridgeClaimedBy = undefined;
             item.bridgeClaimExpiresAt = undefined;
+            item.bridgeFailedBy = undefined;
             item.error = undefined;
           }
           jobChanged = true;
           changed = true;
         }
         if (!canChange()) break;
-        if (retryFailed && item.status === 'failed') {
-          if (!record({ target: 'mass', id: `${job.id}:${item.id}`, name: item.recipientName, action: 'retry-failed', reason: 'failed_retry' })) break;
+        if (retryFailed && item.status === 'failed' && workerMatches(item.bridgeFailedBy)) {
+          if (
+            !record({
+              target: 'mass',
+              id: `${job.id}:${item.id}`,
+              name: item.recipientName,
+              action: 'retry-failed',
+              reason: 'failed_retry',
+              workerId: item.bridgeFailedBy,
+            })
+          ) {
+            break;
+          }
           result.mass.retriedFailed += 1;
           if (!resumedJobIds.has(job.id) && job.status === 'paused') {
             resumedJobIds.add(job.id);
@@ -1691,6 +1746,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
             item.bridgeClaimedAt = undefined;
             item.bridgeClaimedBy = undefined;
             item.bridgeClaimExpiresAt = undefined;
+            item.bridgeFailedBy = undefined;
             if (job.status === 'paused') job.status = 'queued';
           }
           jobChanged = true;
@@ -1710,7 +1766,18 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
       if (draft.status === 'published' || draft.status === 'archived') continue;
       if (shouldReleaseMomentClaim(draft)) {
         const reason = releaseClaims === 'all' ? 'force_release' : 'claim_expired';
-        if (!record({ target: 'moment', id: draft.id, name: draft.title, action: 'release-claim', reason })) break;
+        if (
+          !record({
+            target: 'moment',
+            id: draft.id,
+            name: draft.title,
+            action: 'release-claim',
+            reason,
+            workerId: draft.bridgeClaimedBy,
+          })
+        ) {
+          break;
+        }
         result.moments.releasedClaims += 1;
         if (!dryRun) {
           clearMomentBridgeClaim(draft);
@@ -1719,13 +1786,25 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
         changed = true;
       }
       if (!canChange()) break;
-      if (retryFailed && draft.bridgeFailedAt) {
-        if (!record({ target: 'moment', id: draft.id, name: draft.title, action: 'retry-failed', reason: 'failed_retry' })) break;
+      if (retryFailed && draft.bridgeFailedAt && workerMatches(draft.bridgeFailedBy)) {
+        if (
+          !record({
+            target: 'moment',
+            id: draft.id,
+            name: draft.title,
+            action: 'retry-failed',
+            reason: 'failed_retry',
+            workerId: draft.bridgeFailedBy,
+          })
+        ) {
+          break;
+        }
         result.moments.retriedFailed += 1;
         if (!dryRun) {
           draft.status = 'ready';
           draft.approved = true;
           draft.bridgeFailedAt = undefined;
+          draft.bridgeFailedBy = undefined;
           draft.bridgeError = undefined;
           clearMomentBridgeClaim(draft);
           draft.updatedAt = now;
@@ -1741,7 +1820,7 @@ export function recoverAutomationBridgeOutbox(actor: User, raw: any): Automation
     addAutomationAudit({
       action: 'bridge_outbox_recovered',
       actor: actor.username,
-      message: `恢复 Bridge 出箱：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims} 个领取，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed} 个失败项`,
+      message: `恢复 Bridge 出箱${workerIdFilter ? `（worker=${workerIdFilter}）` : ''}：释放 ${result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims} 个领取，重试 ${result.replies.retriedFailed + result.mass.retriedFailed + result.moments.retriedFailed} 个失败项`,
     });
   }
   return result;
@@ -2267,6 +2346,7 @@ export function patchMassSendItem(actor: User, jobId: string, itemId: string, ra
   item.bridgeClaimedAt = undefined;
   item.bridgeClaimedBy = undefined;
   item.bridgeClaimExpiresAt = undefined;
+  item.bridgeFailedBy = undefined;
   job.updatedAt = new Date().toISOString();
   refreshMassJobCompletion(job);
   persist();
@@ -2341,6 +2421,7 @@ export function patchWecomBridgeMassTaskDelivery(
     item.bridgeClaimedBy = workerId;
     item.bridgeClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
     item.error = undefined;
+    item.bridgeFailedBy = undefined;
     job.status = job.status === 'queued' ? 'running' : job.status;
     job.updatedAt = now;
     persist();
@@ -2352,7 +2433,10 @@ export function patchWecomBridgeMassTaskDelivery(
     item.bridgeClaimedAt = undefined;
     item.bridgeClaimedBy = undefined;
     item.bridgeClaimExpiresAt = undefined;
-    if (item.status === 'pending') item.error = undefined;
+    if (item.status === 'pending') {
+      item.error = undefined;
+      item.bridgeFailedBy = undefined;
+    }
     job.updatedAt = now;
     persist();
     return { task: item.status === 'pending' ? massTaskFrom(job, item) : undefined, job: cloneMassSendJob(job), item: { ...item } };
@@ -2366,6 +2450,7 @@ export function patchWecomBridgeMassTaskDelivery(
     item.bridgeClaimedAt = undefined;
     item.bridgeClaimedBy = undefined;
     item.bridgeClaimExpiresAt = undefined;
+    item.bridgeFailedBy = workerId;
     job.status = 'paused';
     job.updatedAt = now;
     const event = addAutomationAudit({
@@ -2388,6 +2473,7 @@ export function patchWecomBridgeMassTaskDelivery(
     item.bridgeClaimedAt = undefined;
     item.bridgeClaimedBy = undefined;
     item.bridgeClaimExpiresAt = undefined;
+    item.bridgeFailedBy = undefined;
     job.status = 'running';
     job.updatedAt = now;
     const event = addAutomationAudit({
@@ -2537,6 +2623,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     draft.bridgeClaimedBy = workerId;
     draft.bridgeClaimExpiresAt = claimExpiresAt(now, raw?.claimTtlSeconds ?? raw?.ttlSeconds);
     draft.bridgeFailedAt = undefined;
+    draft.bridgeFailedBy = undefined;
     draft.bridgeError = undefined;
     draft.updatedAt = now;
     persist();
@@ -2557,6 +2644,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     draft.status = 'draft';
     draft.approved = false;
     draft.bridgeFailedAt = now;
+    draft.bridgeFailedBy = workerId;
     draft.bridgeError = msg;
     clearMomentBridgeClaim(draft);
     draft.updatedAt = now;
@@ -2579,6 +2667,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     draft.status = 'prepared';
     draft.lastPreparedAt = now;
     draft.bridgeFailedAt = undefined;
+    draft.bridgeFailedBy = undefined;
     draft.bridgeError = undefined;
     clearMomentBridgeClaim(draft);
     draft.updatedAt = now;
@@ -2598,6 +2687,7 @@ export function patchWecomBridgeMomentTaskDelivery(
     draft.status = 'published';
     draft.publishedAt = now;
     draft.bridgeFailedAt = undefined;
+    draft.bridgeFailedBy = undefined;
     draft.bridgeError = undefined;
     clearMomentBridgeClaim(draft);
     draft.updatedAt = now;
@@ -2901,6 +2991,7 @@ export async function sendNextMassSendItem(
     pending.bridgeClaimedAt = undefined;
     pending.bridgeClaimedBy = undefined;
     pending.bridgeClaimExpiresAt = undefined;
+    pending.bridgeFailedBy = undefined;
     const event = addAutomationAudit({
       action: 'mass_item_failed',
       actor: actor.username,
@@ -2923,6 +3014,7 @@ export async function sendNextMassSendItem(
   pending.bridgeClaimedAt = undefined;
   pending.bridgeClaimedBy = undefined;
   pending.bridgeClaimExpiresAt = undefined;
+  pending.bridgeFailedBy = undefined;
   const event = addAutomationAudit({
     action: 'mass_item_sent',
     actor: actor.username,
@@ -2983,6 +3075,7 @@ export async function prepareMomentDraft(
   draft.status = 'prepared';
   draft.lastPreparedAt = now;
   draft.bridgeFailedAt = undefined;
+  draft.bridgeFailedBy = undefined;
   draft.bridgeError = undefined;
   clearMomentBridgeClaim(draft);
   draft.updatedAt = now;
@@ -3330,6 +3423,7 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
     replyClaimedBy: str(raw?.replyClaimedBy, 120).trim() || undefined,
     replyClaimExpiresAt: typeof raw?.replyClaimExpiresAt === 'string' && raw.replyClaimExpiresAt ? raw.replyClaimExpiresAt : undefined,
     replyFailedAt: typeof raw?.replyFailedAt === 'string' && raw.replyFailedAt ? raw.replyFailedAt : undefined,
+    replyFailedBy: str(raw?.replyFailedBy, 120).trim() || undefined,
     replyError: str(raw?.replyError, 1000).trim() || undefined,
     replyDeliveredAt: typeof raw?.replyDeliveredAt === 'string' && raw.replyDeliveredAt ? raw.replyDeliveredAt : undefined,
   };
@@ -3491,6 +3585,7 @@ function normalizeMassSendItem(raw: any, preserveIds: boolean, now: string): Mas
     bridgeClaimedAt: typeof raw?.bridgeClaimedAt === 'string' && raw.bridgeClaimedAt ? raw.bridgeClaimedAt : undefined,
     bridgeClaimedBy: str(raw?.bridgeClaimedBy, 120).trim() || undefined,
     bridgeClaimExpiresAt: typeof raw?.bridgeClaimExpiresAt === 'string' && raw.bridgeClaimExpiresAt ? raw.bridgeClaimExpiresAt : undefined,
+    bridgeFailedBy: str(raw?.bridgeFailedBy, 120).trim() || undefined,
   };
 }
 
@@ -3525,6 +3620,7 @@ function normalizeMomentDraft(raw: any, preserveIds: boolean, now: string): Mome
     bridgeClaimedBy: str(raw?.bridgeClaimedBy, 120).trim() || undefined,
     bridgeClaimExpiresAt: typeof raw?.bridgeClaimExpiresAt === 'string' && raw.bridgeClaimExpiresAt ? raw.bridgeClaimExpiresAt : undefined,
     bridgeFailedAt: typeof raw?.bridgeFailedAt === 'string' && raw.bridgeFailedAt ? raw.bridgeFailedAt : undefined,
+    bridgeFailedBy: str(raw?.bridgeFailedBy, 120).trim() || undefined,
     bridgeError: str(raw?.bridgeError, 300).trim() || undefined,
   };
 }
@@ -3628,6 +3724,7 @@ function resetBridgeReplyDeliveryState(event: WecomBridgeEvent) {
   event.replyClaimedBy = undefined;
   event.replyClaimExpiresAt = undefined;
   event.replyFailedAt = undefined;
+  event.replyFailedBy = undefined;
   event.replyError = undefined;
   event.replyDeliveredAt = undefined;
 }
@@ -4082,6 +4179,7 @@ function clearMomentBridgeClaim(draft: MomentDraft) {
 function clearMomentBridgeState(draft: MomentDraft) {
   clearMomentBridgeClaim(draft);
   draft.bridgeFailedAt = undefined;
+  draft.bridgeFailedBy = undefined;
   draft.bridgeError = undefined;
 }
 
@@ -4233,6 +4331,7 @@ function prepareBundleMassJob(raw: any, keepOperationalState: boolean): any {
         bridgeClaimedAt: undefined,
         bridgeClaimedBy: undefined,
         bridgeClaimExpiresAt: undefined,
+        bridgeFailedBy: undefined,
       }))
     : raw?.items;
   return {
@@ -4255,6 +4354,7 @@ function prepareBundleMomentDraft(raw: any, keepOperationalState: boolean): any 
     bridgeClaimedBy: undefined,
     bridgeClaimExpiresAt: undefined,
     bridgeFailedAt: undefined,
+    bridgeFailedBy: undefined,
     bridgeError: undefined,
   };
 }
