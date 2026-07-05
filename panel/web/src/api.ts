@@ -229,6 +229,70 @@ export interface AutomationConfig {
   knowledgeItems: AutomationKnowledgeItem[];
 }
 
+export interface AutomationOverview {
+  generatedAt: string;
+  settings: AutomationSettings;
+  knowledge: {
+    total: number;
+    approved: number;
+    enabled: number;
+  };
+  rules: {
+    total: number;
+    enabled: number;
+    approved: number;
+  };
+  bridge: {
+    workersTotal: number;
+    workersOnline: number;
+    lastWorkerSeenAt?: string;
+    events: {
+      active: number;
+      new: number;
+      planned: number;
+      approvedPending: number;
+      claimed: number;
+      failed: number;
+      delivered: number;
+    };
+    pendingReplies: number;
+    pendingMassTasks: number;
+    pendingMomentTasks: number;
+  };
+  mass: {
+    jobsTotal: number;
+    draft: number;
+    queued: number;
+    running: number;
+    paused: number;
+    completed: number;
+    cancelled: number;
+    approvedRunnableJobs: number;
+    itemsPending: number;
+    itemsSent: number;
+    itemsFailed: number;
+    itemsSkipped: number;
+    bridgeClaimedItems: number;
+  };
+  moments: {
+    draftsTotal: number;
+    draft: number;
+    ready: number;
+    prepared: number;
+    published: number;
+    archived: number;
+    approvedReady: number;
+    bridgeClaimedDrafts: number;
+    bridgeFailedDrafts: number;
+  };
+  audit: {
+    total: number;
+    lastAt?: string;
+    lastAction?: string;
+  };
+  riskFlags: string[];
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -363,6 +427,7 @@ export const api = {
 
   // 自动化实验版（规则、AI 草稿、确认发送）
   getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
+  getAutomationOverview: () => req<{ overview: AutomationOverview }>('/api/admin/automation/overview'),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
   getAutomationBridge: () => req<{ bridge: AutomationBridgeStatus }>('/api/admin/automation/bridge'),

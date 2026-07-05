@@ -124,6 +124,70 @@ export interface AutomationConfig {
   knowledgeItems: AutomationKnowledgeItem[];
 }
 
+export interface AutomationOverview {
+  generatedAt: string;
+  settings: AutomationSettings;
+  knowledge: {
+    total: number;
+    approved: number;
+    enabled: number;
+  };
+  rules: {
+    total: number;
+    enabled: number;
+    approved: number;
+  };
+  bridge: {
+    workersTotal: number;
+    workersOnline: number;
+    lastWorkerSeenAt?: string;
+    events: {
+      active: number;
+      new: number;
+      planned: number;
+      approvedPending: number;
+      claimed: number;
+      failed: number;
+      delivered: number;
+    };
+    pendingReplies: number;
+    pendingMassTasks: number;
+    pendingMomentTasks: number;
+  };
+  mass: {
+    jobsTotal: number;
+    draft: number;
+    queued: number;
+    running: number;
+    paused: number;
+    completed: number;
+    cancelled: number;
+    approvedRunnableJobs: number;
+    itemsPending: number;
+    itemsSent: number;
+    itemsFailed: number;
+    itemsSkipped: number;
+    bridgeClaimedItems: number;
+  };
+  moments: {
+    draftsTotal: number;
+    draft: number;
+    ready: number;
+    prepared: number;
+    published: number;
+    archived: number;
+    approvedReady: number;
+    bridgeClaimedDrafts: number;
+    bridgeFailedDrafts: number;
+  };
+  audit: {
+    total: number;
+    lastAt?: string;
+    lastAction?: string;
+  };
+  riskFlags: string[];
+}
+
 export type RiskLevel = 'normal' | 'review' | 'block';
 
 export interface RiskAssessment {
@@ -308,6 +372,115 @@ export function getAutomationConfig(): AutomationConfig {
     knowledgeNotes: data.knowledgeNotes,
     rules: data.rules.map(cloneRule),
     knowledgeItems: data.knowledgeItems.map(cloneKnowledgeItem),
+  };
+}
+
+export function getAutomationOverview(): AutomationOverview {
+  const nowIso = new Date().toISOString();
+  const workers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
+  const activeBridgeEvents = data.bridgeEvents.filter((event) => event.status !== 'archived');
+  const massItems = data.massSendJobs.flatMap((job) => job.items);
+  const lastAudit = data.auditEvents[data.auditEvents.length - 1];
+  const pendingReplies = activeBridgeEvents.filter(
+    (event) =>
+      event.replyApproved &&
+      !!event.replyDraft?.trim() &&
+      (!event.replyClaimedAt || isBridgeReplyClaimExpired(event, nowIso)) &&
+      !event.replyDeliveredAt,
+  ).length;
+  const claimedReplies = activeBridgeEvents.filter(
+    (event) => event.replyApproved && !!event.replyClaimedAt && !isBridgeReplyClaimExpired(event, nowIso) && !event.replyDeliveredAt,
+  ).length;
+  const pendingMassTasks = data.massSendJobs.reduce((sum, job) => {
+    if (!isMassJobBridgeRunnable(job)) return sum;
+    return (
+      sum +
+      job.items.filter((item) => item.status === 'pending' && (!item.bridgeClaimedAt || isMassItemBridgeClaimExpired(item, nowIso))).length
+    );
+  }, 0);
+  const claimedMassTasks = data.massSendJobs.reduce(
+    (sum, job) => sum + job.items.filter((item) => item.status === 'pending' && !!item.bridgeClaimedAt && !isMassItemBridgeClaimExpired(item, nowIso)).length,
+    0,
+  );
+  const pendingMomentTasks = data.momentDrafts.filter(
+    (draft) => isMomentDraftBridgeRunnable(draft) && (!draft.bridgeClaimedAt || isMomentDraftBridgeClaimExpired(draft, nowIso)),
+  ).length;
+  const claimedMomentTasks = data.momentDrafts.filter(
+    (draft) => draft.status === 'ready' && !!draft.bridgeClaimedAt && !isMomentDraftBridgeClaimExpired(draft, nowIso),
+  ).length;
+  const lastWorkerSeenAt = data.bridgeWorkers
+    .map((worker) => worker.lastSeenAt || worker.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+  const riskFlags: string[] = [];
+  if (!data.settings.enabled) riskFlags.push('automation_off');
+  if (data.settings.enabled && data.bridgeWorkers.length > 0 && workers.every((worker) => !worker.online)) riskFlags.push('bridge_workers_offline');
+  if (pendingReplies + pendingMassTasks + pendingMomentTasks > 0 && workers.every((worker) => !worker.online)) riskFlags.push('pending_without_worker');
+  if (massItems.some((item) => item.status === 'failed')) riskFlags.push('mass_failures');
+  if (data.momentDrafts.some((draft) => !!draft.bridgeFailedAt)) riskFlags.push('moment_failures');
+
+  return {
+    generatedAt: nowIso,
+    settings: { ...data.settings },
+    knowledge: {
+      total: data.knowledgeItems.length,
+      approved: data.knowledgeItems.filter((item) => item.approved).length,
+      enabled: data.knowledgeItems.filter((item) => item.enabled).length,
+    },
+    rules: {
+      total: data.rules.length,
+      enabled: data.rules.filter((rule) => rule.enabled).length,
+      approved: data.rules.filter((rule) => rule.approved).length,
+    },
+    bridge: {
+      workersTotal: workers.length,
+      workersOnline: workers.filter((worker) => worker.online).length,
+      lastWorkerSeenAt,
+      events: {
+        active: activeBridgeEvents.length,
+        new: activeBridgeEvents.filter((event) => event.status === 'new').length,
+        planned: activeBridgeEvents.filter((event) => event.status === 'planned').length,
+        approvedPending: pendingReplies,
+        claimed: claimedReplies,
+        failed: activeBridgeEvents.filter((event) => !!event.replyFailedAt).length,
+        delivered: activeBridgeEvents.filter((event) => !!event.replyDeliveredAt).length,
+      },
+      pendingReplies,
+      pendingMassTasks,
+      pendingMomentTasks,
+    },
+    mass: {
+      jobsTotal: data.massSendJobs.length,
+      draft: data.massSendJobs.filter((job) => job.status === 'draft').length,
+      queued: data.massSendJobs.filter((job) => job.status === 'queued').length,
+      running: data.massSendJobs.filter((job) => job.status === 'running').length,
+      paused: data.massSendJobs.filter((job) => job.status === 'paused').length,
+      completed: data.massSendJobs.filter((job) => job.status === 'completed').length,
+      cancelled: data.massSendJobs.filter((job) => job.status === 'cancelled').length,
+      approvedRunnableJobs: data.massSendJobs.filter(isMassJobBridgeRunnable).length,
+      itemsPending: massItems.filter((item) => item.status === 'pending').length,
+      itemsSent: massItems.filter((item) => item.status === 'sent').length,
+      itemsFailed: massItems.filter((item) => item.status === 'failed').length,
+      itemsSkipped: massItems.filter((item) => item.status === 'skipped').length,
+      bridgeClaimedItems: claimedMassTasks,
+    },
+    moments: {
+      draftsTotal: data.momentDrafts.length,
+      draft: data.momentDrafts.filter((draft) => draft.status === 'draft').length,
+      ready: data.momentDrafts.filter((draft) => draft.status === 'ready').length,
+      prepared: data.momentDrafts.filter((draft) => draft.status === 'prepared').length,
+      published: data.momentDrafts.filter((draft) => draft.status === 'published').length,
+      archived: data.momentDrafts.filter((draft) => draft.status === 'archived').length,
+      approvedReady: data.momentDrafts.filter(isMomentDraftBridgeRunnable).length,
+      bridgeClaimedDrafts: claimedMomentTasks,
+      bridgeFailedDrafts: data.momentDrafts.filter((draft) => !!draft.bridgeFailedAt).length,
+    },
+    audit: {
+      total: data.auditEvents.length,
+      lastAt: lastAudit?.timestamp,
+      lastAction: lastAudit?.action,
+    },
+    riskFlags,
   };
 }
 

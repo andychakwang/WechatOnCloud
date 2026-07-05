@@ -82,6 +82,7 @@ import { appendInstanceLog, readInstanceLog, appendPanelLog, readPanelLog, prune
 import {
   initAutomationStore,
   getAutomationConfig,
+  getAutomationOverview,
   updateAutomationConfig,
   ingestWecomBridgeEvents,
   importAutomationKnowledge,
@@ -365,6 +366,11 @@ app.post('/api/admin/version/check', async (req, reply) => {
 app.get('/api/admin/automation/config', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { config: getAutomationConfig() };
+});
+
+app.get('/api/admin/automation/overview', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { overview: getAutomationOverview() };
 });
 
 app.put('/api/admin/automation/config', async (req, reply) => {

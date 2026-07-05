@@ -237,6 +237,12 @@ request_json GET /api/version
 json_assert_path current
 request_json GET /api/admin/automation/config
 json_assert_path config.settings
+request_json GET /api/admin/automation/overview
+json_assert_path overview.generatedAt
+json_assert_path overview.settings
+json_assert_path overview.bridge.pendingReplies
+json_assert_path overview.mass.itemsPending
+json_assert_path overview.moments.draftsTotal
 request_json GET /api/admin/automation/bridge
 json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.commands.writeEnv

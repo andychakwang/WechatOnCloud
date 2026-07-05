@@ -1160,6 +1160,47 @@ button {
   gap: 8px;
   padding-bottom: 2px;
 }
+.auto-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.auto-overview-card {
+  min-width: 0;
+  padding: 10px;
+  border-radius: var(--r-small);
+  background: rgba(255 255 255 / 0.58);
+  box-shadow: inset 0 1px 0 rgba(var(--shadow) / 0.08), var(--crease-press);
+}
+.auto-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.auto-overview-head b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.auto-overview-metric {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 720;
+  line-height: 1;
+  color: var(--text);
+}
+.auto-overview-risk {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-height: 28px;
+}
 .auto-self-test {
   margin-top: 10px;
   padding: 10px;

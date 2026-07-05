@@ -9,6 +9,7 @@ import {
   type AutomationConfig,
   type AutomationKnowledgeCategory,
   type AutomationKnowledgeItem,
+  type AutomationOverview,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type MassSendJob,
@@ -148,6 +149,14 @@ const KNOWLEDGE_CATEGORY_LABEL: Record<AutomationKnowledgeCategory, string> = {
   other: '其他',
 };
 
+const AUTOMATION_RISK_LABEL: Record<string, string> = {
+  automation_off: '总开关关闭',
+  bridge_workers_offline: 'Mac 离线',
+  pending_without_worker: '有待办无在线 Mac',
+  mass_failures: '群发失败',
+  moment_failures: '朋友圈失败',
+};
+
 function linesOf(text: string): string[] {
   return Array.from(new Set(text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
 }
@@ -186,6 +195,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [jobs, setJobs] = useState<MassSendJob[]>([]);
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
+  const [overview, setOverview] = useState<AutomationOverview | null>(null);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
@@ -230,8 +240,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const loadAutomation = async () => {
     setErr('');
     try {
-      const [{ config }, { jobs }, { drafts }, { events }, { events: bridgeEvents }] = await Promise.all([
+      const [{ config }, { overview }, { jobs }, { drafts }, { events }, { events: bridgeEvents }] = await Promise.all([
         api.getAutomationConfig(),
+        api.getAutomationOverview(),
         api.listMassSendJobs(),
         api.listMomentDrafts(),
         api.automationAudit(30),
@@ -239,6 +250,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       ]);
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
+      setOverview(overview);
       setJobs(jobs);
       setDrafts(drafts);
       setAudit(events);
@@ -777,6 +789,71 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             </button>
           </div>
         </div>
+        {overview && (
+          <div className="auto-overview-grid">
+            <div className="auto-overview-card">
+              <div className="auto-overview-head">
+                <b>自动化</b>
+                <span className={'tag ' + (overview.settings.enabled ? 'tag-on' : 'tag-off')}>{overview.settings.enabled ? '已开启' : '已关闭'}</span>
+              </div>
+              <div className="auto-overview-metric">{overview.knowledge.approved}/{overview.knowledge.total}</div>
+              <div className="muted small">已审核资料 · 规则 {overview.rules.approved}/{overview.rules.total}</div>
+            </div>
+            <div className="auto-overview-card">
+              <div className="auto-overview-head">
+                <b>AI 回复</b>
+                <span className="tag">{overview.bridge.events.active} 条</span>
+              </div>
+              <div className="auto-overview-metric">{overview.bridge.pendingReplies}</div>
+              <div className="muted small">
+                待 Mac 拉取 · 新消息 {overview.bridge.events.new} · 已领取 {overview.bridge.events.claimed}
+              </div>
+            </div>
+            <div className="auto-overview-card">
+              <div className="auto-overview-head">
+                <b>群发队列</b>
+                <span className="tag">{overview.mass.approvedRunnableJobs} 队列</span>
+              </div>
+              <div className="auto-overview-metric">{overview.mass.itemsPending}</div>
+              <div className="muted small">
+                待发送目标 · 已发 {overview.mass.itemsSent} · 失败 {overview.mass.itemsFailed}
+              </div>
+            </div>
+            <div className="auto-overview-card">
+              <div className="auto-overview-head">
+                <b>朋友圈</b>
+                <span className="tag">{overview.moments.draftsTotal} 草稿</span>
+              </div>
+              <div className="auto-overview-metric">{overview.bridge.pendingMomentTasks}</div>
+              <div className="muted small">
+                待准备 · 已准备 {overview.moments.prepared} · 已发布 {overview.moments.published}
+              </div>
+            </div>
+            <div className="auto-overview-card">
+              <div className="auto-overview-head">
+                <b>Mac Bridge</b>
+                <span className={'tag ' + (overview.bridge.workersOnline ? 'tag-on' : 'tag-off')}>
+                  {overview.bridge.workersOnline}/{overview.bridge.workersTotal}
+                </span>
+              </div>
+              <div className="auto-overview-metric">
+                {overview.bridge.pendingReplies + overview.bridge.pendingMassTasks + overview.bridge.pendingMomentTasks}
+              </div>
+              <div className="muted small">
+                出箱待办 · {overview.bridge.lastWorkerSeenAt ? `最近心跳 ${fmtStaleSeconds((Date.now() - Date.parse(overview.bridge.lastWorkerSeenAt)) / 1000)}` : '暂无心跳'}
+              </div>
+            </div>
+            {overview.riskFlags.length > 0 && (
+              <div className="auto-overview-risk">
+                {overview.riskFlags.map((flag) => (
+                  <span key={flag} className="chip chip-static chip-bad">
+                    {AUTOMATION_RISK_LABEL[flag] || flag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {selfTest && (
           <div className={'auto-self-test ' + (selfTest.ok ? 'ok' : 'bad')}>
             <b>{selfTest.ok ? '自检通过' : '自检未通过'}</b>
