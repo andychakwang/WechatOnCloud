@@ -13,6 +13,29 @@
 - 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r80-2026-07-06`
 - 本版新增：Web「Mac Runner 接入」补齐 LaunchAgent 定时运行闭环，支持复制脱敏 dry-run、实际安装、状态查看、日志跟踪和停用命令；安装脚本会读取 bootstrap 写入的本机 env 文件，不需要把 Bridge token 再放到命令行里。
 
+## 2026-07-06 R80 更新验收
+
+- GitHub Actions release run `28758586946` 已成功构建并推送 panel / wechat 双镜像。
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板已通过飞牛 Docker socket helper 更新，公网入口返回 `200`。
+- 飞牛 Docker 容器详情已验证 `woc-panel-automation-test` 使用镜像：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r80-2026-07-06
+  ```
+
+- 一次性 helper 容器 `woc-updater-...` 已在更新完成后删除。
+- 本版新增 Mac Runner LaunchAgent 控制命令，Web 面板可复制脱敏 dry-run、安装、状态、日志和停用命令；安装脚本会读取 bootstrap 写入的本机 env 文件。
+- 本次公网入口检查：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  http://nasbot.cloud:36081/api/auth/me -> 401 {"error":"未登录"}
+  ```
+
+  其中 `/api/auth/me` 返回 401 属于未登录预期响应，说明后端 API 正常响应。
+
 ## 2026-07-06 R79 更新验收
 
 - GitHub Actions release run `28757986372` 已成功构建并推送 panel / wechat 双镜像。
