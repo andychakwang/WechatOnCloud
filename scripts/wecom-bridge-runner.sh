@@ -461,6 +461,23 @@ if [[ -n "${WECOM_MATERIAL_MAP_FILE:-}" && "${WECOM_SYNC_MATERIAL_MAP:-1}" != "0
   fi
 fi
 
+if [[ -z "${WECOM_BRIDGE_CAPABILITIES:-}" ]]; then
+  WECOM_BRIDGE_CAPABILITIES="reply,mass,moment,prepare,material-map"
+  if [[ "$MODE" == "send" && "${WECOM_ALLOW_SEND:-}" == "1" ]]; then
+    WECOM_BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES},send"
+  fi
+  if [[ "${WECOM_VERIFY_TARGET:-1}" != "0" || "${WECOM_REQUIRE_TARGET_MATCH:-}" == "1" ]]; then
+    WECOM_BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES},target-match"
+  fi
+  if [[ "${WECOM_REQUIRE_HANDLER_VERIFICATION:-}" == "1" ]]; then
+    WECOM_BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES},handler-verification"
+  fi
+  if [[ "${WECOM_VISUAL_VERIFICATION:-}" == "1" || "${WECOM_OCR_VERIFICATION:-}" == "1" ]]; then
+    WECOM_BRIDGE_CAPABILITIES="${WECOM_BRIDGE_CAPABILITIES},visual-verification"
+  fi
+  export WECOM_BRIDGE_CAPABILITIES
+fi
+
 node "$CLIENT" heartbeat --mode "$MODE" >/dev/null
 
 run_all() {

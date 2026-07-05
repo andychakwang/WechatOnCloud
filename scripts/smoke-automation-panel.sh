@@ -247,6 +247,29 @@ json_assert_eq() {
   fi
 }
 
+json_assert_array_contains() {
+  local path="$1"
+  local expected="$2"
+  python3 - "$body_file" "$path" "$expected" <<'PY'
+import json
+import sys
+
+file, path, expected = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(file, "r", encoding="utf-8") as fh:
+    value = json.load(fh)
+for part in path.split("."):
+    if part.endswith("]"):
+        name, idx = part[:-1].split("[", 1)
+        if name:
+            value = value[name]
+        value = value[int(idx)]
+    else:
+        value = value[part]
+if not isinstance(value, list) or expected not in value:
+    raise SystemExit(f"expected {path} to contain {expected!r}, got {value!r}")
+PY
+}
+
 say "Smoke target: $PANEL_URL"
 
 say "Login"
@@ -272,6 +295,8 @@ json_assert_path overview.audience.total
 json_assert_path overview.materials.total
 json_assert_path overview.bridge.pendingReplies
 json_assert_path overview.bridge.runnerPolicy.mode
+json_assert_path overview.bridge.capabilities.reply
+json_assert_path overview.bridge.capabilities.unknown
 json_assert_path overview.mass.itemsPending
 json_assert_path overview.moments.draftsTotal
 request_json GET /api/admin/automation/preflight
@@ -297,6 +322,11 @@ if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]
 fi
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MATERIAL_MAP_FILE="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing WECOM_MATERIAL_MAP_FILE" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_BRIDGE_CAPABILITIES="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_BRIDGE_CAPABILITIES" >&2
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
@@ -777,6 +807,10 @@ PY
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" heartbeat --worker-id smoke-worker --mode dry-run > "$body_file"
   json_assert_eq worker.workerId smoke-worker
   json_assert_path worker.lastSeenAt
+  json_assert_array_contains worker.capabilities reply
+  json_assert_array_contains worker.capabilities mass
+  json_assert_array_contains worker.capabilities moment
+  json_assert_array_contains worker.capabilities target-match
   json_assert_path pendingReplies
 
   say "Update and fetch WeCom Bridge runner policy"

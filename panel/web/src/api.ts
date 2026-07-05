@@ -198,6 +198,17 @@ export interface AutomationMaterialImportResult {
   errors: string[];
 }
 
+export type WecomBridgeWorkerCapability =
+  | 'reply'
+  | 'mass'
+  | 'moment'
+  | 'prepare'
+  | 'send'
+  | 'target-match'
+  | 'handler-verification'
+  | 'visual-verification'
+  | 'material-map';
+
 export interface WecomBridgeWorkerStatus {
   id: string;
   workerId: string;
@@ -207,6 +218,7 @@ export interface WecomBridgeWorkerStatus {
   pid?: number;
   version?: string;
   note?: string;
+  capabilities: WecomBridgeWorkerCapability[];
   pendingReplies: number;
   pendingMassTasks: number;
   pendingMomentTasks: number;
@@ -464,6 +476,7 @@ export interface AutomationOverview {
     pendingReplies: number;
     pendingMassTasks: number;
     pendingMomentTasks: number;
+    capabilities: Record<WecomBridgeWorkerCapability | 'unknown', number>;
     runs: {
       total: number;
       recentFailures: number;

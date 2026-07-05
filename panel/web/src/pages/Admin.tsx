@@ -33,6 +33,7 @@ import {
   type WecomBridgeEvent,
   type WecomBridgeMomentPasteMode,
   type WecomBridgeRunReport,
+  type WecomBridgeWorkerCapability,
   type WecomBridgeRunnerMode,
   type WecomBridgeRunnerPolicy,
   type WecomBridgeRunnerTarget,
@@ -227,6 +228,18 @@ const BRIDGE_RUNNER_TARGET_LABEL: Record<WecomBridgeRunnerTarget, string> = {
   all: '全队列',
 };
 
+const BRIDGE_WORKER_CAPABILITY_LABEL: Record<WecomBridgeWorkerCapability, string> = {
+  reply: '回复',
+  mass: '群发',
+  moment: '朋友圈',
+  prepare: '准备',
+  send: '发送',
+  'target-match': '目标校验',
+  'handler-verification': '交付校验',
+  'visual-verification': '视觉校验',
+  'material-map': '素材',
+};
+
 const BRIDGE_RECOVERY_RELEASE_LABEL: Record<BridgeRecoveryReleaseMode, string> = {
   expired: '超时领取',
   all: '全部领取',
@@ -242,6 +255,9 @@ const AUTOMATION_RISK_LABEL: Record<string, string> = {
   automation_off: '总开关关闭',
   bridge_workers_offline: 'Mac 离线',
   pending_without_worker: '有待办无在线 Mac',
+  worker_lacks_reply: 'Mac 缺回复能力',
+  worker_lacks_mass: 'Mac 缺群发能力',
+  worker_lacks_moment: 'Mac 缺朋友圈能力',
   mass_failures: '群发失败',
   moment_failures: '朋友圈失败',
 };
@@ -1408,6 +1424,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               <div className="muted small">
                 出箱待办 · {overview.bridge.lastWorkerSeenAt ? `最近心跳 ${fmtStaleSeconds((Date.now() - Date.parse(overview.bridge.lastWorkerSeenAt)) / 1000)}` : '暂无心跳'}
               </div>
+              <div className="muted small">
+                能力 回复 {overview.bridge.capabilities.reply} · 群发 {overview.bridge.capabilities.mass} · 朋友圈 {overview.bridge.capabilities.moment}
+                {overview.bridge.capabilities.unknown ? ` · 未知 ${overview.bridge.capabilities.unknown}` : ''}
+              </div>
             </div>
             {overview.riskFlags.length > 0 && (
               <div className="auto-overview-risk">
@@ -1946,6 +1966,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           </div>
                           <div className="muted small">
                             最后心跳 {fmtStaleSeconds(worker.staleSeconds)} · 待回复 {worker.pendingReplies} · 待群发 {worker.pendingMassTasks} · 待朋友圈 {worker.pendingMomentTasks}
+                          </div>
+                          <div className="chip-row">
+                            {worker.capabilities.length > 0 ? (
+                              worker.capabilities.slice(0, 8).map((capability) => (
+                                <span key={capability} className="chip chip-static">
+                                  {BRIDGE_WORKER_CAPABILITY_LABEL[capability] || capability}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="chip chip-static">能力未知</span>
+                            )}
                           </div>
                         </div>
                         <span className={'tag ' + (worker.online ? 'tag-on' : 'tag-off')}>{worker.online ? '在线' : '离线'}</span>

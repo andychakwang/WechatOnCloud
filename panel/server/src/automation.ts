@@ -147,6 +147,16 @@ export type WecomBridgeEventStatus = 'new' | 'planned' | 'archived';
 type WecomBridgeReplyDeliveryStatus = 'claimed' | 'failed' | 'delivered' | 'released';
 type WecomBridgeMassDeliveryStatus = 'claimed' | 'failed' | 'sent' | 'delivered' | 'released';
 type WecomBridgeMomentDeliveryStatus = 'claimed' | 'failed' | 'prepared' | 'published' | 'released';
+export type WecomBridgeWorkerCapability =
+  | 'reply'
+  | 'mass'
+  | 'moment'
+  | 'prepare'
+  | 'send'
+  | 'target-match'
+  | 'handler-verification'
+  | 'visual-verification'
+  | 'material-map';
 
 export interface WecomBridgeEvent {
   id: string;
@@ -184,6 +194,7 @@ export interface WecomBridgeWorker {
   pid?: number;
   version?: string;
   note?: string;
+  capabilities: WecomBridgeWorkerCapability[];
   pendingReplies: number;
   pendingMassTasks: number;
   pendingMomentTasks: number;
@@ -376,6 +387,7 @@ export interface AutomationOverview {
     pendingReplies: number;
     pendingMassTasks: number;
     pendingMomentTasks: number;
+    capabilities: Record<WecomBridgeWorkerCapability | 'unknown', number>;
     runs: {
       total: number;
       recentFailures: number;
@@ -633,6 +645,17 @@ const MAX_BRIDGE_WORKERS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
 const MAX_BRIDGE_RUN_REPORT_ITEMS = 100;
 const DEFAULT_BRIDGE_REPLY_CLAIM_TTL_SECONDS = 300;
+const BRIDGE_WORKER_CAPABILITIES: WecomBridgeWorkerCapability[] = [
+  'reply',
+  'mass',
+  'moment',
+  'prepare',
+  'send',
+  'target-match',
+  'handler-verification',
+  'visual-verification',
+  'material-map',
+];
 
 const DEFAULT_RUNNER_POLICY: WecomBridgeRunnerPolicy = {
   mode: 'dry-run',
@@ -701,6 +724,17 @@ export function getAutomationConfig(): AutomationConfig {
 export function getAutomationOverview(): AutomationOverview {
   const nowIso = new Date().toISOString();
   const workers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
+  const onlineWorkers = workers.filter((worker) => worker.online);
+  const workerCapabilities = Object.fromEntries(
+    [...BRIDGE_WORKER_CAPABILITIES, 'unknown' as const].map((capability) => [capability, 0]),
+  ) as Record<WecomBridgeWorkerCapability | 'unknown', number>;
+  for (const worker of onlineWorkers) {
+    if (worker.capabilities.length === 0) {
+      workerCapabilities.unknown += 1;
+      continue;
+    }
+    for (const capability of worker.capabilities) workerCapabilities[capability] += 1;
+  }
   const activeBridgeEvents = data.bridgeEvents.filter((event) => event.status !== 'archived');
   const massItems = data.massSendJobs.flatMap((job) => job.items);
   const lastAudit = data.auditEvents[data.auditEvents.length - 1];
@@ -742,6 +776,9 @@ export function getAutomationOverview(): AutomationOverview {
   if (!data.settings.enabled) riskFlags.push('automation_off');
   if (data.settings.enabled && data.bridgeWorkers.length > 0 && workers.every((worker) => !worker.online)) riskFlags.push('bridge_workers_offline');
   if (pendingReplies + pendingMassTasks + pendingMomentTasks > 0 && workers.every((worker) => !worker.online)) riskFlags.push('pending_without_worker');
+  if (pendingReplies > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'reply'))) riskFlags.push('worker_lacks_reply');
+  if (pendingMassTasks > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'mass'))) riskFlags.push('worker_lacks_mass');
+  if (pendingMomentTasks > 0 && onlineWorkers.length > 0 && !onlineWorkers.some((worker) => bridgeWorkerCan(worker, 'moment'))) riskFlags.push('worker_lacks_moment');
   if (massItems.some((item) => item.status === 'failed')) riskFlags.push('mass_failures');
   if (data.momentDrafts.some((draft) => !!draft.bridgeFailedAt)) riskFlags.push('moment_failures');
 
@@ -787,6 +824,7 @@ export function getAutomationOverview(): AutomationOverview {
       pendingReplies,
       pendingMassTasks,
       pendingMomentTasks,
+      capabilities: workerCapabilities,
       runs: {
         total: data.bridgeRunReports.length,
         recentFailures: data.bridgeRunReports.slice(-50).filter((report) => report.status === 'failed').length,
@@ -838,6 +876,7 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
   const enabledApprovedRules = data.rules.filter((rule) => rule.enabled && rule.approved);
   const runnableRuleCount = enabledApprovedRules.filter(hasRunnableSteps).length;
   const pendingTotal = overview.bridge.pendingReplies + overview.bridge.pendingMassTasks + overview.bridge.pendingMomentTasks;
+  const bridgeWorkers = data.bridgeWorkers.map((worker) => publicBridgeWorker(worker));
   const runnableMassJobs = data.massSendJobs.filter(isMassJobBridgeRunnable);
   const readyMomentDrafts = data.momentDrafts.filter((draft) => draft.approved && draft.status === 'ready' && !!draft.text.trim());
   const add = (check: AutomationPreflightCheck) => checks.push(check);
@@ -893,6 +932,10 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
       action: '按“企微 Bridge”区域的环境变量和命令启动 Runner。',
     });
   }
+
+  addWorkerCapabilityCheck('worker_capability_replies', 'reply', 'AI 回复', overview.bridge.pendingReplies);
+  addWorkerCapabilityCheck('worker_capability_mass', 'mass', '群发队列', overview.bridge.pendingMassTasks);
+  addWorkerCapabilityCheck('worker_capability_moments', 'moment', '朋友圈', overview.bridge.pendingMomentTasks);
 
   if (!data.settings.automaticRuleRepliesEnabled && runnableRuleCount > 0) {
     add({
@@ -1074,6 +1117,22 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
   if (overview.bridge.pendingMomentTasks > 0 && !runnerPolicyIncludes(policy.target, 'moments')) {
     addRunnerTargetWarning('runner_target_excludes_moments', '朋友圈', overview.bridge.pendingMomentTasks, policy.target);
   }
+  if (pendingTotal > 0 && policy.requireTargetMatch) {
+    addPolicyCapabilityCheck(
+      'worker_capability_target_match',
+      ['target-match'],
+      '目标会话校验',
+      '远程策略要求目标会话校验，但当前在线 Runner 没有明确声明该能力。',
+    );
+  }
+  if (pendingTotal > 0 && policy.requireHandlerVerification) {
+    addPolicyCapabilityCheck(
+      'worker_capability_handler_verification',
+      ['handler-verification', 'visual-verification'],
+      '交付结果校验',
+      '远程策略要求 handler 回传正向交付校验，但当前在线 Runner 没有明确声明该能力。',
+    );
+  }
 
   function addRunnerTargetWarning(id: string, label: string, count: number, target: WecomBridgeRunnerTarget) {
     add({
@@ -1083,6 +1142,77 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
       message: `${label}有 ${count} 个待办，但远程 Runner 目标是 ${target}。`,
       count,
       action: '把 Runner 目标切到 all，或为该队列单独启动 Runner。',
+    });
+  }
+
+  function addWorkerCapabilityCheck(id: string, capability: WecomBridgeWorkerCapability, label: string, count: number) {
+    if (count <= 0) return;
+    const state = bridgeWorkersCapabilityState(bridgeWorkers, capability);
+    if (state.online.length === 0) return;
+    if (state.knownCapable.length > 0) {
+      add({
+        id,
+        level: 'ok',
+        title: `在线 Runner 支持${label}`,
+        message: `${state.knownCapable.length} 个在线 Runner 声明支持${label}任务。`,
+        count: state.knownCapable.length,
+      });
+      return;
+    }
+    if (state.unknown > 0) {
+      add({
+        id: `${id}_unknown`,
+        level: 'warn',
+        title: `Runner ${label}能力未知`,
+        message: `${label}有 ${count} 个待办；${state.unknown} 个在线 Runner 未上报能力清单，云端无法确认是否可处理。`,
+        count,
+        action: '升级 Mac Bridge client 到 r49 或设置 WECOM_BRIDGE_CAPABILITIES。',
+      });
+      return;
+    }
+    add({
+      id,
+      level: 'block',
+      title: `在线 Runner 不支持${label}`,
+      message: `${label}有 ${count} 个待办，但在线 Runner 的能力清单不包含 ${capability}。`,
+      count,
+      action: '启动具备对应能力的 Mac Runner，或调整远程 Runner 目标。',
+    });
+  }
+
+  function addPolicyCapabilityCheck(id: string, capabilities: WecomBridgeWorkerCapability[], label: string, message: string) {
+    const online = bridgeWorkers.filter((worker) => worker.online);
+    if (online.length === 0) return;
+    const known = online.filter((worker) => worker.capabilities.length > 0);
+    const knownCapable = known.filter((worker) => capabilities.some((capability) => worker.capabilities.includes(capability)));
+    if (knownCapable.length > 0) {
+      add({
+        id,
+        level: 'ok',
+        title: `${label}能力已就绪`,
+        message: `${knownCapable.length} 个在线 Runner 声明支持${label}。`,
+        count: knownCapable.length,
+      });
+      return;
+    }
+    if (online.length > known.length) {
+      add({
+        id: `${id}_unknown`,
+        level: 'warn',
+        title: `${label}能力未知`,
+        message: `${message} 另有 ${online.length - known.length} 个在线 Runner 未上报能力清单。`,
+        count: pendingTotal,
+        action: '升级 Mac Bridge client 到 r49 或设置 WECOM_BRIDGE_CAPABILITIES。',
+      });
+      return;
+    }
+    add({
+      id,
+      level: 'block',
+      title: `在线 Runner 缺少${label}`,
+      message,
+      count: pendingTotal,
+      action: '启动具备该能力的 Mac Runner，或关闭对应远程策略要求。',
     });
   }
 
@@ -1395,6 +1525,7 @@ export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWo
     pid,
     version: str(raw?.version || raw?.clientVersion || '', 80).trim() || undefined,
     note: str(raw?.note || raw?.message || '', 300).trim() || undefined,
+    capabilities: normalizeBridgeWorkerCapabilities(raw?.capabilities ?? raw?.capability ?? raw?.workerCapabilities),
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
     pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
     pendingMomentTasks: clampInt(raw?.pendingMomentTasks, 0, 100000, 0),
@@ -3681,6 +3812,38 @@ function normalizeBridgeEvent(raw: any, preserveIds: boolean, now: string): Weco
   return event;
 }
 
+function normalizeBridgeWorkerCapabilities(raw: any): WecomBridgeWorkerCapability[] {
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? raw.split(/[,;\s]+/)
+      : raw && typeof raw === 'object'
+        ? Object.entries(raw)
+            .filter(([, value]) => value === true || value === 'true' || value === '1' || value === 1)
+            .map(([key]) => key)
+        : [];
+  const mapped = new Set<WecomBridgeWorkerCapability>();
+  for (const value of values) {
+    const rawName = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, '-');
+    if (!rawName) continue;
+    let name: WecomBridgeWorkerCapability | null = null;
+    if (['reply', 'replies', 'ai-reply', 'ai-replies', 'auto-reply'].includes(rawName)) name = 'reply';
+    else if (['mass', 'mass-send', 'mass-send-task', 'mass-task', 'group-send', 'broadcast'].includes(rawName)) name = 'mass';
+    else if (['moment', 'moments', 'moment-task', 'moment-draft', '朋友圈'].includes(rawName)) name = 'moment';
+    else if (['prepare', 'prepared', 'paste', 'clipboard'].includes(rawName)) name = 'prepare';
+    else if (['send', 'sender', 'controlled-send'].includes(rawName)) name = 'send';
+    else if (['target-match', 'target-verify', 'target-verification', 'conversation-match', 'window-title'].includes(rawName)) name = 'target-match';
+    else if (['handler-verification', 'handler-verify', 'delivery-verification', 'positive-verification'].includes(rawName)) name = 'handler-verification';
+    else if (['visual-verification', 'visual-check', 'ocr', 'screenshot-check', 'vision'].includes(rawName)) name = 'visual-verification';
+    else if (['material-map', 'materials', 'material-sync', 'asset-map'].includes(rawName)) name = 'material-map';
+    if (name) mapped.add(name);
+  }
+  return BRIDGE_WORKER_CAPABILITIES.filter((capability) => mapped.has(capability));
+}
+
 function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): WecomBridgeWorker {
   const source = str(raw?.source || 'wecom-mac-bridge', 80).trim() || 'wecom-mac-bridge';
   const workerId = str(raw?.workerId ?? raw?.worker ?? raw?.clientId ?? 'wecom-worker', 120).trim() || 'wecom-worker';
@@ -3695,6 +3858,7 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     pid: Number.isFinite(Number(raw?.pid)) ? Math.max(0, Math.trunc(Number(raw.pid))) : undefined,
     version: str(raw?.version || '', 80).trim() || undefined,
     note: str(raw?.note || '', 300).trim() || undefined,
+    capabilities: normalizeBridgeWorkerCapabilities(raw?.capabilities ?? raw?.capability ?? raw?.workerCapabilities),
     pendingReplies: clampInt(raw?.pendingReplies, 0, 100000, 0),
     pendingMassTasks: clampInt(raw?.pendingMassTasks, 0, 100000, 0),
     pendingMomentTasks: clampInt(raw?.pendingMomentTasks, 0, 100000, 0),
@@ -4581,10 +4745,23 @@ function publicBridgeWorker(worker: WecomBridgeWorker, now = Date.now(), offline
   const staleSeconds = Number.isFinite(lastSeenMs) ? Math.max(0, Math.round((now - lastSeenMs) / 1000)) : offlineAfterSeconds + 1;
   return {
     ...worker,
+    capabilities: [...worker.capabilities],
     online: staleSeconds <= offlineAfterSeconds,
     staleSeconds,
     offlineAfterSeconds,
   };
+}
+
+function bridgeWorkerCan(worker: Pick<WecomBridgeWorker, 'capabilities'>, capability: WecomBridgeWorkerCapability): boolean {
+  return worker.capabilities.length === 0 || worker.capabilities.includes(capability);
+}
+
+function bridgeWorkersCapabilityState(workers: WecomBridgeWorkerStatus[], capability: WecomBridgeWorkerCapability) {
+  const online = workers.filter((worker) => worker.online);
+  const known = online.filter((worker) => worker.capabilities.length > 0);
+  const knownCapable = known.filter((worker) => worker.capabilities.includes(capability));
+  const unknown = online.length - known.length;
+  return { online, known, knownCapable, unknown };
 }
 
 function cloneMassSendJob(job: MassSendJob): MassSendJob {

@@ -253,6 +253,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
+    "WECOM_BRIDGE_CAPABILITIES='reply,mass,moment,prepare,material-map,target-match,handler-verification'",
     `WECOM_REQUIRE_TARGET_MATCH=${shellSingle(policy.requireTargetMatch ? '1' : '0')}`,
     `WECOM_REQUIRE_HANDLER_VERIFICATION=${shellSingle(policy.requireHandlerVerification ? '1' : '0')}`,
     `WECOM_BRIDGE_INTERVAL_SEC=${shellSingle(String(policy.heartbeatIntervalSeconds))}`,

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r48-handler-verification-gate';
+const CLIENT_VERSION = 'automation-lab-r49-worker-capabilities';
 
 const USAGE = `
 WeCom Bridge client for WechatOnCloud automation panel.
@@ -13,6 +13,7 @@ Environment:
   WOC_PANEL_URL / PANEL_URL / WECHATONCLOUD_PANEL_URL   e.g. http://nasbot.cloud:36081
   AUTOMATION_BRIDGE_TOKEN / WECOM_BRIDGE_TOKEN          bridge token from NAS compose
   WECOM_REQUIRE_HANDLER_VERIFICATION=1                  require positive handler verification before success ack
+  WECOM_BRIDGE_CAPABILITIES=reply,mass,moment,...       explicit worker capabilities for heartbeat
 
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
@@ -20,7 +21,7 @@ Commands:
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--output file]
   push-events <file|-> [--source name]
-  heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send]
+  heartbeat [--source name] [--worker-id name] [--mode dry-run|prepare|send] [--capabilities csv]
   runner-policy [--worker-id name]
   report-run [--target replies|mass|moments|all|doctor] [--mode dry-run|prepare|send|doctor] [--status completed|failed] [--items-json '[...]']
   pull-replies [--limit 50]
@@ -224,6 +225,46 @@ function shouldReportRun(options) {
 
 function runnerMode(options, fallback = 'manual') {
   return String(options.mode || process.env.WECOM_RUNNER_MODE || process.env.WECOM_HANDLER_MODE || fallback);
+}
+
+function splitList(value) {
+  return String(value || '')
+    .split(/[,;\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeCapability(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!raw) return '';
+  if (['reply', 'replies', 'ai-reply', 'ai-replies', 'auto-reply'].includes(raw)) return 'reply';
+  if (['mass', 'mass-send', 'mass-task', 'group-send', 'broadcast'].includes(raw)) return 'mass';
+  if (['moment', 'moments', 'moment-task', 'moment-draft'].includes(raw)) return 'moment';
+  if (['prepare', 'paste', 'clipboard'].includes(raw)) return 'prepare';
+  if (['send', 'sender', 'controlled-send'].includes(raw)) return 'send';
+  if (['target-match', 'target-verify', 'target-verification', 'conversation-match', 'window-title'].includes(raw)) return 'target-match';
+  if (['handler-verification', 'handler-verify', 'delivery-verification', 'positive-verification'].includes(raw)) return 'handler-verification';
+  if (['visual-verification', 'visual-check', 'ocr', 'screenshot-check', 'vision'].includes(raw)) return 'visual-verification';
+  if (['material-map', 'materials', 'material-sync', 'asset-map'].includes(raw)) return 'material-map';
+  return '';
+}
+
+function workerCapabilities(options, mode) {
+  const capabilities = new Set(['reply', 'mass', 'moment', 'prepare', 'material-map']);
+  const explicit = [
+    ...splitList(options.capabilities || options.capability || ''),
+    ...splitList(process.env.WECOM_BRIDGE_CAPABILITIES || process.env.WECOM_WORKER_CAPABILITIES || ''),
+  ];
+  for (const item of explicit) {
+    const capability = normalizeCapability(item);
+    if (capability) capabilities.add(capability);
+  }
+  if (mode === 'send' || envBool('WECOM_ALLOW_SEND', 'WECOM_ACCEPT_REMOTE_SEND')) capabilities.add('send');
+  if (!['0', 'false', 'no', 'off'].includes(String(process.env.WECOM_VERIFY_TARGET || '').trim().toLowerCase())) capabilities.add('target-match');
+  if (envBool('WECOM_REQUIRE_TARGET_MATCH')) capabilities.add('target-match');
+  if (envBool('WECOM_REQUIRE_HANDLER_VERIFICATION', 'WECOM_REQUIRE_VERIFICATION')) capabilities.add('handler-verification');
+  if (envBool('WECOM_VISUAL_VERIFICATION', 'WECOM_OCR_VERIFICATION')) capabilities.add('visual-verification');
+  return Array.from(capabilities);
 }
 
 function runStatusFromHandled(handled) {
@@ -560,6 +601,7 @@ async function main() {
         pid: process.pid,
         version: CLIENT_VERSION,
         note: String(options.note || ''),
+        capabilities: workerCapabilities(options, mode),
       }),
     );
     return;
