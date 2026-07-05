@@ -1986,11 +1986,24 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     </label>
                   </div>
                   {rpaPackagePreview && (
-                    <div className="chip-row">
-                      <span className="chip chip-static">schema {rpaPackagePreview.schema}</span>
-                      <span className="chip chip-static">target {rpaPackagePreview.target}</span>
-                      <span className="chip chip-static">limit {rpaPackagePreview.limit}</span>
-                    </div>
+                    <>
+                      <div className="chip-row">
+                        <span className="chip chip-static">schema {rpaPackagePreview.schema}</span>
+                        <span className="chip chip-static">target {rpaPackagePreview.target}</span>
+                        <span className="chip chip-static">limit {rpaPackagePreview.limit}</span>
+                        {rpaPackagePreview.handoff && (
+                          <>
+                            <span className="chip chip-static">建议 {BRIDGE_RUNNER_MODE_LABEL[rpaPackagePreview.handoff.recommendedMode]}</span>
+                            <span className={'chip chip-static' + (rpaPackagePreview.handoff.blockedByPreflight ? ' chip-bad' : '')}>
+                              预检 {PREFLIGHT_LEVEL_LABEL[rpaPackagePreview.handoff.preflightLevel]}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      {rpaPackagePreview.handoff?.notes.length ? (
+                        <div className="muted small">{rpaPackagePreview.handoff.notes.slice(0, 3).join(' · ')}</div>
+                      ) : null}
+                    </>
                   )}
                 </div>
                 <div className="bridge-runner-guide">

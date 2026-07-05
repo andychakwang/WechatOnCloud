@@ -695,6 +695,22 @@ export interface WecomRpaPackage {
     mass: number;
     moments: number;
   };
+  handoff: {
+    generatedFrom: 'automation-rpa-package';
+    packageTarget: WecomRpaPackageTarget;
+    recommendedMode: WecomBridgeRunnerMode;
+    runnerEngine: WecomBridgeRunnerEngine;
+    runnerTarget: WecomBridgeRunnerTarget;
+    runnerMode: WecomBridgeRunnerMode;
+    allowSend: boolean;
+    requireTargetMatch: boolean;
+    requireHandlerVerification: boolean;
+    momentPasteMode: WecomBridgeMomentPasteMode;
+    preflightLevel: AutomationPreflightLevel;
+    preflightSummary: Record<AutomationPreflightLevel, number>;
+    blockedByPreflight: boolean;
+    notes: string[];
+  };
   tasks: WecomRpaTask[];
 }
 
@@ -3181,6 +3197,18 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
   }
 
   const tasks = pulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
+  const policy = getWecomBridgeRunnerPolicy();
+  const preflight = getAutomationPreflightReport();
+  const includesMoments = tasks.some((task) => task.target === 'moment');
+  const recommendedMode: WecomBridgeRunnerMode =
+    policy.mode === 'send' && (!policy.allowSend || target === 'moments') ? 'prepare' : policy.mode;
+  const notes = [
+    preflight.summary.block > 0 ? `预检存在 ${preflight.summary.block} 个阻断项；执行前建议先处理。` : '',
+    policy.mode === 'send' && !policy.allowSend ? '云端策略为 send，但 allowSend 未开启；Mac Runner 应降级为 prepare。' : '',
+    includesMoments ? '朋友圈任务始终是半自动 prepare，不应无人值守点击发布。' : '',
+    policy.requireTargetMatch ? '云端策略要求目标窗口匹配，Mac handler 应在粘贴/发送前校验会话。' : '',
+    policy.requireHandlerVerification ? '云端策略要求 handler 回传正向校验后才标记成功。' : '',
+  ].filter(Boolean);
   return {
     schema: 'woc.wecom.rpa.package.v1',
     ...meta,
@@ -3192,6 +3220,22 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
       replies: tasks.filter((task) => task.target === 'reply').length,
       mass: tasks.filter((task) => task.target === 'mass').length,
       moments: tasks.filter((task) => task.target === 'moment').length,
+    },
+    handoff: {
+      generatedFrom: 'automation-rpa-package',
+      packageTarget: target,
+      recommendedMode,
+      runnerEngine: policy.runnerEngine,
+      runnerTarget: policy.target,
+      runnerMode: policy.mode,
+      allowSend: policy.allowSend,
+      requireTargetMatch: policy.requireTargetMatch,
+      requireHandlerVerification: policy.requireHandlerVerification,
+      momentPasteMode: policy.momentPasteMode,
+      preflightLevel: preflight.level,
+      preflightSummary: preflight.summary,
+      blockedByPreflight: preflight.summary.block > 0,
+      notes,
     },
     tasks,
   };

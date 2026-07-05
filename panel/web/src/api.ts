@@ -342,6 +342,22 @@ export interface WecomRpaPackage {
     mass: number;
     moments: number;
   };
+  handoff?: {
+    generatedFrom: 'automation-rpa-package';
+    packageTarget: WecomRpaPackageTarget;
+    recommendedMode: WecomBridgeRunnerMode;
+    runnerEngine: WecomBridgeRunnerEngine;
+    runnerTarget: WecomBridgeRunnerTarget;
+    runnerMode: WecomBridgeRunnerMode;
+    allowSend: boolean;
+    requireTargetMatch: boolean;
+    requireHandlerVerification: boolean;
+    momentPasteMode: WecomBridgeMomentPasteMode;
+    preflightLevel: AutomationPreflightLevel;
+    preflightSummary: Record<AutomationPreflightLevel, number>;
+    blockedByPreflight: boolean;
+    notes: string[];
+  };
   tasks: WecomRpaTask[];
 }
 

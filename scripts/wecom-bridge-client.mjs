@@ -958,6 +958,7 @@ async function runRpaPackageTasks(options, packageMeta, rawTasks) {
     packageId: packageMeta?.packageId || '',
     packageSchema: packageMeta?.schema || '',
     packageCounts: packageMeta?.counts || { total: rawTasks.length },
+    packageHandoff: packageMeta?.handoff || null,
     mode,
     target: selectedTarget,
     total: tasks.length,
