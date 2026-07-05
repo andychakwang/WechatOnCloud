@@ -13,6 +13,27 @@
 - 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r59-2026-07-05`
 - 本版新增：Bridge 消息推送可用 `planReplies=true` / `--plan-replies` 自动生成待审 AI/规则回复草稿；Bridge 自动回复在 `send` 模式领取/交付前会检查风险词、每小时上限和单会话冷却，并把交付计入审计限流。
 
+## 2026-07-05 运行验收
+
+- `36080` 原版面板保持不变，仍由 `woc-panel` 提供服务。
+- `36081` 自动化测试面板已通过飞牛 Docker 项目 `woc-automation-test` 重建。
+- 测试面板 `/api/version` 已验证：
+
+  ```json
+  {
+    "current": "andy-automation-usable-r59-2026-07-05",
+    "source": "ghcr"
+  }
+  ```
+
+- 新版 Bridge 运行记录接口已验证：
+
+  ```text
+  GET /api/admin/automation/bridge-runs?limit=1 -> 200
+  ```
+
+注意：只修改 NAS 上的 `docker-compose.yml` 不会替换正在运行的容器。飞牛 Docker 项目需要执行一次“构建/重建”（内部对应 `composeBuild`），或用等价的 `docker compose pull && docker compose up -d`，新镜像才会真正生效。仅点“重启”可能仍然使用旧镜像层。
+
 ## 飞牛 Docker 面板导入
 
 1. 打开飞牛 Docker 应用：
@@ -72,6 +93,8 @@
    ```text
    http://nasbot.cloud:36081/
    ```
+
+10. 后续升级测试版时，先确认 compose 中的镜像 tag 已更新，再在飞牛 Docker 的 `woc-automation-test` 项目里执行“构建/重建”。完成后用 `/api/version` 验证 `current` 是否等于目标 tag。
 
 ## SSH 一键部署
 
