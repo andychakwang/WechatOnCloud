@@ -519,6 +519,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [rpaPackageLimit, setRpaPackageLimit] = useState('50');
   const [rpaPackagePreview, setRpaPackagePreview] = useState<WecomRpaPackage | null>(null);
   const [rpaPackageIncludeSource, setRpaPackageIncludeSource] = useState(false);
+  const [rpaPackageWorkerRef, setRpaPackageWorkerRef] = useState('');
   const [selectedInstanceId, setSelectedInstanceId] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -642,7 +643,13 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const knowledgeItems = cfg.knowledgeItems ?? [];
   const approvedKnowledgeCount = knowledgeItems.filter((item) => item.enabled && item.approved).length;
   const bridgeGuide = bridge?.runnerGuide;
-  const bridgeWorkerOptions = Array.from(new Map((bridge?.workers || []).map((worker) => [worker.workerId, worker])).values());
+  const bridgeWorkersSorted = (bridge?.workers || []).slice().sort((a, b) => {
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+    if (a.online !== b.online) return a.online ? -1 : 1;
+    return a.workerId.localeCompare(b.workerId);
+  });
+  const bridgeWorkerOptions = Array.from(new Map(bridgeWorkersSorted.map((worker) => [worker.workerId, worker])).values());
+  const selectedRpaPackageWorker = bridgeWorkersSorted.find((worker) => worker.id === rpaPackageWorkerRef) || null;
   const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue) : null;
   const copyBridgeText = async (text: string, label: string) => {
     try {
@@ -721,6 +728,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!Number.isFinite(parsed)) return 50;
     return Math.max(1, Math.min(200, parsed));
   };
+  const wecomRpaPackageOptions = (format: WecomRpaPackageFormat, targetOverride?: WecomRpaPackageTarget, limitOverride?: number) => ({
+    target: targetOverride || rpaPackageTarget,
+    limit: limitOverride ?? wecomRpaPackageLimit(),
+    format,
+    includeSource: rpaPackageIncludeSource,
+    mode: runnerPolicy?.mode,
+    workerId: selectedRpaPackageWorker?.workerId,
+    workerSource: selectedRpaPackageWorker?.source,
+    capabilities: selectedRpaPackageWorker?.capabilities,
+    requireSendable: runnerPolicy?.mode === 'send',
+  });
   const wecomRpaPackageQuery = (format: WecomRpaPackageFormat, download = false) => {
     const params = new URLSearchParams({
       target: rpaPackageTarget,
@@ -728,6 +746,13 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       format,
       includeSource: rpaPackageIncludeSource ? '1' : '0',
     });
+    if (runnerPolicy?.mode) params.set('mode', runnerPolicy.mode);
+    if (selectedRpaPackageWorker) {
+      params.set('workerId', selectedRpaPackageWorker.workerId);
+      params.set('workerSource', selectedRpaPackageWorker.source);
+      if (selectedRpaPackageWorker.capabilities.length) params.set('capabilities', selectedRpaPackageWorker.capabilities.join(','));
+    }
+    if (runnerPolicy?.mode === 'send') params.set('requireSendable', '1');
     if (download) params.set('download', '1');
     return params.toString();
   };
@@ -737,10 +762,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     setBusy('rpa-package');
     try {
       const { package: pkg } = await api.exportWecomRpaPackage({
-        target,
-        limit,
-        format: 'json',
-        includeSource: rpaPackageIncludeSource,
+        ...wecomRpaPackageOptions('json', target, limit),
       });
       setRpaPackagePreview(pkg);
       toast(`RPA 包已生成：${pkg.counts.total} 个任务`, 'ok');
@@ -2099,17 +2121,36 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         onChange={(e) => setRpaPackageLimit(e.target.value.replace(/[^0-9]/g, ''))}
                       />
                     </label>
+                    <label>
+                      <span className="field-label">Worker</span>
+                      <select className="input" value={rpaPackageWorkerRef} onChange={(e) => setRpaPackageWorkerRef(e.target.value)}>
+                        <option value="">不限定 worker</option>
+                        {bridgeWorkersSorted.map((worker) => (
+                          <option value={worker.id} key={worker.id}>
+                            {worker.workerId} · {worker.enabled ? (worker.online ? '在线' : '离线') : '已暂停'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <label className="auto-check compact-check">
                       <input type="checkbox" checked={rpaPackageIncludeSource} onChange={(e) => setRpaPackageIncludeSource(e.target.checked)} />
                       <span>包含源任务</span>
                     </label>
                   </div>
+                  {selectedRpaPackageWorker && (
+                    <div className="muted small">
+                      当前按 {selectedRpaPackageWorker.source}/{selectedRpaPackageWorker.workerId} 过滤；能力{' '}
+                      {selectedRpaPackageWorker.capabilities.length ? selectedRpaPackageWorker.capabilities.join(', ') : '未知'}
+                      {!selectedRpaPackageWorker.enabled ? '；该 worker 已暂停，包应为空' : ''}
+                    </div>
+                  )}
                   {rpaPackagePreview && (
                     <>
                       <div className="chip-row">
                         <span className="chip chip-static">schema {rpaPackagePreview.schema}</span>
                         <span className="chip chip-static">target {rpaPackagePreview.target}</span>
                         <span className="chip chip-static">limit {rpaPackagePreview.limit}</span>
+                        <span className="chip chip-static">worker {rpaPackagePreview.workerId}</span>
                         {rpaPackagePreview.handoff && (
                           <>
                             <span className="chip chip-static">建议 {BRIDGE_RUNNER_MODE_LABEL[rpaPackagePreview.handoff.recommendedMode]}</span>
