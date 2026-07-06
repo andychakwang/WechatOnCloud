@@ -13,6 +13,43 @@
 - 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r82-2026-07-06`
 - 本版新增：Web「Mac Runner 接入」在企微 CLI 探测基础上增加 `sync-cli-audience` 命令，可把已授权 `@wecom/cli` 通讯录导入云端受众资产池；默认未审核，不会自动进入群发。
 
+## 2026-07-06 R82 更新验收
+
+- GitHub Actions release run `28760182898` 已成功构建并推送 panel / wechat 双镜像。
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板已通过飞牛 Docker socket helper 更新，公网入口返回 `200`。
+- 首次 R82 更新后发现运行时旧环境变量 `WOC_VERSION=andy-automation-usable-r77-2026-07-06` 会覆盖镜像版本显示；已提交并推送修复：
+
+  ```text
+  8e38193 Fix fnOS helper version env update
+  b9fe502 Auto-remove fnOS updater helper
+  ```
+
+- 使用 `b9fe502` 版 helper 补跑后，`/api/version` 已验证：
+
+  ```json
+  {
+    "current": "andy-automation-usable-r82-2026-07-06"
+  }
+  ```
+
+- Web「自动化工作台 → 企微接入资料 → Mac Runner 接入」对应的 Bridge Runner Guide 已验证包含：
+
+  ```text
+  node scripts/wecom-bridge-client.mjs sync-cli-audience --wecom-cli wecom-cli --source wecom-cli-contact --tag wecom-cli
+  ```
+
+- 旧的一次性 helper 容器 `woc-updater-1783298623565` 已删除；新版 helper 使用 `AutoRemove=true`，补跑产生的 `woc-updater-1783299031604` 已自动删除。飞牛 Docker 容器列表恢复为 27 个容器。
+- 本次公网入口检查：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  http://nasbot.cloud:36081/api/auth/me -> 401 {"error":"未登录"}
+  ```
+
+  其中 `/api/auth/me` 返回 401 属于未登录预期响应，说明后端 API 正常响应。
+
 ## 2026-07-06 R81 更新验收
 
 - GitHub Actions release run `28759156165` 已成功构建并推送 panel / wechat 双镜像。
