@@ -925,6 +925,7 @@ export interface AutomationActionQueueBulkReviewResult {
   target: AutomationActionQueueReviewBulkTarget;
   dryRun: boolean;
   limit: number;
+  requestedItemIds: string[];
   candidates: AutomationActionQueueItem[];
   approved: {
     reply: number;
@@ -1249,6 +1250,7 @@ export const api = {
   approveAutomationActionQueueReviews: (payload: {
     target?: AutomationActionQueueReviewBulkTarget;
     dryRun?: boolean;
+    itemIds?: string[];
     limit?: number;
     queueLimit?: number;
   }) =>

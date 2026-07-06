@@ -739,6 +739,7 @@ export interface AutomationActionQueueBulkReviewResult {
   target: AutomationActionQueueReviewBulkTarget;
   dryRun: boolean;
   limit: number;
+  requestedItemIds: string[];
   candidates: AutomationActionQueueItem[];
   approved: {
     reply: number;
@@ -2336,16 +2337,28 @@ export function approveAutomationActionQueueReview(actor: User, itemId: string, 
 
 export function approveAutomationActionQueueReviews(actor: User, raw: any = {}): AutomationActionQueueBulkReviewResult {
   const target = normalizeActionQueueReviewBulkTarget(raw?.target);
-  const limit = clampInt(raw?.limit, 1, 100, 20);
+  const requestedItemIds = Array.isArray(raw?.itemIds)
+    ? uniqueStrings(raw.itemIds.map((id: unknown) => str(id, 200).trim()).filter(Boolean)).slice(0, 100)
+    : [];
+  const limit = requestedItemIds.length > 0 ? requestedItemIds.length : clampInt(raw?.limit, 1, 100, 20);
   const queueLimit = clampInt(raw?.queueLimit, 1, 100, 20);
   const dryRun = raw?.dryRun === true || raw?.dryRun === '1' || raw?.dryRun === 'true';
-  const candidates = getAutomationActionQueue(100).items
-    .filter((item) => item.kind === 'review-task' && !!item.refId && (target === 'all' || item.target === target))
-    .slice(0, limit);
+  const queueItems = getAutomationActionQueue(100).items;
+  const candidates =
+    requestedItemIds.length > 0
+      ? requestedItemIds.map((id) => {
+          const item = queueItems.find((candidate) => candidate.id === id);
+          if (!item || item.kind !== 'review-task' || !item.refId || (target !== 'all' && item.target !== target)) {
+            throw new Error('部分队列项不存在或已变化，请刷新后重试');
+          }
+          return item;
+        })
+      : queueItems.filter((item) => item.kind === 'review-task' && !!item.refId && (target === 'all' || item.target === target)).slice(0, limit);
   const result: AutomationActionQueueBulkReviewResult = {
     target,
     dryRun,
     limit,
+    requestedItemIds,
     candidates,
     approved: { reply: 0, mass: 0, moment: 0, total: 0 },
     failed: [],

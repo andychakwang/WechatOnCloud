@@ -549,12 +549,17 @@ function actionQueueReviewBatchTarget(queue: AutomationActionQueue): {
   reply: number;
   mass: number;
   moment: number;
+  itemIds: string[];
   label: string;
 } {
   const counts = { reply: 0, mass: 0, moment: 0 };
+  const itemIds: string[] = [];
   for (const item of queue.items) {
     if (!actionQueueApproveReviewAction(item)) continue;
-    if (item.target === 'reply' || item.target === 'mass' || item.target === 'moment') counts[item.target] += 1;
+    if (item.target === 'reply' || item.target === 'mass' || item.target === 'moment') {
+      counts[item.target] += 1;
+      itemIds.push(item.id);
+    }
   }
   const active = [
     { target: 'reply' as const, count: counts.reply, label: 'AI 回复' },
@@ -566,6 +571,7 @@ function actionQueueReviewBatchTarget(queue: AutomationActionQueue): {
     target: active.length === 1 ? active[0].target : 'all',
     total,
     ...counts,
+    itemIds,
     label: active.length === 1 ? active[0].label : '全部待审',
   };
 }
@@ -948,7 +954,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     try {
       const { result } = await api.approveAutomationActionQueueReviews({
         target: actionQueueReview.target,
-        limit: 100,
+        itemIds: actionQueueReview.itemIds,
+        limit: actionQueueReview.itemIds.length,
         queueLimit: 12,
       });
       setActionQueue(result.queue);
