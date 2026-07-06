@@ -471,6 +471,10 @@ function actionQueueApproveReviewAction(item: AutomationActionQueueItem): NonNul
   return item.actions?.find((action) => action.kind === 'approve-review');
 }
 
+function actionQueueRpaPackageAction(item: AutomationActionQueueItem): NonNullable<AutomationActionQueueItem['actions']>[number] | undefined {
+  return item.actions?.find((action) => action.kind === 'preview-rpa-package');
+}
+
 function KnowledgeRefs({ refs }: { refs?: AutomationKnowledgeReference[] }) {
   if (!refs?.length) return null;
   return (
@@ -1007,10 +1011,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (download) params.set('download', '1');
     return params.toString();
   };
-  const previewWecomRpaPackage = async (targetOverride?: WecomRpaPackageTarget, limitOverride?: number) => {
+  const previewWecomRpaPackage = async (targetOverride?: WecomRpaPackageTarget, limitOverride?: number, busyKey = 'rpa-package') => {
     const target = targetOverride || rpaPackageTarget;
     const limit = limitOverride ?? wecomRpaPackageLimit();
-    setBusy('rpa-package');
+    setBusy(busyKey);
     try {
       const { package: pkg } = await api.exportWecomRpaPackage({
         ...wecomRpaPackageOptions('json', target, limit),
@@ -1023,6 +1027,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     } finally {
       setBusy('');
     }
+  };
+  const previewActionQueueItemRpaPackage = async (item: AutomationActionQueueItem) => {
+    const action = actionQueueRpaPackageAction(item);
+    if (!action?.packageTarget) return;
+    const limit = action.packageLimit || 50;
+    setRpaPackageTarget(action.packageTarget);
+    setRpaPackageLimit(String(limit));
+    await previewWecomRpaPackage(action.packageTarget, limit, `action-rpa-${item.id}`);
   };
   const previewActionQueueRpaPackage = async () => {
     if (!actionQueueRpa || actionQueueRpa.total <= 0) {
@@ -2305,45 +2317,59 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </div>
             </div>
             <div className="auto-action-queue-list">
-              {actionQueue.items.slice(0, 8).map((item) => (
-                <div key={item.id} className="auto-action-queue-item">
-                  <div className="auto-action-main">
-                    <div className="auto-action-tags">
-                      <span className={'tag ' + actionQueuePriorityClass(item.priority)}>
-                        {ACTION_QUEUE_PRIORITY_LABEL[item.priority] || item.priority}
-                      </span>
-                      <span className="tag">{ACTION_QUEUE_TARGET_LABEL[item.target] || item.target}</span>
+              {actionQueue.items.slice(0, 8).map((item) => {
+                const approveAction = actionQueueApproveReviewAction(item);
+                const rpaAction = actionQueueRpaPackageAction(item);
+                return (
+                  <div key={item.id} className="auto-action-queue-item">
+                    <div className="auto-action-main">
+                      <div className="auto-action-tags">
+                        <span className={'tag ' + actionQueuePriorityClass(item.priority)}>
+                          {ACTION_QUEUE_PRIORITY_LABEL[item.priority] || item.priority}
+                        </span>
+                        <span className="tag">{ACTION_QUEUE_TARGET_LABEL[item.target] || item.target}</span>
+                      </div>
+                      <div>
+                        <b>{item.title}</b>
+                        <div className="muted small">{item.detail}</div>
+                        <div className="auto-action-next">{item.action}</div>
+                        {item.tags.length > 0 && (
+                          <div className="chip-row auto-action-tag-row">
+                            {item.tags.slice(0, 5).map((tag) => (
+                              <span key={tag} className="chip chip-static">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      <b>{item.title}</b>
-                      <div className="muted small">{item.detail}</div>
-                      <div className="auto-action-next">{item.action}</div>
-                      {item.tags.length > 0 && (
-                        <div className="chip-row auto-action-tag-row">
-                          {item.tags.slice(0, 5).map((tag) => (
-                            <span key={tag} className="chip chip-static">
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
+                    <div className="auto-action-side">
+                      <div className="muted small auto-action-age">{item.staleSeconds !== undefined ? fmtStaleSeconds(item.staleSeconds) : ''}</div>
+                      {approveAction && (
+                        <button
+                          className="btn-text"
+                          title={approveAction.description || item.action}
+                          disabled={busy === `action-review-${item.id}`}
+                          onClick={() => approveActionQueueReview(item)}
+                        >
+                          {approveAction.label || '审核'}
+                        </button>
+                      )}
+                      {rpaAction && (
+                        <button
+                          className="btn-text"
+                          title={rpaAction.description || item.action}
+                          disabled={busy === `action-rpa-${item.id}`}
+                          onClick={() => previewActionQueueItemRpaPackage(item)}
+                        >
+                          {rpaAction.label || '预览包'}
+                        </button>
                       )}
                     </div>
                   </div>
-                  <div className="auto-action-side">
-                    <div className="muted small auto-action-age">{item.staleSeconds !== undefined ? fmtStaleSeconds(item.staleSeconds) : ''}</div>
-                    {actionQueueApproveReviewAction(item) && (
-                      <button
-                        className="btn-text"
-                        title={actionQueueApproveReviewAction(item)?.description || item.action}
-                        disabled={busy === `action-review-${item.id}`}
-                        onClick={() => approveActionQueueReview(item)}
-                      >
-                        {actionQueueApproveReviewAction(item)?.label || '审核'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {actionQueue.items.length === 0 && <div className="muted small">暂无待处理动作</div>}
             </div>
           </div>

@@ -660,7 +660,7 @@ export type AutomationActionQueueItemKind =
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
-export type AutomationActionQueueItemActionKind = 'approve-review';
+export type AutomationActionQueueItemActionKind = 'approve-review' | 'preview-rpa-package';
 
 export interface AutomationActionQueueItemAction {
   kind: AutomationActionQueueItemActionKind;
@@ -668,6 +668,8 @@ export interface AutomationActionQueueItemAction {
   description: string;
   safety: 'review-only' | 'handoff' | 'inspect';
   requiresConfirmation: boolean;
+  packageTarget?: WecomRpaPackageTarget;
+  packageLimit?: number;
 }
 
 export interface AutomationActionQueueItem {
@@ -2311,6 +2313,45 @@ export function approveAutomationActionQueueReview(actor: User, itemId: string, 
 }
 
 function actionQueueItemActions(item: AutomationActionQueueItem): AutomationActionQueueItemAction[] {
+  if (item.kind === 'bridge-reply') {
+    return [
+      {
+        kind: 'preview-rpa-package',
+        label: '预览回复包',
+        description: '生成当前可交付 AI 回复的 RPA 包预览；不会领取、粘贴或发送。',
+        safety: 'handoff',
+        requiresConfirmation: false,
+        packageTarget: 'replies',
+        packageLimit: 50,
+      },
+    ];
+  }
+  if (item.kind === 'mass-task') {
+    return [
+      {
+        kind: 'preview-rpa-package',
+        label: '预览群发包',
+        description: '生成当前可交付群发任务的 RPA 包预览；不会领取、粘贴或发送。',
+        safety: 'handoff',
+        requiresConfirmation: false,
+        packageTarget: 'mass',
+        packageLimit: 50,
+      },
+    ];
+  }
+  if (item.kind === 'moment-task') {
+    return [
+      {
+        kind: 'preview-rpa-package',
+        label: '预览朋友圈包',
+        description: '生成当前可交付朋友圈任务的 RPA 包预览；不会填入发布框或发布。',
+        safety: 'handoff',
+        requiresConfirmation: false,
+        packageTarget: 'moments',
+        packageLimit: 50,
+      },
+    ];
+  }
   if (item.kind !== 'review-task' || !item.refId) return [];
   if (item.target === 'reply') {
     return [

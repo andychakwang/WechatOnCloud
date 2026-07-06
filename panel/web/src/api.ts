@@ -846,7 +846,7 @@ export type AutomationActionQueueItemKind = 'preflight-check' | 'review-task' | 
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
-export type AutomationActionQueueItemActionKind = 'approve-review';
+export type AutomationActionQueueItemActionKind = 'approve-review' | 'preview-rpa-package';
 
 export interface AutomationActionQueueItemAction {
   kind: AutomationActionQueueItemActionKind;
@@ -854,6 +854,8 @@ export interface AutomationActionQueueItemAction {
   description: string;
   safety: 'review-only' | 'handoff' | 'inspect';
   requiresConfirmation: boolean;
+  packageTarget?: WecomRpaPackageTarget;
+  packageLimit?: number;
 }
 
 export interface AutomationActionQueueItem {
