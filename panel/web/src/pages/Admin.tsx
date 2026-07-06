@@ -491,6 +491,37 @@ function actionQueueTargetCounts(queue: AutomationActionQueue): Record<Automatio
   return queue.targetSummary || counts;
 }
 
+function actionQueuePriorityCounts(items: AutomationActionQueueItem[]): AutomationActionQueue['summary'] {
+  return items.reduce(
+    (acc, item) => {
+      acc[item.priority] += 1;
+      acc.total += 1;
+      return acc;
+    },
+    { block: 0, high: 0, normal: 0, low: 0, total: 0 } as AutomationActionQueue['summary'],
+  );
+}
+
+function mergeAutomationActionQueue(current: AutomationActionQueue | null, next: AutomationActionQueue): AutomationActionQueue {
+  if (!current || current.filters?.target !== next.filters.target) return next;
+  const seen = new Set<string>();
+  const items = [...current.items, ...next.items].filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  return {
+    ...next,
+    summary: actionQueuePriorityCounts(items),
+    filters: {
+      ...next.filters,
+      offset: 0,
+      returned: items.length,
+    },
+    items,
+  };
+}
+
 function visibleActionQueueItems(queue: AutomationActionQueue, target: AutomationActionQueueListTarget): AutomationActionQueueItem[] {
   if (queue.filters?.target === target) return queue.items;
   if (target === 'all') return queue.items;
@@ -897,9 +928,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
 
-  const loadActionQueue = async (target: AutomationActionQueueListTarget = actionQueueFilter) => {
-    const { queue } = await api.getAutomationActionQueue(12, target);
-    setActionQueue(queue);
+  const loadActionQueue = async (target: AutomationActionQueueListTarget = actionQueueFilter, offset = 0, append = false) => {
+    const { queue } = await api.getAutomationActionQueue(12, target, offset);
+    setActionQueue((current) => (append ? mergeAutomationActionQueue(current, queue) : queue));
     return queue;
   };
 
@@ -927,7 +958,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.getAutomationOverview(),
         api.getAutomationHealth(),
         api.getAutomationPreflight(),
-        api.getAutomationActionQueue(12, actionQueueFilter),
+        api.getAutomationActionQueue(12, actionQueueFilter, 0),
         api.listAutomationAudience(200),
         api.listAutomationMaterials(200),
         api.listMassSendJobs(),
@@ -1008,6 +1039,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setBusy('');
     }
   };
+  const loadMoreActionQueue = async () => {
+    if (!actionQueue?.filters.hasMore || actionQueue.filters.nextOffset === undefined) return;
+    setBusy('action-queue-more');
+    try {
+      await loadActionQueue(actionQueueFilter, actionQueue.filters.nextOffset, true);
+    } catch (e: any) {
+      toast(e.message || '加载更多队列失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
   const copyBridgeText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -1021,7 +1063,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!actionQueueApproveReviewAction(item)) return;
     setBusy(`action-review-${item.id}`);
     try {
-      const { result } = await api.approveAutomationActionQueueItem(item.id, 12, actionQueueFilter);
+      const { result } = await api.approveAutomationActionQueueItem(item.id, 12, actionQueueFilter, 0);
       setActionQueue(result.queue);
       if (result.target === 'reply') {
         toast('AI 回复草稿已审核，Mac Runner 可领取', 'ok');
@@ -1045,6 +1087,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     const request = {
       target: actionQueueReview.target,
       queueTarget: actionQueueFilter,
+      queueOffset: 0,
       itemIds: actionQueueReview.itemIds,
       limit: actionQueueReview.itemIds.length,
       queueLimit: 12,
@@ -2535,7 +2578,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               })}
             </div>
             <div className="auto-action-queue-list">
-              {actionQueueVisibleItems.slice(0, 8).map((item) => {
+              {actionQueueVisibleItems.map((item) => {
                 const approveAction = actionQueueApproveReviewAction(item);
                 const rpaAction = actionQueueRpaPackageAction(item);
                 return (
@@ -2591,6 +2634,16 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               {actionQueue.items.length === 0 && <div className="muted small">暂无待处理动作</div>}
               {actionQueue.items.length > 0 && actionQueueVisibleItems.length === 0 && (
                 <div className="muted small">当前分类暂无待处理动作</div>
+              )}
+            </div>
+            <div className="auto-action-queue-more">
+              <span className="muted small">
+                已加载 {actionQueue.filters.returned} / {actionQueue.filters.filtered}
+              </span>
+              {actionQueue.filters.hasMore && (
+                <button className="btn-text" disabled={busy === 'action-queue-more'} onClick={loadMoreActionQueue}>
+                  加载更多
+                </button>
               )}
             </div>
           </div>

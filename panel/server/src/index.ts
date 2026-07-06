@@ -568,7 +568,7 @@ app.get('/api/admin/automation/preflight', async (req, reply) => {
 app.get('/api/admin/automation/action-queue', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   const query = req.query as any;
-  return { queue: getAutomationActionQueue({ limit: Number(query?.limit || 20), target: query?.target }) };
+  return { queue: getAutomationActionQueue({ limit: Number(query?.limit || 20), offset: query?.offset, target: query?.target }) };
 });
 
 app.post('/api/admin/automation/action-queue/items/:itemId/approve', async (req, reply) => {
@@ -579,6 +579,7 @@ app.post('/api/admin/automation/action-queue/items/:itemId/approve', async (req,
     const body = req.body as any;
     const result = approveAutomationActionQueueReview(admin, (req.params as any).itemId, {
       limit: Number(body?.limit ?? query?.limit ?? 20),
+      offset: body?.queueOffset ?? body?.offset ?? query?.offset,
       target: body?.queueTarget ?? body?.viewTarget ?? query?.target,
     });
     appendPanelLog('INFO', `审核自动化队列项「${result.item.title}」by ${admin.username}`);

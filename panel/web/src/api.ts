@@ -883,9 +883,12 @@ export interface AutomationActionQueue {
   filters: {
     target: AutomationActionQueueListTarget;
     limit: number;
+    offset: number;
     total: number;
     filtered: number;
     returned: number;
+    hasMore: boolean;
+    nextOffset?: number;
   };
   handoff?: {
     rpa: {
@@ -1252,18 +1255,19 @@ export const api = {
   getAutomationOverview: () => req<{ overview: AutomationOverview }>('/api/admin/automation/overview'),
   getAutomationHealth: () => req<{ health: AutomationHealth }>('/api/admin/automation/health'),
   getAutomationPreflight: () => req<{ report: AutomationPreflightReport }>('/api/admin/automation/preflight'),
-  getAutomationActionQueue: (limit = 20, target: AutomationActionQueueListTarget = 'all') =>
+  getAutomationActionQueue: (limit = 20, target: AutomationActionQueueListTarget = 'all', offset = 0) =>
     req<{ queue: AutomationActionQueue }>(
-      `/api/admin/automation/action-queue?limit=${encodeURIComponent(limit)}&target=${encodeURIComponent(target)}`,
+      `/api/admin/automation/action-queue?limit=${encodeURIComponent(limit)}&target=${encodeURIComponent(target)}&offset=${encodeURIComponent(offset)}`,
     ),
-  approveAutomationActionQueueItem: (itemId: string, limit = 20, queueTarget: AutomationActionQueueListTarget = 'all') =>
+  approveAutomationActionQueueItem: (itemId: string, limit = 20, queueTarget: AutomationActionQueueListTarget = 'all', queueOffset = 0) =>
     req<{ result: AutomationActionQueueReviewResult }>(`/api/admin/automation/action-queue/items/${encodeURIComponent(itemId)}/approve`, {
       method: 'POST',
-      body: JSON.stringify({ limit, queueTarget }),
+      body: JSON.stringify({ limit, queueTarget, queueOffset }),
     }),
   approveAutomationActionQueueReviews: (payload: {
     target?: AutomationActionQueueReviewBulkTarget;
     queueTarget?: AutomationActionQueueListTarget;
+    queueOffset?: number;
     dryRun?: boolean;
     itemIds?: string[];
     limit?: number;

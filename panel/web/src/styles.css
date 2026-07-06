@@ -1376,6 +1376,13 @@ button {
   display: grid;
   gap: 8px;
 }
+.auto-action-queue-more {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
 .auto-action-queue-item {
   justify-content: space-between;
   min-width: 0;
@@ -1878,6 +1885,10 @@ button {
     justify-content: flex-start;
     max-width: none;
     text-align: left;
+  }
+  .auto-action-queue-more {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .auto-action-tags {
     flex-direction: row;

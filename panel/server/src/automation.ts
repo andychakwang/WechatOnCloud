@@ -697,9 +697,12 @@ export interface AutomationActionQueue {
   filters: {
     target: AutomationActionQueueListTarget;
     limit: number;
+    offset: number;
     total: number;
     filtered: number;
     returned: number;
+    hasMore: boolean;
+    nextOffset?: number;
   };
   handoff: {
     rpa: {
@@ -735,6 +738,7 @@ export interface AutomationActionQueue {
 
 export interface AutomationActionQueueOptions {
   limit?: number;
+  offset?: unknown;
   target?: unknown;
 }
 
@@ -2059,6 +2063,7 @@ export function getAutomationHealth(): AutomationHealth {
 export function getAutomationActionQueue(raw: number | AutomationActionQueueOptions = 20): AutomationActionQueue {
   const options: AutomationActionQueueOptions = typeof raw === 'number' ? { limit: raw } : raw || {};
   const n = clampInt(options.limit, 1, 100, 20);
+  const offset = clampInt(options.offset, 0, 5000, 0);
   const targetFilter = normalizeAutomationActionQueueListTarget(options.target);
   const rpaScanLimit = 200;
   const generatedAt = new Date().toISOString();
@@ -2327,7 +2332,8 @@ export function getAutomationActionQueue(raw: number | AutomationActionQueueOpti
     { all: 0, ops: 0, reply: 0, mass: 0, moment: 0 } as AutomationActionQueue['targetSummary'],
   );
   const filtered = targetFilter === 'all' ? sorted : sorted.filter((item) => item.target === targetFilter);
-  const selected = filtered.slice(0, n);
+  const selected = filtered.slice(offset, offset + n);
+  const hasMore = offset + selected.length < filtered.length;
   const summary = selected.reduce(
     (acc, item) => {
       acc[item.priority] += 1;
@@ -2344,13 +2350,28 @@ export function getAutomationActionQueue(raw: number | AutomationActionQueueOpti
     filters: {
       target: targetFilter,
       limit: n,
+      offset,
       total: sorted.length,
       filtered: filtered.length,
       returned: selected.length,
+      hasMore,
+      nextOffset: hasMore ? offset + selected.length : undefined,
     },
     handoff,
     items: selected,
   };
+}
+
+function listAutomationActionQueueItemsForActions(target: AutomationActionQueueListTarget = 'all'): AutomationActionQueueItem[] {
+  const items: AutomationActionQueueItem[] = [];
+  let offset = 0;
+  for (let page = 0; page < 50; page += 1) {
+    const queue = getAutomationActionQueue({ limit: 100, offset, target });
+    items.push(...queue.items);
+    if (!queue.filters.hasMore || queue.filters.nextOffset === undefined) break;
+    offset = queue.filters.nextOffset;
+  }
+  return items;
 }
 
 export function approveAutomationActionQueueReview(
@@ -2361,7 +2382,7 @@ export function approveAutomationActionQueueReview(
   const queueOptions: AutomationActionQueueOptions = typeof rawQueue === 'number' ? { limit: rawQueue } : rawQueue || {};
   const id = str(itemId, 200).trim();
   if (!id) throw new Error('队列项 ID 不能为空');
-  const item = getAutomationActionQueue(100).items.find((candidate) => candidate.id === id);
+  const item = listAutomationActionQueueItemsForActions().find((candidate) => candidate.id === id);
   if (!item) throw new Error('队列项不存在或已变化，请刷新后重试');
   if (item.kind !== 'review-task' || !item.refId) throw new Error('该队列项不是待审核任务');
 
@@ -2387,9 +2408,10 @@ export function approveAutomationActionQueueReviews(actor: User, raw: any = {}):
     : [];
   const limit = requestedItemIds.length > 0 ? requestedItemIds.length : clampInt(raw?.limit, 1, 100, 20);
   const queueLimit = clampInt(raw?.queueLimit, 1, 100, 20);
+  const queueOffset = clampInt(raw?.queueOffset ?? raw?.offset, 0, 5000, 0);
   const queueTarget = normalizeAutomationActionQueueListTarget(raw?.queueTarget ?? raw?.viewTarget ?? raw?.targetFilter);
   const dryRun = raw?.dryRun === true || raw?.dryRun === '1' || raw?.dryRun === 'true';
-  const queueItems = getAutomationActionQueue(100).items;
+  const queueItems = listAutomationActionQueueItemsForActions();
   const candidates =
     requestedItemIds.length > 0
       ? requestedItemIds.map((id) => {
@@ -2408,7 +2430,7 @@ export function approveAutomationActionQueueReviews(actor: User, raw: any = {}):
     candidates,
     approved: { reply: 0, mass: 0, moment: 0, total: 0 },
     failed: [],
-    queue: getAutomationActionQueue({ limit: queueLimit, target: queueTarget }),
+    queue: getAutomationActionQueue({ limit: queueLimit, offset: queueOffset, target: queueTarget }),
   };
   if (dryRun) return result;
 
@@ -2434,7 +2456,7 @@ export function approveAutomationActionQueueReviews(actor: User, raw: any = {}):
     }
   }
   result.approved.total = result.approved.reply + result.approved.mass + result.approved.moment;
-  result.queue = getAutomationActionQueue({ limit: queueLimit, target: queueTarget });
+  result.queue = getAutomationActionQueue({ limit: queueLimit, offset: queueOffset, target: queueTarget });
   return result;
 }
 
