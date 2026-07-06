@@ -81,7 +81,7 @@ import {
 } from './docker.js';
 import { createSession, getSession, destroySession, destroyUserSessions } from './sessions.js';
 import { parseHost, parseAllowedHosts, isRequestHostAllowed } from './host-guard.js';
-import { CURRENT_VERSION, versionInfo, ensureChecked, checkForUpdate, startUpdateChecker } from './version.js';
+import { CURRENT_VERSION, versionInfo, ensureChecked, checkForUpdate, startUpdateChecker, deploymentInfo } from './version.js';
 import { appendInstanceLog, readInstanceLog, appendPanelLog, readPanelLog, pruneOldLogs, filterSince, rangeToMs, DIAG_RANGES } from './logs.js';
 import {
   initAutomationStore,
@@ -250,12 +250,28 @@ function requestPublicOrigin(req?: FastifyRequest): string {
   return `${proto}://${host}`;
 }
 
+function normalizePublicUrl(value: string | null | undefined): string {
+  return String(value || '')
+    .trim()
+    .replace(/\/+$/, '');
+}
+
+type RunnerGuidePanelUrlSource = 'deployment' | 'request' | 'fallback';
+
+function runnerGuidePanelUrl(req?: FastifyRequest): { panelUrl: string; panelUrlSource: RunnerGuidePanelUrlSource } {
+  const configured = normalizePublicUrl(deploymentInfo().publicUrl);
+  if (configured) return { panelUrl: configured, panelUrlSource: 'deployment' };
+  const requestOrigin = normalizePublicUrl(requestPublicOrigin(req));
+  if (requestOrigin) return { panelUrl: requestOrigin, panelUrlSource: 'request' };
+  return { panelUrl: 'http://nasbot.cloud:36081', panelUrlSource: 'fallback' };
+}
+
 function shellSingle(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function automationBridgeRunnerGuide(req?: FastifyRequest) {
-  const panelUrl = requestPublicOrigin(req) || 'http://nasbot.cloud:36081';
+  const { panelUrl, panelUrlSource } = runnerGuidePanelUrl(req);
   const policy = getWecomBridgeRunnerPolicy();
   const configPath = '~/.config/wechat-on-cloud/wecom-bridge.env';
   const configPathShell = '$HOME/.config/wechat-on-cloud/wecom-bridge.env';
@@ -347,6 +363,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
   ].join('\n');
   return {
     panelUrl,
+    panelUrlSource,
     configPath,
     workspacePath,
     repoUrl,

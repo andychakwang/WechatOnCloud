@@ -355,6 +355,8 @@ json_assert_path report.level
 json_assert_path report.summary.block
 json_assert_path report.checks[0].id
 request_json GET /api/admin/automation/bridge
+json_assert_path bridge.runnerGuide.panelUrl
+json_assert_path bridge.runnerGuide.panelUrlSource
 json_assert_path bridge.runnerGuide.envFile
 json_assert_path bridge.runnerGuide.bootstrapScript
 json_assert_path bridge.runnerGuide.commands.writeEnv
@@ -382,6 +384,11 @@ json_assert_path bridge.runnerGuide.commands.doctorWithoutCli
 json_assert_path bridge.runnerGuide.commands.syncCliAudience
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WOC_PANEL_URL="* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WOC_PANEL_URL" >&2
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi

@@ -1016,6 +1016,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const knowledgeItems = cfg.knowledgeItems ?? [];
   const approvedKnowledgeCount = knowledgeItems.filter((item) => item.enabled && item.approved).length;
   const bridgeGuide = bridge?.runnerGuide;
+  const bridgePanelUrlSourceLabel =
+    bridgeGuide?.panelUrlSource === 'deployment'
+      ? '部署配置'
+      : bridgeGuide?.panelUrlSource === 'request'
+        ? '当前请求'
+        : bridgeGuide?.panelUrlSource === 'fallback'
+          ? '默认值'
+          : '';
   const bridgeWorkersSorted = (bridge?.workers || []).slice().sort((a, b) => {
     if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
     if (a.online !== b.online) return a.online ? -1 : 1;
@@ -3359,6 +3367,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                         <b>Mac Runner 接入</b>
                         <div className="muted small">
                           面板 <code>{bridgeGuide.panelUrl}</code> · 配置 <code>{bridgeGuide.configPath}</code>
+                          {bridgePanelUrlSourceLabel ? (
+                            <>
+                              {' · URL '}
+                              <code>{bridgePanelUrlSourceLabel}</code>
+                            </>
+                          ) : null}
                           {bridgeGuide.branch ? (
                             <>
                               {' · 分支 '}

@@ -591,6 +591,7 @@ export interface WecomBridgeRunnerPolicy {
 
 export interface AutomationBridgeRunnerGuide {
   panelUrl: string;
+  panelUrlSource?: 'deployment' | 'request' | 'fallback';
   configPath: string;
   workspacePath?: string;
   repoUrl?: string;
