@@ -660,6 +660,15 @@ export type AutomationActionQueueItemKind =
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
+export type AutomationActionQueueItemActionKind = 'approve-review';
+
+export interface AutomationActionQueueItemAction {
+  kind: AutomationActionQueueItemActionKind;
+  label: string;
+  description: string;
+  safety: 'review-only' | 'handoff' | 'inspect';
+  requiresConfirmation: boolean;
+}
 
 export interface AutomationActionQueueItem {
   id: string;
@@ -675,6 +684,7 @@ export interface AutomationActionQueueItem {
   updatedAt?: string;
   staleSeconds?: number;
   tags: string[];
+  actions?: AutomationActionQueueItemAction[];
 }
 
 export interface AutomationActionQueue {
@@ -2028,6 +2038,7 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     items.push({
       ...item,
       tags: uniqueStrings(item.tags.filter(Boolean)).slice(0, 8),
+      actions: actionQueueItemActions(item),
     });
   };
 
@@ -2297,6 +2308,44 @@ export function approveAutomationActionQueueReview(actor: User, itemId: string, 
     return { item, target: item.target, draft, queue: getAutomationActionQueue(limit) };
   }
   throw new Error('该队列项暂不支持快捷审核');
+}
+
+function actionQueueItemActions(item: AutomationActionQueueItem): AutomationActionQueueItemAction[] {
+  if (item.kind !== 'review-task' || !item.refId) return [];
+  if (item.target === 'reply') {
+    return [
+      {
+        kind: 'approve-review',
+        label: '审核回复',
+        description: '只批准这条 AI 回复草稿，让 Mac Runner 后续可领取；不会立即发送。',
+        safety: 'review-only',
+        requiresConfirmation: false,
+      },
+    ];
+  }
+  if (item.target === 'mass') {
+    return [
+      {
+        kind: 'approve-review',
+        label: '审核并排队',
+        description: '把群发队列标记为已审核并进入 queued；仍需 Mac Runner 按限流和领取规则执行。',
+        safety: 'review-only',
+        requiresConfirmation: false,
+      },
+    ];
+  }
+  if (item.target === 'moment') {
+    return [
+      {
+        kind: 'approve-review',
+        label: '审核就绪',
+        description: '把朋友圈草稿标记为已审核并进入 ready；仍需 Mac 端准备后人工发布。',
+        safety: 'review-only',
+        requiresConfirmation: false,
+      },
+    ];
+  }
+  return [];
 }
 
 function actionQueueRpaWorkerReadiness(

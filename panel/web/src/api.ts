@@ -846,6 +846,15 @@ export type AutomationActionQueueItemKind = 'preflight-check' | 'review-task' | 
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
+export type AutomationActionQueueItemActionKind = 'approve-review';
+
+export interface AutomationActionQueueItemAction {
+  kind: AutomationActionQueueItemActionKind;
+  label: string;
+  description: string;
+  safety: 'review-only' | 'handoff' | 'inspect';
+  requiresConfirmation: boolean;
+}
 
 export interface AutomationActionQueueItem {
   id: string;
@@ -861,6 +870,7 @@ export interface AutomationActionQueueItem {
   updatedAt?: string;
   staleSeconds?: number;
   tags: string[];
+  actions?: AutomationActionQueueItemAction[];
 }
 
 export interface AutomationActionQueue {

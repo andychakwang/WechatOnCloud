@@ -467,11 +467,8 @@ function actionQueuePriorityClass(priority: string): string {
   return 'tag-on';
 }
 
-function actionQueueReviewLabel(item: AutomationActionQueueItem): string {
-  if (item.target === 'reply') return '审核回复';
-  if (item.target === 'mass') return '审核并排队';
-  if (item.target === 'moment') return '审核就绪';
-  return '审核';
+function actionQueueApproveReviewAction(item: AutomationActionQueueItem): NonNullable<AutomationActionQueueItem['actions']>[number] | undefined {
+  return item.actions?.find((action) => action.kind === 'approve-review');
 }
 
 function KnowledgeRefs({ refs }: { refs?: AutomationKnowledgeReference[] }) {
@@ -884,7 +881,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   };
 
   const approveActionQueueReview = async (item: AutomationActionQueueItem) => {
-    if (item.kind !== 'review-task' || !item.refId) return;
+    if (!actionQueueApproveReviewAction(item)) return;
     setBusy(`action-review-${item.id}`);
     try {
       const { result } = await api.approveAutomationActionQueueItem(item.id, 12);
@@ -2334,13 +2331,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   </div>
                   <div className="auto-action-side">
                     <div className="muted small auto-action-age">{item.staleSeconds !== undefined ? fmtStaleSeconds(item.staleSeconds) : ''}</div>
-                    {item.kind === 'review-task' && item.refId && item.target !== 'ops' && (
+                    {actionQueueApproveReviewAction(item) && (
                       <button
                         className="btn-text"
+                        title={actionQueueApproveReviewAction(item)?.description || item.action}
                         disabled={busy === `action-review-${item.id}`}
                         onClick={() => approveActionQueueReview(item)}
                       >
-                        {actionQueueReviewLabel(item)}
+                        {actionQueueApproveReviewAction(item)?.label || '审核'}
                       </button>
                     )}
                   </div>
