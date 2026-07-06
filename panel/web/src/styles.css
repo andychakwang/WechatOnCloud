@@ -1288,6 +1288,31 @@ button {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+.auto-runtime {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 9px 10px;
+  border-radius: var(--r-small);
+  background: rgba(255 255 255 / 0.52);
+  box-shadow: inset 0 1px 0 rgba(var(--shadow) / 0.08), var(--crease-press);
+}
+.auto-runtime-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.auto-runtime-main b {
+  font-size: 13px;
+}
+.auto-runtime-tags {
+  justify-content: flex-end;
+  margin-top: 0;
+}
 .auto-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -1889,6 +1914,12 @@ button {
   .auto-action-queue-more {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .auto-runtime {
+    flex-direction: column;
+  }
+  .auto-runtime-tags {
+    justify-content: flex-start;
   }
   .auto-action-tags {
     flex-direction: row;

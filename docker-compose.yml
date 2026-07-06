@@ -12,6 +12,12 @@ services:
 
     environment:
       - PORT=8080
+      - WOC_DEPLOYMENT_PROFILE=${WOC_DEPLOYMENT_PROFILE:-production}
+      - WOC_DEPLOYMENT_LABEL=${WOC_DEPLOYMENT_LABEL:-原版生产面板}
+      - WOC_PUBLIC_URL=${WOC_PUBLIC_URL:-}
+      - WOC_HTTP_PORT=${WOC_HTTP_PORT:-36080}
+      - WOC_PANEL_CONTAINER=woc-panel
+      - WOC_PANEL_IMAGE=${WOC_IMAGE_PREFIX:-docker.io/gloridust}/woc-panel:${WOC_VERSION:-latest}
       # 新建微信实例时使用的镜像（多架构，amd64/arm64 自动匹配）；前缀同样跟随 WOC_IMAGE_PREFIX。
       - WOC_WECHAT_IMAGE=${WOC_IMAGE_PREFIX:-docker.io/gloridust}/wechat-on-cloud:${WOC_VERSION:-latest}
       # 透传给每个微信实例容器（KasmVNC 基础镜像用它们降权运行）

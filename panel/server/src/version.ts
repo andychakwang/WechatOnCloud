@@ -3,7 +3,32 @@
 // 运行时查询 Docker Hub 与 GHCR 上 woc-panel 的最新语义化标签，比对后给前端「有新版」红点。
 // 全程 best-effort：离线 / 被墙 / 私有源拉取失败时不报错、不打扰，仅不显示红点（记 error 供「上次检查」提示）。
 
+import { existsSync } from 'node:fs';
+
 export const CURRENT_VERSION = (process.env.WOC_VERSION || 'dev').trim();
+
+export interface DeploymentInfo {
+  profile: string;
+  label: string;
+  publicUrl: string | null;
+  panelPort: string | null;
+  panelContainer: string | null;
+  panelImage: string | null;
+  wechatImage: string | null;
+  panelDataPath: string;
+  automationDataPath: string;
+  allowedHosts: string[];
+  bridge: {
+    configured: boolean;
+    tokenLengthOk: boolean;
+    tokenEnvName: string;
+    minLength: number;
+  };
+  dockerSocket: {
+    path: string;
+    mounted: boolean;
+  };
+}
 
 export interface VersionInfo {
   current: string; // 当前构建版本（如 v1.2.0 / dev）
@@ -12,6 +37,42 @@ export interface VersionInfo {
   checkedAt: number; // 上次检查时间戳（ms）；0 = 尚未检查
   source: string | null; // 数据来源：dockerhub / ghcr / dockerhub+ghcr
   error: string | null; // 检查失败原因（两个源都拉不到时）
+  deployment: DeploymentInfo;
+}
+
+function splitCsv(value: string | undefined): string[] {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function deploymentInfo(): DeploymentInfo {
+  const bridgeToken = String(process.env.AUTOMATION_BRIDGE_TOKEN || process.env.WECOM_BRIDGE_TOKEN || '').trim();
+  const dockerSocketPath = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
+  const profile = String(process.env.WOC_DEPLOYMENT_PROFILE || process.env.WOC_PROFILE || 'production').trim() || 'production';
+  return {
+    profile,
+    label: String(process.env.WOC_DEPLOYMENT_LABEL || profile).trim() || profile,
+    publicUrl: String(process.env.WOC_PUBLIC_URL || process.env.PUBLIC_URL || '').trim() || null,
+    panelPort: String(process.env.WOC_HTTP_PORT || process.env.WOC_TEST_HTTP_PORT || process.env.WOC_DEV_HTTP_PORT || '').trim() || null,
+    panelContainer: String(process.env.WOC_PANEL_CONTAINER || '').trim() || null,
+    panelImage: String(process.env.WOC_PANEL_IMAGE || '').trim() || null,
+    wechatImage: String(process.env.WOC_WECHAT_IMAGE || '').trim() || null,
+    panelDataPath: String(process.env.PANEL_DATA || '/data/accounts.json'),
+    automationDataPath: String(process.env.PANEL_AUTOMATION_DATA || '/data/automation.json'),
+    allowedHosts: splitCsv(process.env.PANEL_ALLOWED_HOSTS),
+    bridge: {
+      configured: bridgeToken.length > 0,
+      tokenLengthOk: bridgeToken.length >= 16,
+      tokenEnvName: process.env.WECOM_BRIDGE_TOKEN ? 'WECOM_BRIDGE_TOKEN' : 'AUTOMATION_BRIDGE_TOKEN',
+      minLength: 16,
+    },
+    dockerSocket: {
+      path: dockerSocketPath,
+      mounted: existsSync(dockerSocketPath),
+    },
+  };
 }
 
 // 镜像命名空间：从 WOC_WECHAT_IMAGE 推断（面板与实例镜像同账号）。
@@ -64,11 +125,11 @@ async function ghcrTags(owner: string): Promise<string[]> {
   return Array.isArray(d?.tags) ? d.tags.map((t: any) => String(t)) : [];
 }
 
-let cache: VersionInfo = { current: CURRENT_VERSION, latest: null, hasUpdate: false, checkedAt: 0, source: null, error: null };
+let cache: Omit<VersionInfo, 'deployment'> = { current: CURRENT_VERSION, latest: null, hasUpdate: false, checkedAt: 0, source: null, error: null };
 let inflight: Promise<VersionInfo> | null = null;
 
 export function versionInfo(): VersionInfo {
-  return cache;
+  return { ...cache, deployment: deploymentInfo() };
 }
 
 // 查询两个仓库（并行、互不阻塞），取全局最大语义化版本与当前版本比对。失败静默写入 error。
@@ -99,7 +160,7 @@ export function checkForUpdate(): Promise<VersionInfo> {
       source: sources.join('+') || null,
       error: tags.length ? null : '无法连接镜像仓库（Docker Hub / GHCR）',
     };
-    return cache;
+    return versionInfo();
   })().finally(() => {
     inflight = null;
   });

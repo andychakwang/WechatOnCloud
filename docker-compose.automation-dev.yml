@@ -23,6 +23,12 @@ services:
 
     environment:
       - PORT=8080
+      - WOC_DEPLOYMENT_PROFILE=${WOC_DEPLOYMENT_PROFILE:-automation-dev}
+      - WOC_DEPLOYMENT_LABEL=${WOC_DEPLOYMENT_LABEL:-自动化源码开发面板}
+      - WOC_PUBLIC_URL=${WOC_PUBLIC_URL:-http://127.0.0.1:36082}
+      - WOC_DEV_HTTP_PORT=${WOC_DEV_HTTP_PORT:-36082}
+      - WOC_PANEL_CONTAINER=${WOC_DEV_PANEL_CONTAINER:-woc-panel-automation-dev}
+      - WOC_PANEL_IMAGE=${WOC_DEV_IMAGE_PREFIX:-woc-dev}/woc-panel:${WOC_DEV_VERSION:-automation-dev}
       - WOC_WECHAT_IMAGE=${WOC_DEV_IMAGE_PREFIX:-woc-dev}/wechat-on-cloud:${WOC_DEV_VERSION:-automation-dev}
       - PUID=${WOC_PUID:-1000}
       - PGID=${WOC_PGID:-1000}

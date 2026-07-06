@@ -24,6 +24,7 @@
 - 默认容器：`woc-panel-automation-dev`
 - 默认数据目录：`data-panel-automation-dev`
 - 默认本地镜像：`woc-dev/woc-panel:automation-dev` 与 `woc-dev/wechat-on-cloud:automation-dev`
+- `/api/version.deployment` 和 Web「自动化工作台」会显示当前运行画像，用于确认自己正在操作 `production`、`automation-test` 还是 `automation-dev`。
 
 运行：
 
@@ -45,6 +46,8 @@ BUILD_WECHAT_IMAGE=0 ./scripts/deploy-automation-dev.sh
 | 原版生产面板 | `36080` | `docker-compose.yml` | `data-panel` | Docker Hub / GHCR 正式镜像 |
 | 自动化测试面板 | `36081` | `docker-compose.automation-test.yml` / `fnos/woc-automation-test/docker-compose.yaml` | `data-panel-automation-test` | GHCR 已发布自动化镜像 |
 | 自动化源码开发面板 | `36082` | `docker-compose.automation-dev.yml` | `data-panel-automation-dev` | 当前源码本地构建 |
+
+运行画像不会回显密码、AI key 或 Bridge token，只显示 token 是否配置且长度是否达标、Docker socket 是否挂载、当前镜像/数据路径和公开访问地址。
 
 ## 2026-07-06 R84 镜像发布
 

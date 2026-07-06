@@ -18,6 +18,12 @@ services:
 
     environment:
       - PORT=8080
+      - WOC_DEPLOYMENT_PROFILE=${WOC_DEPLOYMENT_PROFILE:-automation-test}
+      - WOC_DEPLOYMENT_LABEL=${WOC_DEPLOYMENT_LABEL:-自动化测试面板}
+      - WOC_PUBLIC_URL=${WOC_PUBLIC_URL:-http://nasbot.cloud:36081}
+      - WOC_TEST_HTTP_PORT=${WOC_TEST_HTTP_PORT:-36081}
+      - WOC_PANEL_CONTAINER=woc-panel-automation-test
+      - WOC_PANEL_IMAGE=${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}/woc-panel:${WOC_VERSION:-andy-automation-usable-r84-2026-07-06}
       - WOC_WECHAT_IMAGE=${WOC_IMAGE_PREFIX:-ghcr.io/andychakwang}/wechat-on-cloud:${WOC_VERSION:-andy-automation-usable-r84-2026-07-06}
       - PUID=${WOC_PUID:-1000}
       - PGID=${WOC_PGID:-1000}

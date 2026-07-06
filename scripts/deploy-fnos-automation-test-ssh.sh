@@ -52,6 +52,7 @@ def set_env(compose_text: str, key: str, value: str) -> str:
 text = set_env(text, "PANEL_ADMIN_PASSWORD", os.environ["PANEL_ADMIN_PASSWORD"])
 
 optional_envs = [
+    "WOC_PUBLIC_URL",
     "AUTOMATION_AI_API_KEY",
     "AUTOMATION_AI_BASE_URL",
     "AUTOMATION_AI_MODEL",

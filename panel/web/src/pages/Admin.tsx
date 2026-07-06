@@ -832,6 +832,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
   const [bridgeRunSummary, setBridgeRunSummary] = useState<WecomBridgeRunReportsSummary | null>(null);
+  const [runtimeInfo, setRuntimeInfo] = useState<VersionInfo | null>(null);
   const [rpaPackageIssues, setRpaPackageIssues] = useState<WecomRpaPackageIssue[]>([]);
   const [runnerPolicy, setRunnerPolicy] = useState<WecomBridgeRunnerPolicy | null>(null);
   const [bridgeReplyDrafts, setBridgeReplyDrafts] = useState<Record<string, string>>({});
@@ -953,6 +954,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         { packages: rpaPackageIssues },
         { summary: bridgeRunSummary },
         { policy },
+        versionInfo,
       ] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
@@ -969,6 +971,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.listWecomRpaPackageIssues(20),
         api.getWecomBridgeRunReportsSummary(24, 300),
         api.getWecomBridgeRunnerPolicy(),
+        api.getVersion(),
       ]);
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
@@ -986,6 +989,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setRpaPackageIssues(rpaPackageIssues);
       setBridgeRunSummary(bridgeRunSummary);
       setRunnerPolicy(policy);
+      setRuntimeInfo(versionInfo);
       setBridgeReplyDrafts(
         Object.fromEntries(bridgeEvents.filter((event) => event.status !== 'archived').map((event) => [event.id, event.replyDraft || ''])),
       );
@@ -2386,6 +2390,23 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             校验目标
           </button>
         </div>
+        {runtimeInfo?.deployment && (
+          <div className="auto-runtime">
+            <div className="auto-runtime-main">
+              <b>{runtimeInfo.deployment.label}</b>
+              <span className="tag">{runtimeInfo.deployment.profile}</span>
+              <span className="muted small">{runtimeInfo.deployment.publicUrl || runtimeInfo.deployment.panelPort || '本机面板'}</span>
+            </div>
+            <div className="chip-row auto-runtime-tags">
+              <span className="chip chip-static">版本 {runtimeInfo.current}</span>
+              <span className={'chip chip-static' + (runtimeInfo.deployment.dockerSocket.mounted ? '' : ' chip-bad')}>Docker socket</span>
+              <span className={'chip chip-static' + (runtimeInfo.deployment.bridge.tokenLengthOk ? '' : ' chip-bad')}>
+                Bridge {runtimeInfo.deployment.bridge.configured ? '已配置' : '未配置'}
+              </span>
+              <span className="chip chip-static">数据 {runtimeInfo.deployment.automationDataPath}</span>
+            </div>
+          </div>
+        )}
         {health && (
           <div className={'auto-health auto-health-' + health.level}>
             <div className="auto-health-head">
@@ -4535,6 +4556,16 @@ function AboutSection({ isAdmin }: { isAdmin: boolean }) {
             </>
           )}
         </p>
+        {info?.deployment && (
+          <div className="chip-row">
+            <span className="chip chip-static">{info.deployment.label}</span>
+            <span className="chip chip-static">{info.deployment.profile}</span>
+            {info.deployment.panelContainer && <span className="chip chip-static">{info.deployment.panelContainer}</span>}
+            {info.deployment.publicUrl && <span className="chip chip-static">{info.deployment.publicUrl}</span>}
+            <span className={'chip chip-static' + (info.deployment.bridge.tokenLengthOk ? '' : ' chip-bad')}>Bridge token</span>
+            <span className={'chip chip-static' + (info.deployment.dockerSocket.mounted ? '' : ' chip-bad')}>Docker socket</span>
+          </div>
+        )}
         {info?.hasUpdate && (
           <div className="ver-hint">
             在宿主执行 <code>docker compose pull &amp;&amp; docker compose up -d</code> 升级面板；各实例镜像可在「管理 → 升级」单独更新。

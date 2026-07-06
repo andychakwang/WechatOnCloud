@@ -75,6 +75,29 @@ export interface VolEntry {
   mtime: number; // epoch ms
 }
 
+export interface DeploymentInfo {
+  profile: string;
+  label: string;
+  publicUrl: string | null;
+  panelPort: string | null;
+  panelContainer: string | null;
+  panelImage: string | null;
+  wechatImage: string | null;
+  panelDataPath: string;
+  automationDataPath: string;
+  allowedHosts: string[];
+  bridge: {
+    configured: boolean;
+    tokenLengthOk: boolean;
+    tokenEnvName: string;
+    minLength: number;
+  };
+  dockerSocket: {
+    path: string;
+    mounted: boolean;
+  };
+}
+
 export interface VersionInfo {
   current: string; // 当前构建版本（如 v1.2.0 / dev）
   latest: string | null; // 仓库上最新发布版（如 v1.2.1）；查不到为 null
@@ -82,6 +105,7 @@ export interface VersionInfo {
   checkedAt: number; // 上次检查时间戳（ms）；0=尚未检查
   source: string | null; // 数据来源：dockerhub / ghcr / dockerhub+ghcr
   error: string | null; // 检查失败原因
+  deployment: DeploymentInfo;
 }
 
 export interface PanelSelfUpgradePlan {
