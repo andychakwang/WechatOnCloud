@@ -1246,10 +1246,11 @@ app.post('/api/admin/instances/:id/automation/inspect', async (req, reply) => {
   if (!inst) return reply.code(404).send({ error: '实例不存在' });
   try {
     const includeScreenshot = !!(req.body as any)?.includeScreenshot;
-    const snapshot = await inspectAutomationInInstance(inst, { includeScreenshot });
+    const includeOcr = !!(req.body as any)?.includeOcr;
+    const snapshot = await inspectAutomationInInstance(inst, { includeScreenshot, includeOcr });
     appendPanelLog(
       'INFO',
-      `实例「${inst.name}」自动化视觉快照 by ${admin.username}：${snapshot.ok ? '成功' : '未就绪'}${snapshot.screenshot ? '，含截图' : ''}`,
+      `实例「${inst.name}」自动化视觉快照 by ${admin.username}：${snapshot.ok ? '成功' : '未就绪'}${snapshot.screenshot ? '，含截图' : ''}${snapshot.ocr ? '，含 OCR' : ''}`,
     );
     return { snapshot };
   } catch (e: any) {

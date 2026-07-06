@@ -872,6 +872,12 @@ export interface InstanceAutomationVisualSnapshot {
     dataUrl: string;
     bytes: number;
   };
+  ocr?: {
+    engine: 'tesseract';
+    languages: string;
+    text: string;
+    chars: number;
+  };
   warnings: string[];
   summary: string;
 }
@@ -904,9 +910,11 @@ export async function automationSelfTestInInstance(inst: Instance): Promise<Inst
 
 export async function inspectAutomationInInstance(
   inst: Instance,
-  options: { includeScreenshot?: boolean } = {},
+  options: { includeScreenshot?: boolean; includeOcr?: boolean } = {},
 ): Promise<InstanceAutomationVisualSnapshot> {
   const includeScreenshot = !!options.includeScreenshot;
+  const includeOcr = !!options.includeOcr;
+  const needsScreenshot = includeScreenshot || includeOcr;
   const cmd = [
     'set -e',
     'display="${DISPLAY:-}"',
@@ -920,13 +928,19 @@ export async function inspectAutomationInInstance(
     'sanitize(){ printf "%s" "$1" | tr "\\t\\r\\n" "   " | cut -c 1-180; }',
     'emit_window(){ wid="$1"; role="$2"; [ -n "$wid" ] || return 0; name="$(xdotool getwindowname "$wid" 2>/dev/null || true)"; geom="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null | tr "\\n" ";" || true)"; printf "WINDOW\\t%s\\t%s\\t%s\\t%s\\n" "$role" "$wid" "$(sanitize "$name")" "$geom"; }',
     'if command -v xdotool >/dev/null 2>&1; then active="$(xdotool getactivewindow 2>/dev/null || true)"; focus="$(xdotool getwindowfocus 2>/dev/null || true)"; emit_window "$active" active; emit_window "$focus" focus; xdotool getmouselocation --shell 2>/dev/null | tr "\\n" ";" | sed "s/^/POINTER\\t/"; wins="$(xdotool search --onlyvisible --name ".*" 2>/dev/null | tail -n 12 || true)"; for wid in $wins; do emit_window "$wid" visible; done; else echo "WARN\\txdotool unavailable"; fi',
-    includeScreenshot
+    needsScreenshot
       ? [
           'shot=/tmp/woc-automation-snapshot.png',
+          'ocr=/tmp/woc-automation-ocr.txt',
           'rm -f "$shot"',
           'if command -v import >/dev/null 2>&1; then import -window root png:"$shot" >/dev/null 2>&1 || true; elif command -v xwd >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then xwd -root -silent 2>/dev/null | convert xwd:- png:"$shot" >/dev/null 2>&1 || true; fi',
-          'if [ -s "$shot" ]; then size="$(wc -c < "$shot" | tr -d " ")"; if [ "$size" -le 700000 ]; then printf "SCREENSHOT\\timage/png\\t%s\\t" "$size"; base64 -w0 "$shot" 2>/dev/null || base64 "$shot" | tr -d "\\n"; printf "\\n"; else printf "WARN\\tscreenshot too large: %s bytes\\n" "$size"; fi; else echo "WARN\\tscreenshot unavailable"; fi',
-          'rm -f "$shot"',
+          includeScreenshot
+            ? 'if [ -s "$shot" ]; then size="$(wc -c < "$shot" | tr -d " ")"; if [ "$size" -le 700000 ]; then printf "SCREENSHOT\\timage/png\\t%s\\t" "$size"; base64 -w0 "$shot" 2>/dev/null || base64 "$shot" | tr -d "\\n"; printf "\\n"; else printf "WARN\\tscreenshot too large: %s bytes\\n" "$size"; fi; else echo "WARN\\tscreenshot unavailable"; fi'
+            : ':',
+          includeOcr
+            ? 'if [ -s "$shot" ] && command -v tesseract >/dev/null 2>&1; then if tesseract "$shot" stdout -l chi_sim+eng --psm 6 2>/tmp/woc-automation-ocr.err | head -c 4000 > "$ocr"; then chars="$(wc -m < "$ocr" | tr -d " ")"; printf "OCR\\ttesseract\\tchi_sim+eng\\t%s\\t" "$chars"; base64 -w0 "$ocr" 2>/dev/null || base64 "$ocr" | tr -d "\\n"; printf "\\n"; else printf "WARN\\tocr failed: %s\\n" "$(cat /tmp/woc-automation-ocr.err 2>/dev/null | tr "\\t\\r\\n" "   " | cut -c 1-180)"; fi; elif [ ! -s "$shot" ]; then echo "WARN\\tocr skipped: screenshot unavailable"; else echo "WARN\\tocr skipped: tesseract unavailable"; fi'
+            : ':',
+          'rm -f "$shot" "$ocr" /tmp/woc-automation-ocr.err',
         ].join('; ')
       : ':',
   ].join('; ');
@@ -943,6 +957,7 @@ function parseAutomationVisualSnapshot(out: string): InstanceAutomationVisualSna
   let focusedWindow: InstanceAutomationWindowSnapshot | null = null;
   let pointer = { x: null, y: null, screen: null, windowId: '' } as InstanceAutomationVisualSnapshot['pointer'];
   let screenshot: InstanceAutomationVisualSnapshot['screenshot'];
+  let ocr: InstanceAutomationVisualSnapshot['ocr'];
 
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
@@ -979,6 +994,20 @@ function parseAutomationVisualSnapshot(out: string): InstanceAutomationVisualSna
       }
       continue;
     }
+    if (kind === 'OCR') {
+      const [engine, languages, chars, b64] = parts;
+      const text = b64 ? Buffer.from(b64, 'base64').toString('utf8').replace(/\r/g, '').trim() : '';
+      const n = Number.parseInt(chars || '', 10);
+      if (engine === 'tesseract' && text) {
+        ocr = {
+          engine,
+          languages: languages || 'chi_sim+eng',
+          text,
+          chars: Number.isFinite(n) ? n : text.length,
+        };
+      }
+      continue;
+    }
     if (kind === 'WINDOW') {
       const [role, id = '', name = '', geometryText = ''] = parts;
       const window = parseWindowSnapshot(id, name, geometryText);
@@ -992,7 +1021,7 @@ function parseAutomationVisualSnapshot(out: string): InstanceAutomationVisualSna
   const ok = capabilities.xdotool && !!(activeWindow || focusedWindow || dedupedVisible.length);
   const title = activeWindow?.name || focusedWindow?.name || dedupedVisible[0]?.name || '未知窗口';
   const summary = ok
-    ? `当前活动窗口：${title}；可见窗口 ${dedupedVisible.length} 个${screenshot ? '；已截屏' : ''}${capabilities.ocr ? '；OCR 可用' : '；OCR 未安装'}。`
+    ? `当前活动窗口：${title}；可见窗口 ${dedupedVisible.length} 个${screenshot ? '；已截屏' : ''}${ocr ? `；OCR ${ocr.chars} 字` : capabilities.ocr ? '；OCR 可用' : '；OCR 未安装'}。`
     : '未能读取实例窗口状态；请确认实例正在运行且 X11 工具可用。';
   return {
     ok,
@@ -1004,6 +1033,7 @@ function parseAutomationVisualSnapshot(out: string): InstanceAutomationVisualSna
     pointer,
     capabilities,
     screenshot,
+    ocr,
     warnings: uniqueStrings(warnings).slice(0, 12),
     summary,
   };

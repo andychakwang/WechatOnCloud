@@ -1407,12 +1407,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
-  const inspectInstanceVisual = async (includeScreenshot = false) => {
+  const inspectInstanceVisual = async (includeScreenshot = false, includeOcr = false) => {
     if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
-    setBusy(includeScreenshot ? 'visual-screenshot' : 'visual-inspect');
+    setBusy(includeOcr ? 'visual-ocr' : includeScreenshot ? 'visual-screenshot' : 'visual-inspect');
     setVisualSnapshot(null);
     try {
-      const { snapshot } = await api.automationInspect(selectedInstance.id, { includeScreenshot });
+      const { snapshot } = await api.automationInspect(selectedInstance.id, { includeScreenshot, includeOcr });
       setVisualSnapshot(snapshot);
       toast(snapshot.ok ? '已读取实例感知快照' : '实例感知快照未就绪', snapshot.ok ? 'ok' : 'error');
     } catch (e: any) {
@@ -1776,6 +1776,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'visual-screenshot'} onClick={() => inspectInstanceVisual(true)}>
               截图快照
             </button>
+            <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'visual-ocr'} onClick={() => inspectInstanceVisual(true, true)}>
+              OCR 快照
+            </button>
           </div>
         </div>
         <div className="auto-toolbar auto-toolbar-secondary">
@@ -2119,6 +2122,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     {warning}
                   </span>
                 ))}
+              </div>
+            )}
+            {visualSnapshot.ocr && (
+              <div className="auto-visual-ocr">
+                <div className="muted small">
+                  OCR {visualSnapshot.ocr.languages} · {visualSnapshot.ocr.chars} 字
+                </div>
+                <pre>{visualSnapshot.ocr.text}</pre>
               </div>
             )}
             {visualSnapshot.screenshot && (

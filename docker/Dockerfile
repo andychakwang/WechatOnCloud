@@ -17,7 +17,8 @@ RUN set -eux; \
         libnss3 libgbm1 libasound2 libxss1 \
         xz-utils \
         chromium \
-        xdotool xclip; \
+        xdotool xclip x11-apps imagemagick \
+        tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng; \
     sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen; \
     locale-gen; \
     apt-get clean; \

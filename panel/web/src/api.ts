@@ -1030,6 +1030,12 @@ export interface InstanceAutomationVisualSnapshot {
     dataUrl: string;
     bytes: number;
   };
+  ocr?: {
+    engine: 'tesseract';
+    languages: string;
+    text: string;
+    chars: number;
+  };
   warnings: string[];
   summary: string;
 }
@@ -1426,7 +1432,7 @@ export const api = {
     }),
   automationSelfTest: (id: string) =>
     req<{ result: InstanceAutomationSelfTest }>(`/api/admin/instances/${id}/automation/self-test`, { method: 'POST' }),
-  automationInspect: (id: string, payload: { includeScreenshot?: boolean }) =>
+  automationInspect: (id: string, payload: { includeScreenshot?: boolean; includeOcr?: boolean }) =>
     req<{ snapshot: InstanceAutomationVisualSnapshot }>(`/api/admin/instances/${id}/automation/inspect`, {
       method: 'POST',
       body: JSON.stringify(payload),

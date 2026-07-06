@@ -1468,6 +1468,20 @@ button {
   flex-wrap: wrap;
   gap: 6px;
 }
+.auto-visual-ocr {
+  display: grid;
+  gap: 6px;
+}
+.auto-visual-ocr pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(var(--shadow) / 0.08);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .auto-visual-preview {
   display: grid;
   gap: 6px;
