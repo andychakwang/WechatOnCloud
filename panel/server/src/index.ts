@@ -76,6 +76,8 @@ import {
   volDownloadFile,
   volBackupStream,
   volRestoreArchive,
+  getPanelSelfUpgradePlan,
+  startPanelSelfUpgrade,
 } from './docker.js';
 import { createSession, getSession, destroySession, destroyUserSessions } from './sessions.js';
 import { parseHost, parseAllowedHosts, isRequestHostAllowed } from './host-guard.js';
@@ -94,6 +96,7 @@ import {
   recordWecomRpaPackageIssue,
   serializeWecomRpaPackage,
   importAutomationBundle,
+  importWecomAssistantAssets,
   ingestWecomBridgeEvents,
   planWecomBridgeEventReply,
   planWecomBridgeEventReplies,
@@ -153,6 +156,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const STATIC_DIR = process.env.STATIC_DIR || join(__dirname, '../../web/dist');
 const COOKIE = 'woc_sess';
 const AUTOMATION_BRIDGE_ENDPOINT = '/api/automation/bridge/wecom/import';
+const AUTOMATION_BRIDGE_ASSISTANT_ENDPOINT = '/api/automation/bridge/wecom/assistant-import';
 const AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT = '/api/automation/bridge/wecom/audience';
 const AUTOMATION_BRIDGE_MATERIAL_ENDPOINT = '/api/automation/bridge/wecom/materials';
 const AUTOMATION_BRIDGE_MATERIAL_MAP_ENDPOINT = '/api/automation/bridge/wecom/material-map';
@@ -372,6 +376,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       wecomCliInit: `${wecomCliExecutable} init`,
       wecomCliCheck: `${wecomCliExecutable} --version && ${wecomCliExecutable} auth show --auth-status`,
       syncCliAudience: `node scripts/wecom-bridge-client.mjs sync-cli-audience --wecom-cli ${wecomCliExecutable} --source wecom-cli-contact --tag wecom-cli`,
+      importAssistantAssets:
+        'node scripts/wecom-bridge-client.mjs import-assistant ~/Library/Application\\ Support/WeComAIAssistant/Backups/wecom-assistant-export.json --source wecom-ai-assistant --dry-run',
       dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       dryRunRpaPackageAll:
         'WECOM_USE_RPA_PACKAGE=1 WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
@@ -400,6 +406,7 @@ function automationBridgeStatus(req?: FastifyRequest) {
     compatibilityEnvName: 'WECOM_BRIDGE_TOKEN',
     endpoint: AUTOMATION_BRIDGE_ENDPOINT,
     knowledgeEndpoint: AUTOMATION_BRIDGE_ENDPOINT,
+    assistantEndpoint: AUTOMATION_BRIDGE_ASSISTANT_ENDPOINT,
     audienceEndpoint: AUTOMATION_BRIDGE_AUDIENCE_ENDPOINT,
     materialEndpoint: AUTOMATION_BRIDGE_MATERIAL_ENDPOINT,
     materialMapEndpoint: AUTOMATION_BRIDGE_MATERIAL_MAP_ENDPOINT,
@@ -509,6 +516,28 @@ app.post('/api/admin/version/check', async (req, reply) => {
   return await checkForUpdate();
 });
 
+app.get('/api/admin/panel-upgrade/plan', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  try {
+    const query = req.query as any;
+    return { plan: await getPanelSelfUpgradePlan(query?.version || query?.targetVersion || '') };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '生成面板升级计划失败' });
+  }
+});
+
+app.post('/api/admin/panel-upgrade/start', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = await startPanelSelfUpgrade(req.body as any);
+    appendPanelLog('WARN', `面板自升级由 ${admin.username} 触发：target=${result.plan.targetVersion} helper=${result.helperName}`);
+    return result;
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '启动面板自升级失败' });
+  }
+});
+
 // ---------- 自动化实验版（管理员） ----------
 // 这是与本地企微 AI 回复助手融合后的保守自动化内核：
 // 规则必须 approved，发送必须 confirm=true，且经过敏感词/限流/冷却校验。
@@ -616,6 +645,21 @@ app.post('/api/admin/automation/bundle/import', async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '导入自动化资产包失败' });
+  }
+});
+
+app.post('/api/admin/automation/wecom-assistant/import', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = importWecomAssistantAssets(admin, req.body as any);
+    appendPanelLog(
+      'INFO',
+      `${result.dryRun ? '预览' : '导入'}企微助手融合资产 by ${admin.username}：翻译规则 ${result.translated.rules}，资料 ${result.translated.knowledgeItems}；新增 ${Object.values(result.result.imported).reduce((sum, value) => sum + value, 0)}，更新 ${Object.values(result.result.updated).reduce((sum, value) => sum + value, 0)}，跳过 ${result.result.skipped + result.translated.skipped}`,
+    );
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '导入企微助手资产失败' });
   }
 });
 
@@ -790,6 +834,24 @@ app.post(AUTOMATION_BRIDGE_ENDPOINT, async (req, reply) => {
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || 'Bridge 导入接入资料失败' });
+  }
+});
+
+app.post(AUTOMATION_BRIDGE_ASSISTANT_ENDPOINT, async (req, reply) => {
+  if (!requireAutomationBridge(req, reply)) return;
+  try {
+    const body = (req.body as any) ?? {};
+    const result = importWecomAssistantAssets(AUTOMATION_BRIDGE_USER, {
+      ...body,
+      source: body?.source || 'wecom-ai-assistant-bridge',
+    });
+    appendPanelLog(
+      'INFO',
+      `${result.dryRun ? '预览' : 'Bridge 导入'}企微助手融合资产：翻译规则 ${result.translated.rules}，资料 ${result.translated.knowledgeItems}；新增 ${Object.values(result.result.imported).reduce((sum, value) => sum + value, 0)}，更新 ${Object.values(result.result.updated).reduce((sum, value) => sum + value, 0)}，跳过 ${result.result.skipped + result.translated.skipped}`,
+    );
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || 'Bridge 导入企微助手资产失败' });
   }
 });
 

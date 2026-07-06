@@ -84,6 +84,27 @@ export interface VersionInfo {
   error: string | null; // 检查失败原因
 }
 
+export interface PanelSelfUpgradePlan {
+  enabled: boolean;
+  currentVersion: string;
+  targetVersion: string;
+  targetContainer: string;
+  currentImage: string;
+  targetPanelImage: string;
+  targetWechatImage: string;
+  imagePrefix: string;
+  dockerSocket: string;
+  projectDir: string;
+  canStart: boolean;
+  warnings: string[];
+}
+
+export interface PanelSelfUpgradeStartResult {
+  ok: true;
+  helperName: string;
+  plan: PanelSelfUpgradePlan;
+}
+
 export type AutomationStep =
   | { type: 'text'; text: string; sendEnter?: boolean }
   | { type: 'image'; imagePath?: string; imageKey?: string; sendEnter?: boolean }
@@ -600,6 +621,7 @@ export interface AutomationBridgeStatus {
   compatibilityEnvName: string;
   endpoint: string;
   knowledgeEndpoint: string;
+  assistantEndpoint: string;
   audienceEndpoint: string;
   materialEndpoint: string;
   materialMapEndpoint: string;
@@ -932,6 +954,19 @@ export interface AutomationBundleImportResult {
   errors: string[];
 }
 
+export interface WecomAssistantImportResult {
+  source: string;
+  dryRun: boolean;
+  mode: AutomationBundleMode;
+  translated: {
+    rules: number;
+    knowledgeItems: number;
+    skipped: number;
+    errors: string[];
+  };
+  result: AutomationBundleImportResult;
+}
+
 export interface AutomationDecision {
   action: 'send-rule' | 'review' | 'none' | 'blocked';
   rule: AutomationRule | null;
@@ -1141,6 +1176,10 @@ export const api = {
   // 版本与更新检测
   getVersion: () => req<VersionInfo>('/api/version'),
   checkUpdate: () => req<VersionInfo>('/api/admin/version/check', { method: 'POST' }),
+  getPanelUpgradePlan: (version = '') =>
+    req<{ plan: PanelSelfUpgradePlan }>(`/api/admin/panel-upgrade/plan${version ? `?version=${encodeURIComponent(version)}` : ''}`),
+  startPanelUpgrade: (payload: { version: string; confirm: boolean }) =>
+    req<PanelSelfUpgradeStartResult>('/api/admin/panel-upgrade/start', { method: 'POST', body: JSON.stringify(payload) }),
 
   // 自动化实验版（规则、AI 草稿、确认发送）
   getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
@@ -1165,6 +1204,27 @@ export const api = {
     includeRunnerPolicy?: boolean;
   }) =>
     req<{ result: AutomationBundleImportResult }>('/api/admin/automation/bundle/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  importWecomAssistantAssets: (payload: {
+    source?: string;
+    dryRun?: boolean;
+    mode?: AutomationBundleMode;
+    approveImported?: boolean;
+    payload?: any;
+    snapshot?: any;
+    assistant?: any;
+    wecomAssistant?: any;
+    keywordReplyRules?: any[];
+    keywordRules?: any[];
+    knowledge?: any;
+    persistedKnowledge?: any;
+    localKnowledge?: any;
+    knowledgeEntries?: any[];
+    knowledgeChunks?: any[];
+  }) =>
+    req<{ result: WecomAssistantImportResult }>('/api/admin/automation/wecom-assistant/import', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

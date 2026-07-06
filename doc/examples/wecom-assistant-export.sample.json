@@ -1,0 +1,60 @@
+{
+  "source": "wecom-ai-assistant",
+  "approveImported": false,
+  "payload": {
+    "knowledge": {
+      "notes": "全局边界：不要编造价格、退款政策或强承诺；涉及付款、验证码、账号安全时转人工。",
+      "entries": [
+        {
+          "title": "资料领取",
+          "keywords": ["资料", "领取", "怎么了解"],
+          "answer": "先确认客户想了解的方向，再发送对应资料；不要一次性刷屏。",
+          "isApprovedForAutomaticSend": false
+        }
+      ]
+    },
+    "Knowledge": {
+      "Notes": "Windows/Swift 导出也可能使用 PascalCase 字段，导入器会一并识别。",
+      "Entries": [
+        {
+          "Title": "价格说明",
+          "Keywords": ["价格", "多少钱", "费用"],
+          "Answer": "先确认客户场景和人数，再给出对应套餐说明；遇到议价或付款问题转人工。",
+          "IsApprovedForAutomaticSend": false
+        }
+      ]
+    },
+    "keywordReplyRules": [
+      {
+        "name": "咨询欢迎语",
+        "keywords": ["咨询", "了解", "怎么报名"],
+        "priority": 10,
+        "isEnabled": true,
+        "isApprovedForAutomaticSend": false,
+        "steps": [
+          {
+            "contentType": "text",
+            "text": "你好，我先了解一下你的情况，再给你匹配资料。",
+            "delayBeforeSendingSeconds": 1
+          }
+        ]
+      }
+    ],
+    "KeywordReplyRules": [
+      {
+        "Name": "资料关键词回复",
+        "KeywordText": "资料, 领取资料, 发我看看",
+        "Priority": 20,
+        "IsEnabled": true,
+        "IsApprovedForAutomaticSend": false,
+        "Steps": [
+          {
+            "ContentType": "text",
+            "Text": "可以，我先发你一份概览资料；如果你告诉我行业和人数，我再补一份更贴近你的版本。",
+            "DelayBeforeSendingSeconds": 1
+          }
+        ]
+      }
+    ]
+  }
+}

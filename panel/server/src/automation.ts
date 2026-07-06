@@ -1017,6 +1017,19 @@ export interface AutomationBundleImportResult {
   errors: string[];
 }
 
+export interface WecomAssistantImportResult {
+  source: string;
+  dryRun: boolean;
+  mode: AutomationBundleMode;
+  translated: {
+    rules: number;
+    knowledgeItems: number;
+    skipped: number;
+    errors: string[];
+  };
+  result: AutomationBundleImportResult;
+}
+
 interface AutomationData extends AutomationConfig {
   audienceContacts: AutomationAudienceContact[];
   materialAssets: AutomationMaterialAsset[];
@@ -2444,6 +2457,342 @@ export function importAutomationBundle(actor: User, raw: any): AutomationBundleI
     });
   }
   return result;
+}
+
+export function importWecomAssistantAssets(actor: User, raw: any): WecomAssistantImportResult {
+  const source = str(raw?.source || raw?.sourceName || 'wecom-ai-assistant', 80).trim() || 'wecom-ai-assistant';
+  const dryRun = raw?.dryRun !== false;
+  const mode: AutomationBundleMode = raw?.mode === 'append' ? 'append' : 'upsert';
+  const translated = translateWecomAssistantAssets(raw, source);
+  const result = importAutomationBundle(actor, {
+    bundle: translated.bundle,
+    dryRun,
+    mode,
+    includeConfig: false,
+    includeQueues: false,
+    keepOperationalState: false,
+  });
+  return {
+    source,
+    dryRun: result.dryRun,
+    mode: result.mode,
+    translated: {
+      rules: translated.rules.length,
+      knowledgeItems: translated.knowledgeItems.length,
+      skipped: translated.errors.length,
+      errors: translated.errors,
+    },
+    result,
+  };
+}
+
+function translateWecomAssistantAssets(raw: any, source: string): { bundle: AutomationBundle; rules: any[]; knowledgeItems: any[]; errors: string[] } {
+  const root = unwrapWecomAssistantPayload(raw);
+  const approveImported = raw?.approveImported === true || raw?.approved === true;
+  const now = new Date().toISOString();
+  const errors: string[] = [];
+  const rules: any[] = [];
+  const knowledgeItems: any[] = [];
+
+  for (const [index, rule] of extractWecomAssistantRuleItems(root).entries()) {
+    try {
+      rules.push(wecomAssistantRuleToAutomationRule(rule, index, approveImported));
+    } catch (e: any) {
+      errors.push(`关键词规则第 ${index + 1} 条跳过：${e?.message || e}`);
+    }
+  }
+
+  for (const [index, item] of extractWecomAssistantKnowledgeItems(root, source, approveImported).entries()) {
+    try {
+      if (!String(item.content || '').trim()) throw new Error('内容为空');
+      knowledgeItems.push(item);
+    } catch (e: any) {
+      errors.push(`知识库第 ${index + 1} 条跳过：${e?.message || e}`);
+    }
+  }
+
+  if (!rules.length && !knowledgeItems.length && !errors.length) {
+    errors.push('没有识别到 wecom-ai-assistant 的关键词规则或知识库条目');
+  }
+
+  const config = getAutomationConfig();
+  const bundle: AutomationBundle = {
+    schema: 'wechat-on-cloud.automation-bundle',
+    version: 1,
+    exportedAt: now,
+    summary: {
+      rules: rules.length,
+      knowledgeItems: knowledgeItems.length,
+      audienceContacts: 0,
+      materialAssets: 0,
+      massSendJobs: 0,
+      momentDrafts: 0,
+      bridgeEvents: 0,
+    },
+    config: {
+      ...config,
+      rules,
+      knowledgeItems,
+    },
+    audienceContacts: [],
+    materialAssets: [],
+    massSendJobs: [],
+    momentDrafts: [],
+    runnerPolicy: cloneRunnerPolicy(data.runnerPolicy),
+  };
+  return { bundle, rules, knowledgeItems, errors };
+}
+
+function unwrapWecomAssistantPayload(raw: any): any {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  for (const key of ['payload', 'Payload', 'snapshot', 'Snapshot', 'assistant', 'Assistant', 'wecomAssistant', 'WecomAssistant', 'wecomAiAssistant', 'WecomAiAssistant', 'data', 'Data', 'export', 'Export']) {
+    const value = raw[key];
+    if (value && typeof value === 'object') return value;
+  }
+  return raw;
+}
+
+function extractWecomAssistantRuleItems(root: any): any[] {
+  const groups = [
+    root,
+    root?.keywordReplyRules,
+    root?.KeywordReplyRules,
+    root?.keyword_reply_rules,
+    root?.keywordRules,
+    root?.KeywordRules,
+    root?.replyRules,
+    root?.ReplyRules,
+    root?.localKeywordReplyRules,
+    root?.LocalKeywordReplyRules,
+    root?.rules,
+    root?.Rules,
+    root?.automation?.keywordReplyRules,
+    root?.automation?.KeywordReplyRules,
+    root?.Automation?.keywordReplyRules,
+    root?.Automation?.KeywordReplyRules,
+    root?.assistant?.keywordReplyRules,
+    root?.assistant?.KeywordReplyRules,
+    root?.Assistant?.keywordReplyRules,
+    root?.Assistant?.KeywordReplyRules,
+  ];
+  return groups.flatMap((group) => arrayItems(group).filter(looksLikeWecomAssistantRule)).slice(0, 200);
+}
+
+function extractWecomAssistantKnowledgeItems(root: any, source: string, approveImported: boolean): any[] {
+  const items: any[] = [];
+  const notes = uniqueStrings(
+    [
+      root?.knowledgeNotes,
+      root?.KnowledgeNotes,
+      root?.notes,
+      root?.Notes,
+      root?.knowledge?.notes,
+      root?.knowledge?.Notes,
+      root?.Knowledge?.notes,
+      root?.Knowledge?.Notes,
+      root?.persistedKnowledge?.notes,
+      root?.PersistedKnowledge?.Notes,
+      root?.localKnowledge?.notes,
+      root?.LocalKnowledge?.Notes,
+      root?.assistant?.knowledge?.notes,
+      root?.assistant?.Knowledge?.Notes,
+      root?.Assistant?.Knowledge?.Notes,
+    ]
+      .map((value) => str(value, 50000).trim())
+      .filter(Boolean),
+  ).join('\n\n');
+  if (notes) {
+    items.push({
+      title: '企微助手全局资料',
+      category: 'policy',
+      source,
+      tags: ['wecom-ai-assistant', 'global'],
+      triggers: [],
+      content: notes,
+      enabled: true,
+      approved: approveImported,
+    });
+  }
+
+  const entryGroups = [
+    Array.isArray(root?.knowledge) ? root.knowledge : [],
+    Array.isArray(root?.Knowledge) ? root.Knowledge : [],
+    root?.knowledge?.entries,
+    root?.knowledge?.Entries,
+    root?.Knowledge?.entries,
+    root?.Knowledge?.Entries,
+    root?.persistedKnowledge?.entries,
+    root?.persistedKnowledge?.Entries,
+    root?.PersistedKnowledge?.entries,
+    root?.PersistedKnowledge?.Entries,
+    root?.localKnowledge?.entries,
+    root?.localKnowledge?.Entries,
+    root?.LocalKnowledge?.entries,
+    root?.LocalKnowledge?.Entries,
+    root?.assistant?.knowledge?.entries,
+    root?.assistant?.knowledge?.Entries,
+    root?.assistant?.Knowledge?.entries,
+    root?.assistant?.Knowledge?.Entries,
+    root?.Assistant?.Knowledge?.entries,
+    root?.Assistant?.Knowledge?.Entries,
+    root?.entries,
+    root?.Entries,
+    root?.knowledgeEntries,
+    root?.KnowledgeEntries,
+    root?.items,
+    root?.Items,
+  ];
+  for (const entry of entryGroups.flatMap((group) => arrayItems(group)).filter(looksLikeWecomAssistantKnowledgeEntry)) {
+    items.push(wecomAssistantKnowledgeEntryToItem(entry, source, approveImported));
+  }
+
+  const chunks = [root?.knowledgeChunks, root?.KnowledgeChunks, root?.assistant?.knowledgeChunks, root?.assistant?.KnowledgeChunks, root?.Assistant?.KnowledgeChunks].flatMap((group) =>
+    arrayItems(group),
+  );
+  for (const chunk of chunks.filter((item) => String(readWecomField(item, ['content', 'Content', 'text', 'Text', 'body', 'Body']) || '').trim())) {
+    const fileName = str(readWecomField(chunk, ['fileName', 'FileName', 'name', 'Name', 'sourceName', 'SourceName']) ?? '企微助手知识片段', 120).trim();
+    items.push({
+      title: fileName,
+      category: 'faq',
+      source,
+      tags: ['wecom-ai-assistant', 'mvp-knowledge'],
+      triggers: normalizeWecomAssistantKeywords(readWecomField(chunk, ['keywords', 'Keywords', 'tags', 'Tags']), 20),
+      content: str(readWecomField(chunk, ['content', 'Content', 'text', 'Text', 'body', 'Body']), 12000).trim(),
+      enabled: readWecomBoolean(chunk, ['enabled', 'Enabled', 'isEnabled', 'IsEnabled']) !== false,
+      approved: readWecomBoolean(chunk, ['approved', 'Approved', 'isApprovedForAutomaticSend', 'IsApprovedForAutomaticSend']) ?? approveImported,
+    });
+  }
+
+  return items.slice(0, MAX_KNOWLEDGE_ITEMS);
+}
+
+function wecomAssistantRuleToAutomationRule(raw: any, index: number, approveImported: boolean): any {
+  const keywords = normalizeWecomAssistantKeywords(readWecomField(raw, ['keywords', 'Keywords', 'keywordText', 'KeywordText', 'keyword', 'Keyword', 'triggers', 'Triggers', 'match', 'Match']), 50);
+  if (!keywords.length) throw new Error('关键词为空');
+  const responseSteps = extractWecomAssistantResponseSteps(raw);
+  if (!responseSteps.length) throw new Error('回复步骤为空');
+  const fallbackName = keywords.length ? `关键词：${keywords.slice(0, 3).join('、')}` : `企微助手规则 ${index + 1}`;
+  const enabled = readWecomBoolean(raw, ['isEnabled', 'IsEnabled', 'enabled', 'Enabled']);
+  const approved = readWecomBoolean(raw, ['isApprovedForAutomaticSend', 'IsApprovedForAutomaticSend', 'approved', 'Approved', 'autoSendApproved', 'AutoSendApproved']);
+  return {
+    name: str(readWecomField(raw, ['name', 'Name', 'title', 'Title', 'label', 'Label']) ?? fallbackName, 80).trim() || fallbackName,
+    enabled: enabled ?? true,
+    approved: approved ?? approveImported,
+    priority: clampInt(readWecomField(raw, ['priority', 'Priority', 'sort', 'Sort']), 0, 9999, 100),
+    triggers: keywords,
+    responseSteps,
+  };
+}
+
+function extractWecomAssistantResponseSteps(raw: any): AutomationStep[] {
+  const sourceSteps =
+    firstWecomArray(raw, ['steps', 'Steps', 'responseSteps', 'ResponseSteps', 'replies', 'Replies', 'actions', 'Actions']) ??
+    [{ contentType: 'text', text: readWecomField(raw, ['reply', 'Reply', 'answer', 'Answer', 'text', 'Text', 'content', 'Content', 'message', 'Message']) ?? '' }];
+  return sourceSteps.flatMap(wecomAssistantStepToAutomationSteps).slice(0, 30);
+}
+
+function wecomAssistantStepToAutomationSteps(raw: any): AutomationStep[] {
+  const steps: AutomationStep[] = [];
+  const waitSeconds = clampInt(readWecomField(raw, ['delayBeforeSendingSeconds', 'DelayBeforeSendingSeconds', 'delaySeconds', 'DelaySeconds', 'waitSeconds', 'WaitSeconds', 'seconds', 'Seconds']), 0, 3600, 0);
+  if (waitSeconds > 0) steps.push({ type: 'wait', seconds: waitSeconds });
+
+  const type = String(readWecomField(raw, ['contentType', 'ContentType', 'type', 'Type', 'kind', 'Kind']) ?? '').trim().toLowerCase();
+  const text = str(readWecomField(raw, ['text', 'Text', 'content', 'Content', 'reply', 'Reply', 'message', 'Message']), 3000).trim();
+  const imageKey = str(readWecomField(raw, ['imageKey', 'ImageKey', 'materialKey', 'MaterialKey', 'key', 'Key']), 120).trim();
+  const imagePath = str(readWecomField(raw, ['imagePath', 'ImagePath', 'path', 'Path', 'localPath', 'LocalPath', 'filePath', 'FilePath']), 500).trim();
+  const sendEnter = readWecomBoolean(raw, ['sendEnter', 'SendEnter']);
+
+  if (type === 'image' || imageKey || imagePath) {
+    if (imageKey || imagePath) steps.push({ type: 'image', imageKey: imageKey || undefined, imagePath: imagePath || undefined, sendEnter: sendEnter !== false });
+    return steps;
+  }
+  if (text) steps.push({ type: 'text', text, sendEnter: sendEnter !== false });
+  return steps;
+}
+
+function wecomAssistantKnowledgeEntryToItem(raw: any, source: string, approveImported: boolean): any {
+  const content = str(readWecomField(raw, ['answer', 'Answer', 'content', 'Content', 'text', 'Text', 'body', 'Body', 'notes', 'Notes']), 12000).trim();
+  const title = str(readWecomField(raw, ['title', 'Title', 'name', 'Name', 'question', 'Question', 'label', 'Label']), 120).trim() || deriveTitleFromContent(content);
+  const enabled = readWecomBoolean(raw, ['enabled', 'Enabled', 'isEnabled', 'IsEnabled']);
+  const approved = readWecomBoolean(raw, ['isApprovedForAutomaticSend', 'IsApprovedForAutomaticSend', 'approved', 'Approved', 'autoSendApproved', 'AutoSendApproved']);
+  return {
+    title: title || '企微助手知识条目',
+    category: normalizeKnowledgeCategory(readWecomField(raw, ['category', 'Category', 'type', 'Type'])) || 'faq',
+    source,
+    tags: normalizeWecomAssistantKeywords(readWecomField(raw, ['tags', 'Tags', 'labels', 'Labels', 'keywords', 'Keywords']), 30),
+    triggers: normalizeWecomAssistantKeywords(readWecomField(raw, ['keywords', 'Keywords', 'triggers', 'Triggers', 'questions', 'Questions', 'question', 'Question']), 50),
+    content,
+    enabled: enabled ?? true,
+    approved: approved ?? approveImported,
+  };
+}
+
+function looksLikeWecomAssistantRule(raw: any): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const hasKeywords = normalizeWecomAssistantKeywords(readWecomField(raw, ['keywords', 'Keywords', 'keywordText', 'KeywordText', 'keyword', 'Keyword', 'triggers', 'Triggers', 'match', 'Match']), 50).length > 0;
+  const hasStepArray = !!firstWecomArray(raw, ['steps', 'Steps', 'responseSteps', 'ResponseSteps', 'replies', 'Replies', 'actions', 'Actions']);
+  const hasRuleMeta = ['priority', 'Priority', 'isEnabled', 'IsEnabled', 'keywordText', 'KeywordText'].some((key) => Object.prototype.hasOwnProperty.call(raw, key)) || hasStepArray;
+  const hasReplyText = !!str(readWecomField(raw, ['reply', 'Reply', 'message', 'Message', 'text', 'Text', 'content', 'Content', 'answer', 'Answer']), 3000).trim();
+  return hasKeywords && (hasStepArray || (hasRuleMeta && hasReplyText));
+}
+
+function looksLikeWecomAssistantKnowledgeEntry(raw: any): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  if (looksLikeWecomAssistantRule(raw)) return false;
+  return !!str(readWecomField(raw, ['answer', 'Answer', 'content', 'Content', 'text', 'Text', 'body', 'Body', 'notes', 'Notes']), 12000).trim();
+}
+
+function arrayItems(value: any): any[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object' && Array.isArray(value.items)) return value.items;
+  if (value && typeof value === 'object' && Array.isArray(value.Items)) return value.Items;
+  if (value && typeof value === 'object' && Array.isArray(value.entries)) return value.entries;
+  if (value && typeof value === 'object' && Array.isArray(value.Entries)) return value.Entries;
+  return [];
+}
+
+function normalizeWecomAssistantKeywords(raw: any, limit: number): string[] {
+  const values = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,，、;；|｜/／]+/g) : raw && typeof raw === 'object' ? Object.values(raw) : [];
+  return uniqueStrings(
+    values
+      .flatMap((value: any) => {
+        const text = value && typeof value === 'object' ? readWecomField(value, ['keyword', 'Keyword', 'text', 'Text', 'name', 'Name', 'value', 'Value']) : value;
+        return str(text, 80).split(/[\n,，、;；|｜/／]+/g);
+      })
+      .map((value: any) => str(value, 80).trim())
+      .filter(Boolean),
+  ).slice(0, limit);
+}
+
+function readWecomField(raw: any, keys: string[]): any {
+  if (!raw || typeof raw !== 'object') return undefined;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) return raw[key];
+  }
+  return undefined;
+}
+
+function readWecomBoolean(raw: any, keys: string[]): boolean | undefined {
+  const value = readWecomField(raw, keys);
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  }
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  return undefined;
+}
+
+function firstWecomArray(raw: any, keys: string[]): any[] | undefined {
+  for (const key of keys) {
+    const value = raw?.[key];
+    if (Array.isArray(value)) return value;
+  }
+  return undefined;
 }
 
 export function listWecomBridgeEvents(limit = 100, status?: string): WecomBridgeEvent[] {

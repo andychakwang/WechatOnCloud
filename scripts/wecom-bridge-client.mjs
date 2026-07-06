@@ -6,7 +6,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r82-wecom-cli-audience-sync';
+const CLIENT_VERSION = 'automation-lab-r85-wecom-assistant-import';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
@@ -59,6 +59,7 @@ Environment:
 
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
+  import-assistant <file|-> [--source name] [--approve-imported] [--dry-run]
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   sync-cli-audience [--wecom-cli wecom-cli] [--source wecom-cli-contact] [--tag tag] [--approve-imported] [--dry-run] [--output file]
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
@@ -92,6 +93,7 @@ Commands:
 
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
+  node scripts/wecom-bridge-client.mjs import-assistant doc/examples/wecom-assistant-export.sample.json --dry-run
   node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
   node scripts/wecom-bridge-client.mjs sync-cli-audience --dry-run
   node scripts/wecom-bridge-client.mjs import-materials doc/examples/wecom-materials.sample.json
@@ -255,6 +257,21 @@ function normalizeKnowledgePayload(input, options) {
   if (Array.isArray(input)) return { source, category, mode, approveImported, items: input };
   if (Array.isArray(input?.items)) return { ...input, source, category: input.category || category, mode, approveImported };
   return { source, category, mode, approveImported, items: [input] };
+}
+
+function normalizeAssistantPayload(input, options) {
+  const source = String(options.source || input?.source || 'wecom-ai-assistant');
+  const mode = String(options.mode || input?.mode || 'upsert');
+  const approveImported = boolOpt(options, 'approve-imported', 'approve') || input?.approveImported === true;
+  const dryRun = boolOpt(options, 'dry-run') || input?.dryRun === true;
+  const base = Array.isArray(input) ? { keywordReplyRules: input } : input && typeof input === 'object' ? input : { payload: input };
+  return {
+    ...base,
+    source,
+    mode,
+    approveImported,
+    dryRun,
+  };
 }
 
 function normalizeAudiencePayload(input, options) {
@@ -1538,6 +1555,13 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeKnowledgePayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/import', payload));
+    return;
+  }
+
+  if (command === 'import-assistant' || command === 'import-wecom-assistant') {
+    const input = await readJsonInput(positional[0] || options.file || '-');
+    const payload = normalizeAssistantPayload(input, options);
+    printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/assistant-import', payload));
     return;
   }
 

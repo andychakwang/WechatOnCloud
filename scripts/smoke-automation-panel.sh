@@ -636,6 +636,125 @@ json_assert_path asset.approved
 request_json DELETE "/api/admin/automation/materials/$material_id"
 json_assert_path ok
 
+say "Import wecom-ai-assistant local assets"
+assistant_payload="$(python3 - "$stamp" "$reply_image_file" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+image_path = sys.argv[2]
+payload = {
+    "source": f"smoke-wecom-assistant-{stamp}",
+    "approveImported": True,
+    "mode": "upsert",
+    "payload": {
+        "knowledge": {
+            "notes": f"Smoke assistant global notes {stamp}",
+            "entries": [
+                {
+                    "title": f"smoke-assistant-knowledge-{stamp}",
+                    "keywords": [f"assistant-knowledge-{stamp}"],
+                    "answer": "Imported from Swift KnowledgeEntry.",
+                    "isApprovedForAutomaticSend": True,
+                }
+            ],
+        },
+        "Knowledge": {
+            "Notes": f"Smoke assistant PascalCase notes {stamp}",
+            "Entries": [
+                {
+                    "Title": f"smoke-assistant-windows-knowledge-{stamp}",
+                    "Keywords": [f"assistant-windows-knowledge-{stamp}"],
+                    "Answer": "Imported from Windows KeywordModels-style KnowledgeEntry.",
+                    "IsApprovedForAutomaticSend": True,
+                }
+            ],
+        },
+        "keywordReplyRules": [
+            {
+                "name": f"smoke-assistant-rule-{stamp}",
+                "keywords": [f"assistant-rule-{stamp}"],
+                "priority": 7,
+                "isEnabled": True,
+                "isApprovedForAutomaticSend": True,
+                "steps": [
+                    {"contentType": "text", "text": "assistant text reply", "delayBeforeSendingSeconds": 1},
+                    {"contentType": "image", "imagePath": image_path},
+                ],
+            }
+        ],
+        "KeywordReplyRules": [
+            {
+                "Name": f"smoke-assistant-windows-rule-{stamp}",
+                "KeywordText": f"assistant-windows-rule-{stamp}",
+                "Priority": 8,
+                "IsEnabled": True,
+                "IsApprovedForAutomaticSend": True,
+                "Steps": [
+                    {"ContentType": "text", "Text": "assistant Windows-style reply", "DelayBeforeSendingSeconds": 1},
+                    {"ContentType": "image", "ImagePath": image_path},
+                ],
+            }
+        ],
+    },
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/wecom-assistant/import "$(python3 - "$assistant_payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+payload["dryRun"] = True
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)"
+json_assert_eq result.translated.rules 2
+json_assert_eq result.translated.knowledgeItems 3
+json_assert_eq result.result.imported.rules 2
+json_assert_eq result.result.imported.knowledgeItems 3
+request_json POST /api/admin/automation/wecom-assistant/import "$(python3 - "$assistant_payload" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+payload["dryRun"] = False
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)"
+json_assert_eq result.result.imported.rules 2
+json_assert_eq result.result.imported.knowledgeItems 3
+assistant_rule_ids="$(json_get result.result.ids.rules)"
+assistant_knowledge_ids="$(json_get result.result.ids.knowledgeItems)"
+request_json GET /api/admin/automation/config
+assistant_config_cleanup="$(python3 - "$body_file" "$assistant_rule_ids" <<'PY'
+import json
+import sys
+
+file, rule_ids_json = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+rule_ids = set(json.loads(rule_ids_json))
+config = payload["config"]
+config["rules"] = [rule for rule in config.get("rules", []) if rule.get("id") not in rule_ids]
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+while IFS= read -r assistant_knowledge_id; do
+  request_json DELETE "/api/admin/automation/knowledge/$assistant_knowledge_id"
+  json_assert_path ok
+done < <(python3 - "$assistant_knowledge_ids" <<'PY'
+import json
+import sys
+
+for item_id in json.loads(sys.argv[1]):
+    print(item_id)
+PY
+)
+request_json PUT /api/admin/automation/config "$assistant_config_cleanup"
+json_assert_path config.rules
+
 say "Export, preview and import automation bundle"
 bundle_payload="$(python3 - "$stamp" "$reply_image_file" <<'PY'
 import json
@@ -861,6 +980,99 @@ PY
   bridge_id="$(json_get result.items[0].id)"
   request_json DELETE "/api/admin/automation/knowledge/$bridge_id"
   json_assert_path ok
+
+  say "Import wecom-ai-assistant assets through Bridge"
+  bridge_assistant_payload="$(python3 - "$stamp" "$reply_image_file" <<'PY'
+import json
+import sys
+
+stamp = sys.argv[1]
+image_path = sys.argv[2]
+print(json.dumps({
+    "source": f"smoke-bridge-assistant-{stamp}",
+    "approveImported": True,
+    "payload": {
+        "knowledge": {
+            "notes": f"Bridge assistant notes {stamp}",
+            "entries": [{
+                "title": f"smoke-bridge-assistant-knowledge-{stamp}",
+                "keywords": [f"bridge-assistant-knowledge-{stamp}"],
+                "answer": "Imported through Bridge assistant endpoint.",
+                "isApprovedForAutomaticSend": True,
+            }],
+        },
+        "Knowledge": {
+            "Notes": f"Bridge assistant PascalCase notes {stamp}",
+            "Entries": [{
+                "Title": f"smoke-bridge-assistant-windows-knowledge-{stamp}",
+                "Keywords": [f"bridge-assistant-windows-knowledge-{stamp}"],
+                "Answer": "Imported through Bridge assistant endpoint with PascalCase fields.",
+                "IsApprovedForAutomaticSend": True,
+            }],
+        },
+        "keywordReplyRules": [{
+            "name": f"smoke-bridge-assistant-rule-{stamp}",
+            "keywords": [f"bridge-assistant-rule-{stamp}"],
+            "priority": 8,
+            "isEnabled": True,
+            "isApprovedForAutomaticSend": True,
+            "steps": [
+                {"contentType": "text", "text": "bridge assistant reply", "delayBeforeSendingSeconds": 1},
+                {"contentType": "image", "imagePath": image_path},
+            ],
+        }],
+        "KeywordReplyRules": [{
+            "Name": f"smoke-bridge-assistant-windows-rule-{stamp}",
+            "KeywordText": f"bridge-assistant-windows-rule-{stamp}",
+            "Priority": 9,
+            "IsEnabled": True,
+            "IsApprovedForAutomaticSend": True,
+            "Steps": [
+                {"ContentType": "text", "Text": "bridge assistant Windows-style reply", "DelayBeforeSendingSeconds": 1},
+                {"ContentType": "image", "ImagePath": image_path},
+            ],
+        }],
+    },
+}, ensure_ascii=False))
+PY
+)"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-assistant - --dry-run <<<"$bridge_assistant_payload" > "$body_file"
+  json_assert_eq result.translated.rules 2
+  json_assert_eq result.translated.knowledgeItems 3
+  json_assert_eq result.result.imported.rules 2
+  json_assert_eq result.result.imported.knowledgeItems 3
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-assistant - <<<"$bridge_assistant_payload" > "$body_file"
+  json_assert_eq result.result.imported.rules 2
+  json_assert_eq result.result.imported.knowledgeItems 3
+  bridge_assistant_rule_ids="$(json_get result.result.ids.rules)"
+  bridge_assistant_knowledge_ids="$(json_get result.result.ids.knowledgeItems)"
+  request_json GET /api/admin/automation/config
+  bridge_assistant_config_cleanup="$(python3 - "$body_file" "$bridge_assistant_rule_ids" <<'PY'
+import json
+import sys
+
+file, rule_ids_json = sys.argv[1], sys.argv[2]
+with open(file, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+rule_ids = set(json.loads(rule_ids_json))
+config = payload["config"]
+config["rules"] = [rule for rule in config.get("rules", []) if rule.get("id") not in rule_ids]
+print(json.dumps(config, ensure_ascii=False))
+PY
+)"
+  while IFS= read -r bridge_assistant_knowledge_id; do
+    request_json DELETE "/api/admin/automation/knowledge/$bridge_assistant_knowledge_id"
+    json_assert_path ok
+  done < <(python3 - "$bridge_assistant_knowledge_ids" <<'PY'
+import json
+import sys
+
+for item_id in json.loads(sys.argv[1]):
+    print(item_id)
+PY
+)
+  request_json PUT /api/admin/automation/config "$bridge_assistant_config_cleanup"
+  json_assert_path config.rules
 
   say "Import audience through Bridge"
   bridge_audience_payload="$(python3 - "$stamp" <<'PY'

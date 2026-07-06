@@ -29,6 +29,7 @@ import {
   type MassSendJob,
   type MomentDraft,
   type PanelUser,
+  type PanelSelfUpgradePlan,
   type InstanceWithStatus,
   type VolEntry,
   type AppType,
@@ -48,6 +49,7 @@ import {
   type WecomRpaPackageFormat,
   type WecomRpaPackageIssue,
   type WecomRpaPackageTarget,
+  type WecomAssistantImportResult,
 } from '../api';
 import { InstanceIcon, ICON_CHOICES } from '../AppIcon';
 import { useUI, PasswordInput } from '../ui';
@@ -538,6 +540,11 @@ function bundleCount(result?: AutomationBundleImportResult | null): string {
   return `新增 ${imported} · 更新 ${updated} · 跳过 ${result.skipped}`;
 }
 
+function assistantImportCount(result?: WecomAssistantImportResult | null): string {
+  if (!result) return '';
+  return `${bundleCount(result.result)} · 规则 ${result.translated.rules} · 资料 ${result.translated.knowledgeItems}`;
+}
+
 function bridgeRecoveryCount(result?: AutomationBridgeRecoveryResult | null): { released: number; retried: number; total: number } {
   if (!result) return { released: 0, retried: 0, total: 0 };
   const released = result.replies.releasedClaims + result.mass.releasedClaims + result.moments.releasedClaims;
@@ -726,6 +733,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [bundleIncludeConfig, setBundleIncludeConfig] = useState(true);
   const [bundleKeepOperationalState, setBundleKeepOperationalState] = useState(false);
   const [bundlePreview, setBundlePreview] = useState<AutomationBundleImportResult | null>(null);
+  const [assistantImportText, setAssistantImportText] = useState('');
+  const [assistantMode, setAssistantMode] = useState<AutomationBundleMode>('upsert');
+  const [assistantApproveImported, setAssistantApproveImported] = useState(false);
+  const [assistantPreview, setAssistantPreview] = useState<WecomAssistantImportResult | null>(null);
 
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
@@ -1312,6 +1323,63 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '导入资产包失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const parseAssistantImportText = () => {
+    try {
+      return JSON.parse(assistantImportText);
+    } catch {
+      toast('企微助手 JSON 格式不正确', 'error');
+      return null;
+    }
+  };
+
+  const previewWecomAssistantImport = async () => {
+    const payload = parseAssistantImportText();
+    if (!payload) return;
+    setBusy('assistant-preview');
+    try {
+      const { result } = await api.importWecomAssistantAssets({
+        ...payload,
+        dryRun: true,
+        mode: payload.mode || assistantMode,
+        approveImported: payload.approveImported === true || assistantApproveImported,
+      });
+      setAssistantPreview(result);
+      toast(`企微助手预览完成：${assistantImportCount(result)}`, result.translated.errors.length || result.result.errors.length ? 'error' : 'ok');
+    } catch (e: any) {
+      toast(e.message || '预览企微助手资产失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const applyWecomAssistantImport = async () => {
+    const payload = parseAssistantImportText();
+    if (!payload) return;
+    const ok = await confirm({
+      title: '导入企微助手资产？',
+      body: '会把本地助手知识库和关键词规则写入自动化工作台，不会触发发送。',
+      confirmText: '确认导入',
+    });
+    if (!ok) return;
+    setBusy('assistant-import');
+    try {
+      const { result } = await api.importWecomAssistantAssets({
+        ...payload,
+        dryRun: false,
+        mode: payload.mode || assistantMode,
+        approveImported: payload.approveImported === true || assistantApproveImported,
+      });
+      setAssistantPreview(result);
+      setAssistantImportText('');
+      toast(`企微助手已导入：${assistantImportCount(result)}`, result.translated.errors.length || result.result.errors.length ? 'error' : 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '导入企微助手资产失败', 'error');
     } finally {
       setBusy('');
     }
@@ -2303,6 +2371,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <b>Mac Bridge {bridge.enabled ? '已启用' : '未启用'}</b>
                 <div className="muted small">
                   资料 <code>{location.origin + bridge.knowledgeEndpoint}</code>
+                </div>
+                <div className="muted small">
+                  助手融合 <code>{location.origin + bridge.assistantEndpoint}</code>
                 </div>
                 <div className="muted small">
                   受众 <code>{location.origin + bridge.audienceEndpoint}</code>
@@ -3675,6 +3746,47 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
 
           <section className="auto-panel">
             <div className="auto-panel-head">
+              <b>企微助手融合</b>
+              <span className="tag">{assistantPreview ? assistantImportCount(assistantPreview) : 'JSON'}</span>
+            </div>
+            <textarea
+              className="input textarea"
+              placeholder="粘贴 wecom-ai-assistant 的 knowledge / keywordReplyRules JSON"
+              value={assistantImportText}
+              onChange={(e) => {
+                setAssistantImportText(e.target.value);
+                setAssistantPreview(null);
+              }}
+            />
+            <div className="auto-actions inline">
+              <label className="auto-check inline-check">
+                <input type="checkbox" checked={assistantApproveImported} onChange={(e) => setAssistantApproveImported(e.target.checked)} />
+                <span>导入后标记为已审核</span>
+              </label>
+              <select className="input compact-input" value={assistantMode} onChange={(e) => setAssistantMode(e.target.value as AutomationBundleMode)}>
+                <option value="upsert">按名称更新</option>
+                <option value="append">全部追加</option>
+              </select>
+            </div>
+            <div className="auto-actions inline">
+              <button className="btn s-btn" disabled={busy === 'assistant-preview' || !assistantImportText.trim()} onClick={previewWecomAssistantImport}>
+                预览融合
+              </button>
+              <button className="btn s-btn" disabled={busy === 'assistant-import' || !assistantImportText.trim()} onClick={applyWecomAssistantImport}>
+                确认导入
+              </button>
+            </div>
+            {assistantPreview && (
+              <div className="muted small auto-snippet">
+                {assistantImportCount(assistantPreview)}
+                {assistantPreview.translated.errors.length ? ` · ${assistantPreview.translated.errors.slice(0, 2).join(' / ')}` : ''}
+                {assistantPreview.result.errors.length ? ` · ${assistantPreview.result.errors.slice(0, 2).join(' / ')}` : ''}
+              </div>
+            )}
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
               <b>资产包备份</b>
               <span className="tag">{bundlePreview ? bundleCount(bundlePreview) : 'JSON'}</span>
             </div>
@@ -3794,12 +3906,16 @@ function DiagnosticsSection() {
 
 // 「关于」：显示真实构建版本号 + 检测新版（后台已每 6h 查 Docker Hub/GHCR；这里读缓存并可手动重查）。
 function AboutSection({ isAdmin }: { isAdmin: boolean }) {
-  const { toast } = useUI();
+  const { toast, confirm } = useUI();
   const [info, setInfo] = useState<VersionInfo | null>(null);
   const [checking, setChecking] = useState(false);
+  const [upgradeVersion, setUpgradeVersion] = useState('');
+  const [upgradePlan, setUpgradePlan] = useState<PanelSelfUpgradePlan | null>(null);
+  const [upgradeBusy, setUpgradeBusy] = useState('');
 
   useEffect(() => {
     api.getVersion().then(setInfo).catch(() => {});
+    if (isAdmin) api.getPanelUpgradePlan().then(({ plan }) => setUpgradePlan(plan)).catch(() => {});
   }, []);
 
   // 当前版本是否为正式发布版（语义化 vX.Y.Z）。dev / dev-<sha> 等本地构建无法与发布版比较，
@@ -3820,6 +3936,45 @@ function AboutSection({ isAdmin }: { isAdmin: boolean }) {
       toast(e.message || '检查失败', 'error');
     } finally {
       setChecking(false);
+    }
+  };
+
+  const previewUpgrade = async () => {
+    setUpgradeBusy('plan');
+    try {
+      const { plan } = await api.getPanelUpgradePlan(upgradeVersion.trim());
+      setUpgradePlan(plan);
+      if (plan.canStart) toast('升级预检通过', 'ok');
+      else toast(plan.warnings[0] || '升级预检未通过', 'error');
+    } catch (e: any) {
+      toast(e.message || '升级预检失败', 'error');
+    } finally {
+      setUpgradeBusy('');
+    }
+  };
+
+  const startUpgrade = async () => {
+    const version = upgradeVersion.trim();
+    if (!version) {
+      toast('请填写目标版本', 'error');
+      return;
+    }
+    const ok = await confirm({
+      title: '启动面板自升级',
+      body: `目标版本：${version}。这会通过 Docker socket 启动一次性 helper，拉取新镜像并重建当前面板容器，页面会短暂断开。生产面板不会被改动，除非它自己启用了自升级。`,
+      confirmText: '确认升级',
+      danger: true,
+    });
+    if (!ok) return;
+    setUpgradeBusy('start');
+    try {
+      const result = await api.startPanelUpgrade({ version, confirm: true });
+      setUpgradePlan(result.plan);
+      toast(`升级 helper 已启动：${result.helperName}`, 'ok');
+    } catch (e: any) {
+      toast(e.message || '启动升级失败', 'error');
+    } finally {
+      setUpgradeBusy('');
     }
   };
 
@@ -3850,6 +4005,62 @@ function AboutSection({ isAdmin }: { isAdmin: boolean }) {
         {info?.hasUpdate && (
           <div className="ver-hint">
             在宿主执行 <code>docker compose pull &amp;&amp; docker compose up -d</code> 升级面板；各实例镜像可在「管理 → 升级」单独更新。
+          </div>
+        )}
+        {isAdmin && upgradePlan && (
+          <div className={'panel-upgrade-box ' + (upgradePlan.enabled ? 'ok' : 'bad')}>
+            <div className="s-title-row">
+              <span className="s-app">面板自升级</span>
+              <span className={'tag ' + (upgradePlan.enabled ? 'tag-on' : 'tag-off')}>{upgradePlan.enabled ? '已启用' : '未启用'}</span>
+            </div>
+            <div className="auto-grid two compact">
+              <label>
+                <span className="field-label">目标版本</span>
+                <input
+                  className="input"
+                  placeholder="andy-automation-usable-r85-2026-07-06"
+                  value={upgradeVersion}
+                  onChange={(e) => setUpgradeVersion(e.target.value)}
+                />
+              </label>
+              <label>
+                <span className="field-label">目标容器</span>
+                <input className="input" value={upgradePlan.targetContainer || '未知'} readOnly />
+              </label>
+            </div>
+            <div className="muted small">
+              当前 <code>{upgradePlan.currentVersion}</code>
+              {upgradePlan.targetPanelImage ? (
+                <>
+                  {' · '}Panel <code>{upgradePlan.targetPanelImage}</code>
+                </>
+              ) : null}
+            </div>
+            <div className="muted small">
+              Docker socket <code>{upgradePlan.dockerSocket}</code>
+              {upgradePlan.projectDir ? (
+                <>
+                  {' · '}Compose <code>{upgradePlan.projectDir}</code>
+                </>
+              ) : null}
+            </div>
+            {upgradePlan.warnings.length > 0 && (
+              <div className="chip-row">
+                {upgradePlan.warnings.map((warning, index) => (
+                  <span key={`${warning}-${index}`} className="chip chip-static chip-bad">
+                    {warning}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="settings-actions">
+              <button className="btn-text" disabled={!!upgradeBusy} onClick={previewUpgrade}>
+                {upgradeBusy === 'plan' ? '预检中…' : '预检'}
+              </button>
+              <button className="btn btn-primary s-btn" disabled={!!upgradeBusy || !upgradeVersion.trim()} onClick={startUpgrade}>
+                {upgradeBusy === 'start' ? '启动中…' : '启动自升级'}
+              </button>
+            </div>
           </div>
         )}
         <div className="settings-actions">

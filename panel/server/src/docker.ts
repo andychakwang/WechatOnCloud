@@ -1,5 +1,6 @@
 import { hostname } from 'node:os';
 import { existsSync, readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { appendInstanceLog, deleteInstanceLog, appendPanelLog, readInstanceLog, readPanelLog, filterSince } from './logs.js';
 import http from 'node:http';
 import zlib from 'node:zlib';
@@ -7,6 +8,7 @@ import Docker from 'dockerode';
 import { instanceAppType, type Instance } from './store.js';
 
 const WECHAT_IMAGE = process.env.WOC_WECHAT_IMAGE || 'ghcr.io/gloridust/wechat-on-cloud:latest';
+const SELF_UPGRADE_ENABLED = process.env.WOC_ENABLE_PANEL_SELF_UPGRADE === '1';
 const PUID = process.env.PUID || '1000';
 const PGID = process.env.PGID || '1000';
 const TZ = process.env.TZ || 'Asia/Shanghai';
@@ -62,6 +64,27 @@ let networkName: string | null = process.env.WOC_DOCKER_NETWORK || null;
 
 export type RuntimeState = 'running' | 'stopped' | 'missing';
 
+export interface PanelSelfUpgradePlan {
+  enabled: boolean;
+  currentVersion: string;
+  targetVersion: string;
+  targetContainer: string;
+  currentImage: string;
+  targetPanelImage: string;
+  targetWechatImage: string;
+  imagePrefix: string;
+  dockerSocket: string;
+  projectDir: string;
+  canStart: boolean;
+  warnings: string[];
+}
+
+export interface PanelSelfUpgradeStartResult {
+  ok: true;
+  helperName: string;
+  plan: PanelSelfUpgradePlan;
+}
+
 // 启动时探测面板自身网络（容器内 hostname = 容器短 id）。失败不致命：
 // 退回 WOC_DOCKER_NETWORK 或 null（null 时用 docker 默认 bridge，靠 IP 不靠名字会有问题，故尽量探测成功）。
 export async function ensureNetwork(): Promise<string | null> {
@@ -75,6 +98,338 @@ export async function ensureNetwork(): Promise<string | null> {
     console.warn('[docker] 无法探测面板网络（本地开发或缺少 docker.sock 时正常）:', e?.message || e);
   }
   return networkName;
+}
+
+export async function getPanelSelfUpgradePlan(targetVersion = ''): Promise<PanelSelfUpgradePlan> {
+  const normalizedVersion = normalizePanelUpgradeVersion(targetVersion);
+  const inspect = await inspectSelfPanelContainer();
+  const currentImage = String(inspect.Config?.Image || '');
+  const imagePrefix = process.env.WOC_IMAGE_PREFIX || imagePrefixFromImage(currentImage) || imagePrefixFromImage(WECHAT_IMAGE) || 'ghcr.io/gloridust';
+  const targetContainer = selfPanelContainerName(inspect);
+  const projectDir = projectDirFromPanelInspect(inspect);
+  const dockerSocket = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
+  const targetPanelImage = normalizedVersion ? `${imagePrefix}/woc-panel:${normalizedVersion}` : '';
+  const targetWechatImage = normalizedVersion ? `${imagePrefix}/wechat-on-cloud:${normalizedVersion}` : '';
+  const warnings: string[] = [];
+  if (!SELF_UPGRADE_ENABLED) warnings.push('面板自升级未启用：需要设置 WOC_ENABLE_PANEL_SELF_UPGRADE=1。');
+  if (!normalizedVersion) warnings.push('需要填写目标镜像版本。');
+  if (!currentImage) warnings.push('无法识别当前面板镜像。');
+  if (!projectDir) warnings.push('未识别到 compose 项目目录；仍可重建容器，但不会自动备份/更新 compose 文件。');
+  if (!inspect.HostConfig?.Binds?.some((bind: string) => String(bind).includes(`${dockerSocket}:`)) && !(inspect.Mounts || []).some((mount: any) => mount.Destination === dockerSocket)) {
+    warnings.push('当前面板容器没有明确挂载 Docker socket。');
+  }
+  return {
+    enabled: SELF_UPGRADE_ENABLED,
+    currentVersion: process.env.WOC_VERSION || 'dev',
+    targetVersion: normalizedVersion,
+    targetContainer,
+    currentImage,
+    targetPanelImage,
+    targetWechatImage,
+    imagePrefix,
+    dockerSocket,
+    projectDir,
+    canStart: SELF_UPGRADE_ENABLED && !!normalizedVersion && !!currentImage,
+    warnings,
+  };
+}
+
+export async function startPanelSelfUpgrade(raw: { version?: string; targetVersion?: string; confirm?: boolean } = {}): Promise<PanelSelfUpgradeStartResult> {
+  const targetVersion = normalizePanelUpgradeVersion(raw.targetVersion || raw.version || '');
+  const plan = await getPanelSelfUpgradePlan(targetVersion);
+  if (!SELF_UPGRADE_ENABLED) throw new Error('面板自升级未启用');
+  if (!raw.confirm) throw new Error('需要 confirm=true 才能启动面板自升级');
+  if (!targetVersion) throw new Error('需要填写目标镜像版本');
+  if (!plan.currentImage) throw new Error('无法识别当前面板镜像');
+  const inspect = await inspectSelfPanelContainer();
+  const helperName = `woc-panel-updater-${Date.now()}`;
+  const helperEnv = [
+    'WOC_HELPER_MODE=1',
+    `WOC_TARGET_CONTAINER=${plan.targetContainer}`,
+    `WOC_VERSION=${targetVersion}`,
+    `WOC_IMAGE_PREFIX=${plan.imagePrefix}`,
+    `WOC_PANEL_IMAGE=${plan.targetPanelImage}`,
+    `WOC_WECHAT_IMAGE=${plan.targetWechatImage}`,
+    `WOC_PROJECT_DIR=${plan.projectDir ? '/project' : ''}`,
+    `WOC_ALLOWED_HOSTS=${process.env.PANEL_ALLOWED_HOSTS || ''}`,
+    `WOC_UPDATER_SOURCE_B64=${Buffer.from(panelSelfUpgradeHelperSource(), 'utf8').toString('base64')}`,
+  ];
+  const binds = [resolveDockerSocketBind(inspect, plan.dockerSocket)];
+  if (plan.projectDir) binds.push(`${plan.projectDir}:/project`);
+  const created = await docker.createContainer({
+    name: helperName,
+    Image: plan.currentImage,
+    Env: helperEnv,
+    Cmd: [
+      'node',
+      '-e',
+      "const fs=require('fs');fs.writeFileSync('/tmp/woc-panel-updater.mjs',Buffer.from(process.env.WOC_UPDATER_SOURCE_B64,'base64'));import('/tmp/woc-panel-updater.mjs').catch((e)=>{console.error(e);process.exit(1);});",
+    ],
+    HostConfig: {
+      AutoRemove: true,
+      Binds: binds,
+      RestartPolicy: { Name: 'no' },
+    },
+  } as Docker.ContainerCreateOptions);
+  await created.start();
+  appendPanelLog('WARN', `面板自升级 helper 已启动：${helperName}，目标版本=${targetVersion}，目标容器=${plan.targetContainer}`);
+  return { ok: true, helperName, plan };
+}
+
+async function inspectSelfPanelContainer(): Promise<any> {
+  return docker.getContainer(hostname()).inspect();
+}
+
+function normalizePanelUpgradeVersion(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(raw)) throw new Error('目标版本只能包含字母、数字、点、下划线和短横线');
+  return raw;
+}
+
+function imagePrefixFromImage(image: string): string {
+  const withoutDigest = String(image || '').split('@')[0];
+  const parts = withoutDigest.split('/');
+  if (parts.length < 2) return '';
+  const repo = parts.pop() || '';
+  if (!repo.includes(':') && parts.length < 2) return '';
+  return parts.join('/');
+}
+
+function selfPanelContainerName(inspect: any): string {
+  return String(inspect?.Name || '').replace(/^\//, '') || hostname();
+}
+
+function projectDirFromPanelInspect(inspect: any): string {
+  const dataMount = (inspect.Mounts || []).find((mount: any) => mount.Destination === '/data');
+  if (dataMount?.Source) return dirname(dataMount.Source);
+  for (const bind of inspect.HostConfig?.Binds || []) {
+    const [source, dest] = String(bind).split(':');
+    if (dest === '/data' && source) return dirname(source);
+  }
+  return '';
+}
+
+function resolveDockerSocketBind(inspect: any, dockerSocket: string): string {
+  for (const bind of inspect.HostConfig?.Binds || []) {
+    const [source, dest] = String(bind).split(':');
+    if (dest === dockerSocket && source) return `${source}:${dockerSocket}`;
+  }
+  for (const mount of inspect.Mounts || []) {
+    if (mount.Destination === dockerSocket && mount.Source) return `${mount.Source}:${dockerSocket}`;
+  }
+  return `${dockerSocket}:${dockerSocket}`;
+}
+
+function panelSelfUpgradeHelperSource(): string {
+  return String.raw`#!/usr/bin/env node
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+
+const SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
+const TARGET = process.env.WOC_TARGET_CONTAINER || '';
+const VERSION = process.env.WOC_VERSION || '';
+const PANEL_IMAGE = process.env.WOC_PANEL_IMAGE || '';
+const WECHAT_IMAGE = process.env.WOC_WECHAT_IMAGE || '';
+const PROJECT_DIR = process.env.WOC_PROJECT_DIR || '';
+const ALLOWED_HOSTS = process.env.WOC_ALLOWED_HOSTS || '';
+
+function log(message) {
+  process.stdout.write('[woc-panel-upgrade] ' + message + '\n');
+}
+
+function docker(method, requestPath, body, options = {}) {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      socketPath: SOCKET,
+      method,
+      path: requestPath,
+      headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : undefined,
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        text += chunk;
+        if (options.stream) {
+          for (const line of chunk.split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line);
+              const status = [event.status, event.progress].filter(Boolean).join(' ');
+              if (status) log(status);
+            } catch {
+              log(line);
+            }
+          }
+        }
+      });
+      res.on('end', () => {
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        let data = text;
+        if (text.trim()) {
+          try { data = JSON.parse(text); } catch {}
+        }
+        if (!ok) {
+          const err = new Error('Docker API ' + method + ' ' + requestPath + ' failed with ' + res.statusCode);
+          err.statusCode = res.statusCode;
+          err.data = data;
+          reject(err);
+          return;
+        }
+        resolve(data);
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function envMap(env = []) {
+  const map = new Map();
+  for (const item of env) {
+    const [key, ...rest] = String(item).split('=');
+    if (key) map.set(key, rest.join('='));
+  }
+  return map;
+}
+
+function envArray(map) {
+  return Array.from(map.entries()).map(([key, value]) => key + '=' + value);
+}
+
+function updateContainerEnv(env = []) {
+  const map = envMap(env);
+  map.set('WOC_VERSION', VERSION);
+  map.set('WOC_WECHAT_IMAGE', WECHAT_IMAGE);
+  if (ALLOWED_HOSTS) map.set('PANEL_ALLOWED_HOSTS', ALLOWED_HOSTS);
+  map.set('WOC_ENABLE_PANEL_SELF_UPGRADE', '1');
+  return envArray(map);
+}
+
+function cleanHostConfig(old = {}) {
+  const keys = ['Binds','CapAdd','CapDrop','CgroupnsMode','ConsoleSize','Devices','Dns','DnsOptions','DnsSearch','ExtraHosts','GroupAdd','IpcMode','Isolation','LogConfig','NetworkMode','OomKillDisable','PidMode','PortBindings','Privileged','ReadonlyRootfs','RestartPolicy','Runtime','SecurityOpt','ShmSize','Tmpfs','UTSMode','UsernsMode','VolumeDriver','VolumesFrom'];
+  const next = {};
+  for (const key of keys) {
+    if (old[key] !== undefined && old[key] !== null) next[key] = old[key];
+  }
+  next.AutoRemove = false;
+  return next;
+}
+
+function createConfigFromInspect(inspect) {
+  const config = inspect.Config || {};
+  return {
+    Hostname: config.Hostname || '',
+    Domainname: config.Domainname || '',
+    User: config.User || '',
+    AttachStdin: false,
+    AttachStdout: false,
+    AttachStderr: false,
+    Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Env: updateContainerEnv(config.Env || []),
+    Cmd: config.Cmd || undefined,
+    Image: PANEL_IMAGE,
+    Labels: config.Labels || {},
+    ExposedPorts: config.ExposedPorts || {},
+    Entrypoint: config.Entrypoint || undefined,
+    WorkingDir: config.WorkingDir || '',
+    StopSignal: config.StopSignal || undefined,
+    StopTimeout: inspect.HostConfig?.StopTimeout ?? undefined,
+    HostConfig: cleanHostConfig(inspect.HostConfig || {}),
+  };
+}
+
+async function pullImage(image) {
+  const [fromImage, tag = 'latest'] = image.split(/:(?!.*:)/);
+  log('pulling ' + image);
+  await docker('POST', '/images/create?fromImage=' + encodeURIComponent(fromImage) + '&tag=' + encodeURIComponent(tag), undefined, { stream: true });
+}
+
+function findComposeFile(projectDir) {
+  for (const name of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']) {
+    const candidate = path.join(projectDir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(projectDir, 'docker-compose.yml');
+}
+
+function updateComposeYaml(text) {
+  let next = text;
+  next = next.replace(/ghcr\.io\/[^/\s]+\/woc-panel:[^\s'"]+/g, PANEL_IMAGE);
+  next = next.replace(/ghcr\.io\/[^/\s]+\/wechat-on-cloud:[^\s'"]+/g, WECHAT_IMAGE);
+  next = next.replace(/docker\.io\/[^/\s]+\/woc-panel:[^\s'"]+/g, PANEL_IMAGE);
+  next = next.replace(/docker\.io\/[^/\s]+\/wechat-on-cloud:[^\s'"]+/g, WECHAT_IMAGE);
+  if (!/WOC_ENABLE_PANEL_SELF_UPGRADE=/.test(next)) {
+    next = next.replace(/(\n\s*-\s*PANEL_AUTOMATION_DATA=.*)/, '$1\n      - WOC_ENABLE_PANEL_SELF_UPGRADE=1');
+  }
+  return next;
+}
+
+function writeComposeBackup(projectDir) {
+  if (!projectDir || !fs.existsSync(projectDir)) {
+    log('compose project directory unavailable: ' + (projectDir || '(empty)'));
+    return;
+  }
+  const composeFile = findComposeFile(projectDir);
+  if (!fs.existsSync(composeFile)) {
+    log('compose file not found under ' + projectDir + '; container will still be recreated');
+    return;
+  }
+  const current = fs.readFileSync(composeFile, 'utf8');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backup = composeFile + '.bak-' + stamp;
+  fs.copyFileSync(composeFile, backup);
+  fs.writeFileSync(composeFile, updateComposeYaml(current));
+  log('compose backed up and updated: ' + path.basename(backup) + ' -> ' + path.basename(composeFile));
+}
+
+async function recreateTarget() {
+  if (!TARGET || !VERSION || !PANEL_IMAGE || !WECHAT_IMAGE) throw new Error('missing upgrade environment');
+  const inspect = await docker('GET', '/containers/' + encodeURIComponent(TARGET) + '/json');
+  log('target: ' + TARGET);
+  log('current image: ' + (inspect.Config?.Image || inspect.Image));
+  log('target image: ' + PANEL_IMAGE);
+  writeComposeBackup(PROJECT_DIR);
+  await pullImage(PANEL_IMAGE);
+  await pullImage(WECHAT_IMAGE);
+  const backupName = TARGET + '-backup-' + new Date().toISOString().replace(/[:.]/g, '-');
+  const newConfig = createConfigFromInspect(inspect);
+  log('renaming current container to ' + backupName);
+  await docker('POST', '/containers/' + encodeURIComponent(TARGET) + '/stop?t=20').catch((error) => {
+    if (error.statusCode !== 304) throw error;
+  });
+  await docker('POST', '/containers/' + encodeURIComponent(inspect.Id) + '/rename?name=' + encodeURIComponent(backupName));
+  let createdId = '';
+  try {
+    log('creating replacement ' + TARGET);
+    const created = await docker('POST', '/containers/create?name=' + encodeURIComponent(TARGET), newConfig);
+    createdId = created.Id;
+    await docker('POST', '/containers/' + createdId + '/start');
+    const next = await docker('GET', '/containers/' + createdId + '/json');
+    if (!next.State?.Running) throw new Error('replacement is not running: ' + next.State?.Status);
+    log('replacement running: ' + TARGET + ' (' + PANEL_IMAGE + ')');
+    await docker('DELETE', '/containers/' + encodeURIComponent(backupName) + '?force=1');
+    log('removed backup container ' + backupName);
+  } catch (error) {
+    log('replacement failed: ' + error.message);
+    if (createdId) await docker('DELETE', '/containers/' + createdId + '?force=1').catch(() => {});
+    await docker('POST', '/containers/' + encodeURIComponent(backupName) + '/rename?name=' + encodeURIComponent(TARGET)).catch(() => {});
+    await docker('POST', '/containers/' + encodeURIComponent(TARGET) + '/start').catch(() => {});
+    log('rolled back to previous container');
+    throw error;
+  }
+}
+
+recreateTarget().catch((error) => {
+  console.error('[woc-panel-upgrade] failed:', error.data || error.stack || error.message);
+  process.exit(1);
+});
+`;
 }
 
 // 摄像头直通：把宿主的 v4l2 视频设备映射进实例容器

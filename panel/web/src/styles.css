@@ -987,6 +987,24 @@ button {
   background: rgba(var(--shadow) / 0.08);
   white-space: nowrap;
 }
+.panel-upgrade-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: var(--r-small);
+  background: rgba(var(--green-rgb) / 0.08);
+}
+.panel-upgrade-box.bad {
+  background: rgba(var(--danger-rgb) / 0.08);
+}
+.panel-upgrade-box code {
+  overflow-wrap: anywhere;
+}
+.panel-upgrade-box .chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 .ver-checked {
   margin-top: 12px;
 }
