@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r84-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r86-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,9 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r84-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r84-2026-07-06`
-- 本版新增：朋友圈草稿可通过 `external-rpa` 交给现有企业微信 Mac 自动化项目打开发布框、选图和填文案；云端仍只回写 prepared/published，不自动点击发布。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r86-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r86-2026-07-06`
+- 本版新增：企微助手 `automationSettings` 可预览并显式应用到云端安全闸门；冷却、小时上限和关键词自动回复可映射，AI 直发设置不会关闭发送前确认。
 
 ## 本地源码开发版（36082）
 
@@ -48,6 +48,36 @@ BUILD_WECHAT_IMAGE=0 ./scripts/deploy-automation-dev.sh
 | 自动化源码开发面板 | `36082` | `docker-compose.automation-dev.yml` | `data-panel-automation-dev` | 当前源码本地构建 |
 
 运行画像不会回显密码、AI key 或 Bridge token，只显示 token 是否配置且长度是否达标、Docker socket 是否挂载、当前镜像/数据路径和公开访问地址。
+
+## 2026-07-06 R86 镜像发布
+
+- GitHub tag：`andy-automation-usable-r86-2026-07-06`
+- 本地已完成：
+
+  ```text
+  npx tsc --noEmit        # panel/server
+  npm run build           # panel/web
+  node --check scripts/wecom-bridge-client.mjs
+  bash -n scripts/smoke-automation-panel.sh
+  git diff --check
+  ```
+
+- 本地临时 panel 已验证：
+
+  ```text
+  POST /api/admin/automation/wecom-assistant/import dryRun=true applySettings=true
+    -> translated.settings.detected=true, applied=false
+
+  POST /api/admin/automation/wecom-assistant/import dryRun=false
+    -> 默认不应用 automationSettings
+
+  POST /api/admin/automation/wecom-assistant/import dryRun=false applySettings=true
+    -> maximumAutomaticSendsPerHour / perConversationCooldownMinutes 映射成功
+    -> requireConfirmForSend 保持 true
+  ```
+
+- Bridge CLI 已验证 `import-assistant --dry-run --apply-settings` 会把 `applySettings` 传给 Bridge 导入接口。
+- 等 GitHub Actions release 完成后，再补充 run id、GHCR digest 和 NAS `36081` 升级验收。
 
 ## 2026-07-06 R84 镜像发布
 
@@ -451,7 +481,7 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 推荐用提交哈希固定脚本来源：
 
 ```bash
-WOC_VERSION=andy-automation-usable-r84-2026-07-06 \
+WOC_VERSION=andy-automation-usable-r86-2026-07-06 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```
