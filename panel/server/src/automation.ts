@@ -1134,10 +1134,21 @@ export interface WecomAssistantImportResult {
   translated: {
     rules: number;
     knowledgeItems: number;
+    settings?: WecomAssistantSettingsTranslation;
     skipped: number;
     errors: string[];
   };
   result: AutomationBundleImportResult;
+}
+
+export interface WecomAssistantSettingsTranslation {
+  detected: boolean;
+  applied: boolean;
+  applyRequested: boolean;
+  sourceKeys: string[];
+  proposed: Partial<AutomationSettings>;
+  warnings: string[];
+  notes: string[];
 }
 
 interface AutomationData extends AutomationConfig {
@@ -2874,6 +2885,7 @@ export function importWecomAssistantAssets(actor: User, raw: any): WecomAssistan
   const source = str(raw?.source || raw?.sourceName || 'wecom-ai-assistant', 80).trim() || 'wecom-ai-assistant';
   const dryRun = raw?.dryRun !== false;
   const mode: AutomationBundleMode = raw?.mode === 'append' ? 'append' : 'upsert';
+  const applySettings = raw?.applySettings === true || raw?.includeSettings === true || raw?.importSettings === true;
   const translated = translateWecomAssistantAssets(raw, source);
   const result = importAutomationBundle(actor, {
     bundle: translated.bundle,
@@ -2883,6 +2895,27 @@ export function importWecomAssistantAssets(actor: User, raw: any): WecomAssistan
     includeQueues: false,
     keepOperationalState: false,
   });
+  const settings = translated.settings
+    ? {
+        ...translated.settings,
+        applyRequested: applySettings,
+        applied: false,
+      }
+    : undefined;
+  if (settings && applySettings && !dryRun) {
+    data.settings = normalizeSettings({
+      ...data.settings,
+      ...settings.proposed,
+      requireConfirmForSend: true,
+    });
+    persist();
+    settings.applied = true;
+    addAutomationAudit({
+      action: 'wecom_assistant_settings_imported',
+      actor: actor.username,
+      message: `应用企微助手运行设置：${Object.keys(settings.proposed).join('、') || '无可映射字段'}`,
+    });
+  }
   return {
     source,
     dryRun: result.dryRun,
@@ -2890,6 +2923,7 @@ export function importWecomAssistantAssets(actor: User, raw: any): WecomAssistan
     translated: {
       rules: translated.rules.length,
       knowledgeItems: translated.knowledgeItems.length,
+      ...(settings ? { settings } : {}),
       skipped: translated.errors.length,
       errors: translated.errors,
     },
@@ -2897,13 +2931,20 @@ export function importWecomAssistantAssets(actor: User, raw: any): WecomAssistan
   };
 }
 
-function translateWecomAssistantAssets(raw: any, source: string): { bundle: AutomationBundle; rules: any[]; knowledgeItems: any[]; errors: string[] } {
+function translateWecomAssistantAssets(raw: any, source: string): {
+  bundle: AutomationBundle;
+  rules: any[];
+  knowledgeItems: any[];
+  settings?: WecomAssistantSettingsTranslation;
+  errors: string[];
+} {
   const root = unwrapWecomAssistantPayload(raw);
   const approveImported = raw?.approveImported === true || raw?.approved === true;
   const now = new Date().toISOString();
   const errors: string[] = [];
   const rules: any[] = [];
   const knowledgeItems: any[] = [];
+  const settings = translateWecomAssistantSettings(root) ?? (root !== raw ? translateWecomAssistantSettings(raw) : undefined);
 
   for (const [index, rule] of extractWecomAssistantRuleItems(root).entries()) {
     try {
@@ -2922,8 +2963,8 @@ function translateWecomAssistantAssets(raw: any, source: string): { bundle: Auto
     }
   }
 
-  if (!rules.length && !knowledgeItems.length && !errors.length) {
-    errors.push('没有识别到 wecom-ai-assistant 的关键词规则或知识库条目');
+  if (!rules.length && !knowledgeItems.length && !settings && !errors.length) {
+    errors.push('没有识别到 wecom-ai-assistant 的关键词规则、知识库条目或运行设置');
   }
 
   const config = getAutomationConfig();
@@ -2951,7 +2992,104 @@ function translateWecomAssistantAssets(raw: any, source: string): { bundle: Auto
     momentDrafts: [],
     runnerPolicy: cloneRunnerPolicy(data.runnerPolicy),
   };
-  return { bundle, rules, knowledgeItems, errors };
+  return { bundle, rules, knowledgeItems, settings, errors };
+}
+
+function translateWecomAssistantSettings(root: any): WecomAssistantSettingsTranslation | undefined {
+  const found = extractWecomAssistantSettings(root);
+  if (!found) return undefined;
+  const raw = found.value;
+  const proposed: Partial<AutomationSettings> = {};
+  const warnings: string[] = [];
+  const notes: string[] = [];
+
+  const automaticRules = readWecomBoolean(raw, ['automaticKeywordRepliesEnabled', 'AutomaticKeywordRepliesEnabled', 'automaticRuleRepliesEnabled', 'AutomaticRuleRepliesEnabled']);
+  if (typeof automaticRules === 'boolean') proposed.automaticRuleRepliesEnabled = automaticRules;
+
+  const cooldown = readWecomNumber(raw, ['perConversationCooldownMinutes', 'PerConversationCooldownMinutes', 'conversationCooldownMinutes', 'ConversationCooldownMinutes']);
+  if (cooldown !== undefined) proposed.perConversationCooldownMinutes = clampInt(cooldown, 0, 24 * 60, DEFAULT_SETTINGS.perConversationCooldownMinutes);
+
+  const hourlyLimit = readWecomNumber(raw, ['maximumAutomaticRepliesPerHour', 'MaximumAutomaticRepliesPerHour', 'maximumAutomaticSendsPerHour', 'MaximumAutomaticSendsPerHour']);
+  if (hourlyLimit !== undefined) proposed.maximumAutomaticSendsPerHour = clampInt(hourlyLimit, 0, 1000, DEFAULT_SETTINGS.maximumAutomaticSendsPerHour);
+
+  const directAiSend = readWecomBoolean(raw, ['automaticallySendGeneratedDrafts', 'AutomaticallySendGeneratedDrafts', 'autoSendGeneratedDrafts', 'AutoSendGeneratedDrafts']);
+  if (typeof directAiSend === 'boolean') {
+    if (directAiSend) {
+      proposed.aiDraftEnabled = true;
+      warnings.push('本地助手开启了 AI 草稿自动发送；云端只导入为 AI 草稿能力，并强制保留发送前确认。');
+    } else {
+      notes.push('本地助手未开启 AI 草稿自动发送；云端不会因导入而打开无人值守直发。');
+    }
+    proposed.requireConfirmForSend = true;
+  }
+
+  const visualMonitoring = readWecomBoolean(raw, ['visualMonitoringEnabled', 'VisualMonitoringEnabled']);
+  if (typeof visualMonitoring === 'boolean') {
+    notes.push(`本地视觉监听：${visualMonitoring ? '已开启' : '未开启'}；云端总开关仍需在自动化工作台手动确认。`);
+  }
+
+  const watchMode = str(readWecomField(raw, ['watchMode', 'WatchMode']), 40).trim();
+  if (watchMode) notes.push(`本地值守模式：${watchMode}；Mac Runner 运行模式继续由云端 Runner 策略控制。`);
+
+  const scanInterval = readWecomNumber(raw, ['visualScanIntervalSeconds', 'VisualScanIntervalSeconds']);
+  if (scanInterval !== undefined) notes.push(`本地视觉扫描间隔 ${Math.max(1, Math.floor(scanInterval))} 秒已记录；云端 Bridge 轮询频率使用 Runner 策略配置。`);
+
+  const conversationFilter = str(readWecomField(raw, ['automaticReplyConversationNameFilter', 'AutomaticReplyConversationNameFilter', 'conversationNameFilter', 'ConversationNameFilter']), 300).trim();
+  if (conversationFilter) {
+    warnings.push(`本地助手会话过滤器「${conversationFilter}」不会自动变成云端发送白名单；上线前请用受众、Worker 目标或人工审核限制范围。`);
+  }
+
+  if (!Object.keys(proposed).length && !warnings.length && !notes.length) return undefined;
+  return {
+    detected: true,
+    applied: false,
+    applyRequested: false,
+    sourceKeys: found.sourceKeys,
+    proposed,
+    warnings,
+    notes,
+  };
+}
+
+function extractWecomAssistantSettings(root: any): { value: any; sourceKeys: string[] } | undefined {
+  const candidates: Array<{ value: any; sourceKeys: string[] }> = [
+    { value: root?.automationSettings, sourceKeys: ['automationSettings'] },
+    { value: root?.AutomationSettings, sourceKeys: ['AutomationSettings'] },
+    { value: root?.automation_settings, sourceKeys: ['automation_settings'] },
+    { value: root?.settings, sourceKeys: ['settings'] },
+    { value: root?.Settings, sourceKeys: ['Settings'] },
+    { value: root?.automation?.settings, sourceKeys: ['automation', 'settings'] },
+    { value: root?.automation?.AutomationSettings, sourceKeys: ['automation', 'AutomationSettings'] },
+    { value: root?.Automation?.Settings, sourceKeys: ['Automation', 'Settings'] },
+    { value: root?.Automation?.AutomationSettings, sourceKeys: ['Automation', 'AutomationSettings'] },
+    { value: root?.assistant?.automationSettings, sourceKeys: ['assistant', 'automationSettings'] },
+    { value: root?.assistant?.AutomationSettings, sourceKeys: ['assistant', 'AutomationSettings'] },
+    { value: root?.Assistant?.automationSettings, sourceKeys: ['Assistant', 'automationSettings'] },
+    { value: root?.Assistant?.AutomationSettings, sourceKeys: ['Assistant', 'AutomationSettings'] },
+  ];
+  return candidates.find((candidate) => looksLikeWecomAssistantSettings(candidate.value));
+}
+
+function looksLikeWecomAssistantSettings(raw: any): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  return [
+    'watchMode',
+    'WatchMode',
+    'perConversationCooldownMinutes',
+    'PerConversationCooldownMinutes',
+    'maximumAutomaticRepliesPerHour',
+    'MaximumAutomaticRepliesPerHour',
+    'visualScanIntervalSeconds',
+    'VisualScanIntervalSeconds',
+    'visualMonitoringEnabled',
+    'VisualMonitoringEnabled',
+    'automaticKeywordRepliesEnabled',
+    'AutomaticKeywordRepliesEnabled',
+    'automaticallySendGeneratedDrafts',
+    'AutomaticallySendGeneratedDrafts',
+    'automaticReplyConversationNameFilter',
+    'AutomaticReplyConversationNameFilter',
+  ].some((key) => Object.prototype.hasOwnProperty.call(raw, key));
 }
 
 function unwrapWecomAssistantPayload(raw: any): any {
@@ -3194,6 +3332,16 @@ function readWecomBoolean(raw: any, keys: string[]): boolean | undefined {
   if (typeof value === 'number') {
     if (value === 1) return true;
     if (value === 0) return false;
+  }
+  return undefined;
+}
+
+function readWecomNumber(raw: any, keys: string[]): number | undefined {
+  const value = readWecomField(raw, keys);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
 }

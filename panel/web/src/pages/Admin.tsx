@@ -717,7 +717,8 @@ function bundleCount(result?: AutomationBundleImportResult | null): string {
 
 function assistantImportCount(result?: WecomAssistantImportResult | null): string {
   if (!result) return '';
-  return `${bundleCount(result.result)} · 规则 ${result.translated.rules} · 资料 ${result.translated.knowledgeItems}`;
+  const settings = result.translated.settings?.detected ? ` · 设置${result.translated.settings.applied ? '已应用' : result.translated.settings.applyRequested ? '待应用' : '已识别'}` : '';
+  return `${bundleCount(result.result)} · 规则 ${result.translated.rules} · 资料 ${result.translated.knowledgeItems}${settings}`;
 }
 
 function bridgeRecoveryCount(result?: AutomationBridgeRecoveryResult | null): { released: number; retried: number; total: number } {
@@ -927,6 +928,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [assistantImportText, setAssistantImportText] = useState('');
   const [assistantMode, setAssistantMode] = useState<AutomationBundleMode>('upsert');
   const [assistantApproveImported, setAssistantApproveImported] = useState(false);
+  const [assistantApplySettings, setAssistantApplySettings] = useState(false);
   const [assistantPreview, setAssistantPreview] = useState<WecomAssistantImportResult | null>(null);
 
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
@@ -1712,6 +1714,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         dryRun: true,
         mode: payload.mode || assistantMode,
         approveImported: payload.approveImported === true || assistantApproveImported,
+        applySettings: payload.applySettings === true || assistantApplySettings,
       });
       setAssistantPreview(result);
       toast(`企微助手预览完成：${assistantImportCount(result)}`, result.translated.errors.length || result.result.errors.length ? 'error' : 'ok');
@@ -1727,7 +1730,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!payload) return;
     const ok = await confirm({
       title: '导入企微助手资产？',
-      body: '会把本地助手知识库和关键词规则写入自动化工作台，不会触发发送。',
+      body: assistantApplySettings
+        ? '会把本地助手知识库、关键词规则和可映射运行设置写入自动化工作台；发送前确认仍会强制保留。'
+        : '会把本地助手知识库和关键词规则写入自动化工作台，不会触发发送，也不会应用运行开关。',
       confirmText: '确认导入',
     });
     if (!ok) return;
@@ -1738,6 +1743,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         dryRun: false,
         mode: payload.mode || assistantMode,
         approveImported: payload.approveImported === true || assistantApproveImported,
+        applySettings: payload.applySettings === true || assistantApplySettings,
       });
       setAssistantPreview(result);
       setAssistantImportText('');
@@ -4434,6 +4440,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <input type="checkbox" checked={assistantApproveImported} onChange={(e) => setAssistantApproveImported(e.target.checked)} />
                 <span>导入后标记为已审核</span>
               </label>
+              <label className="auto-check inline-check">
+                <input type="checkbox" checked={assistantApplySettings} onChange={(e) => setAssistantApplySettings(e.target.checked)} />
+                <span>应用助手运行设置</span>
+              </label>
               <select className="input compact-input" value={assistantMode} onChange={(e) => setAssistantMode(e.target.value as AutomationBundleMode)}>
                 <option value="upsert">按名称更新</option>
                 <option value="append">全部追加</option>
@@ -4450,6 +4460,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             {assistantPreview && (
               <div className="muted small auto-snippet">
                 {assistantImportCount(assistantPreview)}
+                {assistantPreview.translated.settings?.warnings.length
+                  ? ` · ${assistantPreview.translated.settings.warnings.slice(0, 2).join(' / ')}`
+                  : ''}
+                {assistantPreview.translated.settings?.notes.length ? ` · ${assistantPreview.translated.settings.notes.slice(0, 1).join(' / ')}` : ''}
                 {assistantPreview.translated.errors.length ? ` · ${assistantPreview.translated.errors.slice(0, 2).join(' / ')}` : ''}
                 {assistantPreview.result.errors.length ? ` · ${assistantPreview.result.errors.slice(0, 2).join(' / ')}` : ''}
               </div>

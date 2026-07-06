@@ -6,7 +6,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r85-wecom-assistant-import';
+const CLIENT_VERSION = 'automation-lab-r86-wecom-assistant-settings';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
@@ -22,11 +22,14 @@ const BOOLEAN_OPTIONS = new Set([
   'approve-imported',
   'approve-keyword-rules',
   'approve-rule-replies',
+  'apply-settings',
   'auto-plan-replies',
   'claim',
   'claim-first',
   'dry-run',
   'include-source',
+  'include-settings',
+  'import-settings',
   'list-only',
   'mark-delivered',
   'mark-failed',
@@ -59,7 +62,7 @@ Environment:
 
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
-  import-assistant <file|-> [--source name] [--approve-imported] [--dry-run]
+  import-assistant <file|-> [--source name] [--approve-imported] [--apply-settings] [--dry-run]
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
   sync-cli-audience [--wecom-cli wecom-cli] [--source wecom-cli-contact] [--tag tag] [--approve-imported] [--dry-run] [--output file]
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
@@ -263,6 +266,7 @@ function normalizeAssistantPayload(input, options) {
   const source = String(options.source || input?.source || 'wecom-ai-assistant');
   const mode = String(options.mode || input?.mode || 'upsert');
   const approveImported = boolOpt(options, 'approve-imported', 'approve') || input?.approveImported === true;
+  const applySettings = boolOpt(options, 'apply-settings', 'include-settings', 'import-settings') || input?.applySettings === true || input?.includeSettings === true || input?.importSettings === true;
   const dryRun = boolOpt(options, 'dry-run') || input?.dryRun === true;
   const base = Array.isArray(input) ? { keywordReplyRules: input } : input && typeof input === 'object' ? input : { payload: input };
   return {
@@ -270,6 +274,7 @@ function normalizeAssistantPayload(input, options) {
     source,
     mode,
     approveImported,
+    applySettings,
     dryRun,
   };
 }

@@ -1060,6 +1060,15 @@ export interface WecomAssistantImportResult {
   translated: {
     rules: number;
     knowledgeItems: number;
+    settings?: {
+      detected: boolean;
+      applied: boolean;
+      applyRequested: boolean;
+      sourceKeys: string[];
+      proposed: Partial<AutomationSettings>;
+      warnings: string[];
+      notes: string[];
+    };
     skipped: number;
     errors: string[];
   };
@@ -1345,10 +1354,12 @@ export const api = {
     dryRun?: boolean;
     mode?: AutomationBundleMode;
     approveImported?: boolean;
+    applySettings?: boolean;
     payload?: any;
     snapshot?: any;
     assistant?: any;
     wecomAssistant?: any;
+    automationSettings?: any;
     keywordReplyRules?: any[];
     keywordRules?: any[];
     knowledge?: any;

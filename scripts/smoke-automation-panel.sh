@@ -700,6 +700,16 @@ payload = {
     "approveImported": True,
     "mode": "upsert",
     "payload": {
+        "automationSettings": {
+            "watchMode": "attended",
+            "perConversationCooldownMinutes": 3,
+            "maximumAutomaticRepliesPerHour": 4,
+            "visualScanIntervalSeconds": 2,
+            "visualMonitoringEnabled": True,
+            "automaticKeywordRepliesEnabled": True,
+            "automaticallySendGeneratedDrafts": True,
+            "automaticReplyConversationNameFilter": f"Smoke Conversation {stamp}",
+        },
         "knowledge": {
             "notes": f"Smoke assistant global notes {stamp}",
             "entries": [
@@ -759,11 +769,18 @@ import sys
 
 payload = json.loads(sys.argv[1])
 payload["dryRun"] = True
+payload["applySettings"] = True
 print(json.dumps(payload, ensure_ascii=False))
 PY
 )"
 json_assert_eq result.translated.rules 2
 json_assert_eq result.translated.knowledgeItems 3
+json_assert_eq result.translated.settings.detected True
+json_assert_eq result.translated.settings.applyRequested True
+json_assert_eq result.translated.settings.applied False
+json_assert_eq result.translated.settings.proposed.maximumAutomaticSendsPerHour 4
+json_assert_eq result.translated.settings.proposed.perConversationCooldownMinutes 3
+json_assert_eq result.translated.settings.proposed.requireConfirmForSend True
 json_assert_eq result.result.imported.rules 2
 json_assert_eq result.result.imported.knowledgeItems 3
 request_json POST /api/admin/automation/wecom-assistant/import "$(python3 - "$assistant_payload" <<'PY'
@@ -772,23 +789,27 @@ import sys
 
 payload = json.loads(sys.argv[1])
 payload["dryRun"] = False
+payload["applySettings"] = True
 print(json.dumps(payload, ensure_ascii=False))
 PY
 )"
 json_assert_eq result.result.imported.rules 2
 json_assert_eq result.result.imported.knowledgeItems 3
+json_assert_eq result.translated.settings.applied True
 assistant_rule_ids="$(json_get result.result.ids.rules)"
 assistant_knowledge_ids="$(json_get result.result.ids.knowledgeItems)"
 request_json GET /api/admin/automation/config
-assistant_config_cleanup="$(python3 - "$body_file" "$assistant_rule_ids" <<'PY'
+json_assert_eq config.settings.maximumAutomaticSendsPerHour 4
+json_assert_eq config.settings.perConversationCooldownMinutes 3
+json_assert_eq config.settings.requireConfirmForSend True
+json_assert_eq config.settings.automaticRuleRepliesEnabled True
+assistant_config_cleanup="$(python3 - "$assistant_rule_ids" "$original_config" <<'PY'
 import json
 import sys
 
-file, rule_ids_json = sys.argv[1], sys.argv[2]
-with open(file, "r", encoding="utf-8") as fh:
-    payload = json.load(fh)
+rule_ids_json, original_config_json = sys.argv[1], sys.argv[2]
 rule_ids = set(json.loads(rule_ids_json))
-config = payload["config"]
+config = json.loads(original_config_json)
 config["rules"] = [rule for rule in config.get("rules", []) if rule.get("id") not in rule_ids]
 print(json.dumps(config, ensure_ascii=False))
 PY
@@ -1044,6 +1065,16 @@ print(json.dumps({
     "source": f"smoke-bridge-assistant-{stamp}",
     "approveImported": True,
     "payload": {
+        "AutomationSettings": {
+            "WatchMode": "observe",
+            "PerConversationCooldownMinutes": 5,
+            "MaximumAutomaticRepliesPerHour": 6,
+            "VisualScanIntervalSeconds": 3,
+            "VisualMonitoringEnabled": True,
+            "AutomaticKeywordRepliesEnabled": True,
+            "AutomaticallySendGeneratedDrafts": True,
+            "AutomaticReplyConversationNameFilter": f"Bridge Smoke {stamp}",
+        },
         "knowledge": {
             "notes": f"Bridge assistant notes {stamp}",
             "entries": [{
@@ -1088,14 +1119,21 @@ print(json.dumps({
 }, ensure_ascii=False))
 PY
 )"
-  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-assistant - --dry-run <<<"$bridge_assistant_payload" > "$body_file"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-assistant - --dry-run --apply-settings <<<"$bridge_assistant_payload" > "$body_file"
   json_assert_eq result.translated.rules 2
   json_assert_eq result.translated.knowledgeItems 3
+  json_assert_eq result.translated.settings.detected True
+  json_assert_eq result.translated.settings.applyRequested True
+  json_assert_eq result.translated.settings.applied False
+  json_assert_eq result.translated.settings.proposed.maximumAutomaticSendsPerHour 6
+  json_assert_eq result.translated.settings.proposed.perConversationCooldownMinutes 5
   json_assert_eq result.result.imported.rules 2
   json_assert_eq result.result.imported.knowledgeItems 3
   WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" import-assistant - <<<"$bridge_assistant_payload" > "$body_file"
   json_assert_eq result.result.imported.rules 2
   json_assert_eq result.result.imported.knowledgeItems 3
+  json_assert_eq result.translated.settings.applyRequested False
+  json_assert_eq result.translated.settings.applied False
   bridge_assistant_rule_ids="$(json_get result.result.ids.rules)"
   bridge_assistant_knowledge_ids="$(json_get result.result.ids.knowledgeItems)"
   request_json GET /api/admin/automation/config

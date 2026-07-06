@@ -2,6 +2,16 @@
   "source": "wecom-ai-assistant",
   "approveImported": false,
   "payload": {
+    "automationSettings": {
+      "watchMode": "attended",
+      "perConversationCooldownMinutes": 10,
+      "maximumAutomaticRepliesPerHour": 20,
+      "visualScanIntervalSeconds": 2,
+      "visualMonitoringEnabled": true,
+      "automaticKeywordRepliesEnabled": true,
+      "automaticallySendGeneratedDrafts": false,
+      "automaticReplyConversationNameFilter": "示例客户群"
+    },
     "knowledge": {
       "notes": "全局边界：不要编造价格、退款政策或强承诺；涉及付款、验证码、账号安全时转人工。",
       "entries": [
