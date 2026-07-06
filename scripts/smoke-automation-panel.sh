@@ -23,6 +23,7 @@ rpa_run_result_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-run.XXXXXX.json")"
 expired_rpa_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-expired-rpa-package.XXXXXX.json")"
 rpa_cloud_package_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-rpa-cloud-package.XXXXXX.jsonl")"
 verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-handler.XXXXXX.sh")"
+moment_rpa_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-moment-rpa.XXXXXX.sh")"
 handler_error_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-handler-error.XXXXXX.log")"
 fake_osascript_log_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX.log")"
 fake_osascript_dir="$(mktemp -d "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX")"
@@ -31,7 +32,7 @@ reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$rpa_admin_package_file" "$rpa_run_result_file" "$expired_rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file" "$fake_wecom_cli_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$rpa_admin_package_file" "$rpa_run_result_file" "$expired_rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$moment_rpa_handler_file" "$handler_error_file" "$fake_osascript_log_file" "$fake_wecom_cli_file"
   rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
@@ -437,6 +438,16 @@ fi
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_USE_RPA_PACKAGE="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing WECOM_USE_RPA_PACKAGE" >&2
   sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_MOMENT_RPA_COMMAND"* ]]; then
+  echo "ERROR: Bridge runner guide env file is missing WECOM_MOMENT_RPA_COMMAND hint" >&2
+  sed -n '1,120p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.prepareMomentExternalRpa)" != *"WECOM_MOMENT_RPA_COMMAND"* ]]; then
+  echo "ERROR: Bridge runner guide is missing external RPA moment prepare command" >&2
+  sed -n '1,160p' "$body_file" >&2
   exit 1
 fi
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_RUNNER_ENGINE="* ]]; then
@@ -1642,6 +1653,59 @@ PY
   grep -q "Bridge moment material assets are not ready" "$handler_error_file"
   grep -q "missing-moment-key" "$handler_error_file"
 
+  say "Check WeCom moment handler external RPA mode"
+  cat > "$moment_rpa_handler_file" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+payload="$(cat)"
+node - "$payload" <<'NODE'
+const payload = JSON.parse(process.argv[2] || '{}');
+if (payload.schema !== 'woc.wecom.moment.prepare.v1') throw new Error(`unexpected schema: ${payload.schema}`);
+if (!String(payload.text || '').includes('external RPA')) throw new Error('missing moment text');
+if (!Array.isArray(payload.materials) || payload.materials.length !== 1) throw new Error('expected one material');
+if (!payload.materials[0].exists || !payload.materials[0].localPath) throw new Error('expected resolved existing material path');
+if (!Array.isArray(payload.resolvedMaterialPaths) || payload.resolvedMaterialPaths.length !== 1) {
+  throw new Error('expected one resolved material path');
+}
+console.log(JSON.stringify({
+  ok: true,
+  composer: 'prepared',
+  verification: {
+    required: false,
+    verified: true,
+    inputReady: true,
+    windowTitle: 'External RPA Smoke Composer'
+  }
+}));
+NODE
+SH
+  chmod +x "$moment_rpa_handler_file"
+  moment_external_payload="$(python3 - "$reply_image_key" <<'PY'
+import json
+import sys
+
+key = sys.argv[1]
+print(json.dumps({
+    "id": "moment-external-rpa",
+    "draftId": "moment-external-rpa",
+    "title": "smoke moment external rpa",
+    "text": "这是一条 external RPA 朋友圈草稿，不会发布。",
+    "imageNotes": "需要一张测试图",
+    "materials": [key],
+}, ensure_ascii=False))
+PY
+)"
+  WECOM_HANDLER_MODE=prepare \
+    WECOM_MOMENT_PASTE_MODE=external-rpa \
+    WECOM_MOMENT_RPA_COMMAND="$moment_rpa_handler_file" \
+    WECOM_MATERIAL_MAP="{\"$reply_image_key\":\"$reply_image_file\"}" \
+    "$WECOM_MOMENT_HANDLER" <<<"$moment_external_payload" > "$body_file"
+  json_assert_eq pasteMode external-rpa
+  json_assert_eq ok True
+  json_assert_eq externalResult.parsed.composer prepared
+  json_assert_eq verification.verified True
+  json_assert_eq resolvedMaterialsCount 1
+
   say "Enable automation mass-send for Bridge task smoke"
   request_json GET /api/admin/automation/config
   mass_config_payload="$(python3 - "$body_file" <<'PY'
@@ -2384,6 +2448,29 @@ if issue.get("taskDigest") != package.get("taskDigest"):
     raise SystemExit("admin RPA package issue should preserve taskDigest")
 if issue.get("counts", {}).get("total") != package.get("counts", {}).get("total"):
     raise SystemExit("admin RPA package issue should preserve package counts")
+PY
+
+  fixed_rpa_package_id="smoke-rpa-ledger-$stamp"
+  request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=json&packageId=$fixed_rpa_package_id"
+  request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=jsonl&download=1&packageId=$fixed_rpa_package_id"
+  request_json GET "/api/admin/automation/rpa-package/issues?limit=100"
+  python3 - "$body_file" "$fixed_rpa_package_id" <<'PY'
+import json
+import sys
+
+issues_file, package_id = sys.argv[1:3]
+with open(issues_file, "r", encoding="utf-8") as fh:
+    issues = json.load(fh).get("packages", [])
+matches = [issue for issue in issues if issue.get("packageId") == package_id]
+if len(matches) != 1:
+    raise SystemExit(f"fixed RPA package should have one ledger entry, got {len(matches)}")
+issue = matches[0]
+if issue.get("requestKind") != "download":
+    raise SystemExit(f"fixed RPA package request kind should upgrade to download, got {issue.get('requestKind')!r}")
+if issue.get("status") not in {"issued", "reported", "expired"}:
+    raise SystemExit(f"unexpected fixed RPA package status: {issue.get('status')!r}")
+if issue.get("counts", {}).get("total", 0) < 1:
+    raise SystemExit("fixed RPA package ledger should keep task counts")
 PY
 
   request_json GET "/api/admin/automation/rpa-package?target=all&limit=20&format=json&workerId=smoke-worker&capabilities=reply"

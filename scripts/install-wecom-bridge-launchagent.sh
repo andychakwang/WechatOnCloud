@@ -163,6 +163,7 @@ env_text() {
     printf 'WECOM_MASS_HANDLER=%s\n' "$(quote "${WECOM_MASS_HANDLER:-$ROOT/scripts/wecom-mac-mass-handler.sh}")"
     printf 'WECOM_MOMENT_HANDLER=%s\n' "$(quote "${WECOM_MOMENT_HANDLER:-$ROOT/scripts/wecom-mac-moment-handler.sh}")"
     printf 'WECOM_MOMENT_PASTE_MODE=%s\n' "$(quote "${WECOM_MOMENT_PASTE_MODE:-clipboard-only}")"
+    [[ -n "${WECOM_MOMENT_RPA_COMMAND:-}" ]] && printf 'WECOM_MOMENT_RPA_COMMAND=%s\n' "$(quote "$WECOM_MOMENT_RPA_COMMAND")"
     printf 'WECOM_CLAIM_TTL_SECONDS=%s\n' "$(quote "$CLAIM_TTL_SECONDS")"
     printf 'WECOM_BRIDGE_WORKER_ID=%s\n' "$(quote "${WECOM_BRIDGE_WORKER_ID:-$(hostname)-launchagent}")"
     printf 'WECOM_APP_NAME=%s\n' "$(quote "${WECOM_APP_NAME:-企业微信}")"

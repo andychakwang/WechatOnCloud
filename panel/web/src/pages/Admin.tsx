@@ -346,6 +346,12 @@ const BRIDGE_RUNNER_TARGET_LABEL: Record<WecomBridgeRunnerTarget, string> = {
   all: '全队列',
 };
 
+const BRIDGE_MOMENT_PASTE_MODE_LABEL: Record<WecomBridgeMomentPasteMode, string> = {
+  'clipboard-only': '复制到剪贴板',
+  'current-input': '填入当前输入框',
+  'external-rpa': '外部 RPA 准备',
+};
+
 const RPA_PACKAGE_ISSUE_STATUS_LABEL: Record<string, string> = {
   issued: '已签发',
   reported: '已回执',
@@ -2336,6 +2342,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           {BRIDGE_RUNNER_TARGET_LABEL[runnerPolicy.target]} · {BRIDGE_RUNNER_MODE_LABEL[runnerPolicy.mode]} · 每轮 {runnerPolicy.limit}
                           {' · '}
                           {BRIDGE_RUNNER_ENGINE_LABEL[runnerPolicy.runnerEngine || 'bridge']}
+                          {' · 朋友圈 '}
+                          {BRIDGE_MOMENT_PASTE_MODE_LABEL[runnerPolicy.momentPasteMode]}
                           {runnerPolicy.requireTargetMatch ? ' · 目标硬校验' : ''}
                           {runnerPolicy.requireHandlerVerification ? ' · 交付校验' : ''}
                         </div>
@@ -2423,11 +2431,22 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           value={runnerPolicy.momentPasteMode}
                           onChange={(e) => setRunnerPolicy({ ...runnerPolicy, momentPasteMode: e.target.value as WecomBridgeMomentPasteMode })}
                         >
-                          <option value="clipboard-only">复制到剪贴板</option>
-                          <option value="current-input">填入当前输入框</option>
+                          {(Object.keys(BRIDGE_MOMENT_PASTE_MODE_LABEL) as WecomBridgeMomentPasteMode[]).map((key) => (
+                            <option key={key} value={key}>
+                              {BRIDGE_MOMENT_PASTE_MODE_LABEL[key]}
+                            </option>
+                          ))}
                         </select>
                       </label>
                     </div>
+                    {runnerPolicy.momentPasteMode === 'external-rpa' && (
+                      <div className="bridge-policy-note warn">
+                        <b>朋友圈外部 RPA</b>
+                        <span>
+                          需要 Mac 本机配置 <code>WECOM_MOMENT_RPA_COMMAND</code>；外部命令只打开发布框、选图和填文案，停在发布确认前。
+                        </span>
+                      </div>
+                    )}
                     <label className="auto-check">
                       <input
                         type="checkbox"
@@ -2826,6 +2845,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                             <code>{bridgeGuide.commands.syncMaterialMap}</code>
                           </div>
                           <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.syncMaterialMap!, '素材映射命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
+                      {bridgeGuide.commands.prepareMomentExternalRpa && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>朋友圈外部 RPA 准备</b>
+                            <code>{bridgeGuide.commands.prepareMomentExternalRpa}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.prepareMomentExternalRpa!, '朋友圈外部 RPA 准备命令')}>
                             复制
                           </button>
                         </div>

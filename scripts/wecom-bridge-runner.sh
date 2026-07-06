@@ -78,7 +78,8 @@ Optional:
   WECOM_REQUIRE_HANDLER_VERIFICATION=1      require handler verification before marking delivered/sent/prepared
   WECOM_MASS_HANDLER=./scripts/wecom-mac-mass-handler.sh
   WECOM_MOMENT_HANDLER=./scripts/wecom-mac-moment-handler.sh
-  WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
+  WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input|external-rpa
+  WECOM_MOMENT_RPA_COMMAND=...             external-rpa command; prepares composer but must not publish
   WECOM_ALLOW_SEND=1                       required for send
   WECOM_DOCTOR_REMOTE=0                    skip remote policy auth check in doctor
   WECOM_DOCTOR_APP=0                       skip WeCom AppleScript window check in doctor

@@ -236,7 +236,7 @@ export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeRunnerEngine = 'bridge' | 'rpa-package';
-export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
+export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input' | 'external-rpa';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
@@ -2513,7 +2513,11 @@ export function listWecomBridgeRunReports(limit = 50, workerId = ''): WecomBridg
 
 export function listWecomRpaPackageIssues(limit = 50): WecomRpaPackageIssue[] {
   const n = clampInt(limit, 1, MAX_RPA_PACKAGE_ISSUES, 50);
-  return data.rpaPackageIssues.slice(-n).reverse().map(cloneRpaPackageIssue);
+  return data.rpaPackageIssues
+    .slice()
+    .sort((a, b) => rpaPackageIssueActivityMs(b) - rpaPackageIssueActivityMs(a))
+    .slice(0, n)
+    .map(cloneRpaPackageIssue);
 }
 
 export function summarizeWecomBridgeRunReports(raw: any = {}): WecomBridgeRunReportsSummary {
@@ -2753,9 +2757,9 @@ export function recordWecomBridgeRunReport(actor: User, raw: any): WecomBridgeRu
 
 export function recordWecomRpaPackageIssue(actor: User, pkg: WecomRpaPackage, raw: any = {}): WecomRpaPackageIssue {
   const now = new Date().toISOString();
-  const issue = normalizeRpaPackageIssue(
+  const incoming = normalizeRpaPackageIssue(
     {
-      id: `rpa-issue-${pkg.packageId}`,
+      id: `rpa-issue-${pkg.packageDigest || pkg.packageId}`,
       packageId: pkg.packageId,
       packageDigest: pkg.packageDigest,
       taskDigest: pkg.taskDigest,
@@ -2781,12 +2785,35 @@ export function recordWecomRpaPackageIssue(actor: User, pkg: WecomRpaPackage, ra
     false,
     now,
   );
-  data.rpaPackageIssues.push(issue);
+  const existing = findRpaPackageIssueForPackage(pkg);
+  if (existing) {
+    existing.packageId = incoming.packageId;
+    existing.packageDigest = incoming.packageDigest;
+    existing.taskDigest = incoming.taskDigest;
+    existing.expiresAt = incoming.expiresAt;
+    existing.ttlMinutes = incoming.ttlMinutes;
+    existing.actor = incoming.actor;
+    existing.source = incoming.source;
+    existing.workerId = incoming.workerId;
+    existing.workerSource = incoming.workerSource;
+    existing.target = incoming.target;
+    existing.format = incoming.format;
+    existing.requestKind = mergeRpaPackageIssueKind(existing.requestKind, incoming.requestKind);
+    existing.includeSource = existing.includeSource || incoming.includeSource;
+    existing.status = existing.status === 'reported' ? 'reported' : incoming.status;
+    existing.counts = { ...incoming.counts };
+    existing.updatedAt = now;
+  } else {
+    data.rpaPackageIssues.push(incoming);
+  }
   if (data.rpaPackageIssues.length > MAX_RPA_PACKAGE_ISSUES) {
-    data.rpaPackageIssues = data.rpaPackageIssues.slice(-MAX_RPA_PACKAGE_ISSUES);
+    data.rpaPackageIssues = data.rpaPackageIssues
+      .slice()
+      .sort((a, b) => rpaPackageIssueActivityMs(b) - rpaPackageIssueActivityMs(a))
+      .slice(0, MAX_RPA_PACKAGE_ISSUES);
   }
   persist();
-  return cloneRpaPackageIssue(issue);
+  return cloneRpaPackageIssue(existing || incoming);
 }
 
 function applyBridgeRunReportItems(
@@ -5194,7 +5221,9 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
     bridgeRunReports: bridgeRunReportsRaw.slice(-MAX_BRIDGE_RUN_REPORTS).map((report: any) => normalizeBridgeRunReport(report, preserveIds, now)),
-    rpaPackageIssues: rpaPackageIssuesRaw.slice(-MAX_RPA_PACKAGE_ISSUES).map((issue: any) => normalizeRpaPackageIssue(issue, preserveIds, now)),
+    rpaPackageIssues: compactRpaPackageIssues(
+      rpaPackageIssuesRaw.slice(-MAX_RPA_PACKAGE_ISSUES).map((issue: any) => normalizeRpaPackageIssue(issue, preserveIds, now)),
+    ),
     runnerPolicy: normalizeRunnerPolicy(raw?.runnerPolicy, now),
     massSendJobs: massJobsRaw.slice(-500).map((j: any) => normalizeMassSendJob(j, preserveIds, now)),
     momentDrafts: momentDraftsRaw.slice(-500).map((d: any) => normalizeMomentDraft(d, preserveIds, now)),
@@ -5570,6 +5599,90 @@ function normalizeRpaPackageIssue(raw: any, preserveIds: boolean, now: string): 
     createdAt: typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
     updatedAt: typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now,
   };
+}
+
+function compactRpaPackageIssues(issues: WecomRpaPackageIssue[]): WecomRpaPackageIssue[] {
+  const merged: WecomRpaPackageIssue[] = [];
+  for (const issue of issues) {
+    const existing = merged.find((item) => rpaPackageIssuesMatch(item, issue));
+    if (!existing) {
+      merged.push(issue);
+      continue;
+    }
+    mergeRpaPackageIssue(existing, issue);
+  }
+  return merged
+    .sort((a, b) => rpaPackageIssueActivityMs(b) - rpaPackageIssueActivityMs(a))
+    .slice(0, MAX_RPA_PACKAGE_ISSUES);
+}
+
+function mergeRpaPackageIssue(target: WecomRpaPackageIssue, source: WecomRpaPackageIssue): WecomRpaPackageIssue {
+  const targetActivity = rpaPackageIssueActivityMs(target);
+  const sourceActivity = rpaPackageIssueActivityMs(source);
+  const latest = sourceActivity >= targetActivity ? source : target;
+  target.packageId = latest.packageId || target.packageId;
+  target.packageDigest = latest.packageDigest || target.packageDigest;
+  target.taskDigest = latest.taskDigest || target.taskDigest;
+  target.expiresAt = latest.expiresAt || target.expiresAt;
+  target.ttlMinutes = latest.ttlMinutes ?? target.ttlMinutes;
+  target.actor = latest.actor || target.actor;
+  target.source = latest.source || target.source;
+  target.workerId = latest.workerId || target.workerId;
+  target.workerSource = latest.workerSource || target.workerSource;
+  target.target = latest.target || target.target;
+  target.format = latest.format !== 'unknown' ? latest.format : target.format;
+  target.requestKind = mergeRpaPackageIssueKind(target.requestKind, source.requestKind);
+  target.includeSource = target.includeSource || source.includeSource;
+  target.status = target.status === 'reported' || source.status === 'reported' ? 'reported' : latest.status;
+  target.counts = { ...latest.counts };
+  target.runCount += source.runCount;
+  target.handled += source.handled;
+  target.failed += source.failed;
+  if (source.lastRunAt && (!target.lastRunAt || Date.parse(source.lastRunAt) >= Date.parse(target.lastRunAt))) {
+    target.lastRunReportId = source.lastRunReportId;
+    target.lastRunAt = source.lastRunAt;
+    target.lastRunStatus = source.lastRunStatus;
+    target.lastRunWorkerId = source.lastRunWorkerId;
+  }
+  target.reportedOnly = target.reportedOnly && source.reportedOnly;
+  target.updatedAt = sortableIsoMs(latest.updatedAt) >= sortableIsoMs(target.updatedAt) ? latest.updatedAt : target.updatedAt;
+  return target;
+}
+
+function rpaPackageIssuesMatch(a: WecomRpaPackageIssue, b: WecomRpaPackageIssue): boolean {
+  if (a.packageDigest && b.packageDigest) return a.packageDigest === b.packageDigest;
+  if (a.packageId && b.packageId && a.taskDigest && b.taskDigest) return a.packageId === b.packageId && a.taskDigest === b.taskDigest;
+  return false;
+}
+
+function findRpaPackageIssueForPackage(pkg: Pick<WecomRpaPackage, 'packageId' | 'packageDigest' | 'taskDigest'>): WecomRpaPackageIssue | undefined {
+  if (pkg.packageDigest) {
+    const byPackageDigest = data.rpaPackageIssues.find((issue) => issue.packageDigest === pkg.packageDigest);
+    if (byPackageDigest) return byPackageDigest;
+  }
+  if (pkg.packageId && pkg.taskDigest) {
+    return data.rpaPackageIssues.find((issue) => issue.packageId === pkg.packageId && issue.taskDigest === pkg.taskDigest);
+  }
+  return undefined;
+}
+
+function mergeRpaPackageIssueKind(current: WecomRpaPackageIssueKind, incoming: WecomRpaPackageIssueKind): WecomRpaPackageIssueKind {
+  const rank: Record<WecomRpaPackageIssueKind, number> = {
+    'reported-only': 0,
+    preview: 1,
+    raw: 2,
+    download: 3,
+  };
+  return rank[incoming] >= rank[current] ? incoming : current;
+}
+
+function rpaPackageIssueActivityMs(issue: WecomRpaPackageIssue): number {
+  return Math.max(
+    sortableIsoMs(issue.lastRunAt),
+    sortableIsoMs(issue.updatedAt),
+    sortableIsoMs(issue.issuedAt),
+    sortableIsoMs(issue.createdAt),
+  );
 }
 
 function normalizeRpaPackageHandoff(raw: any): WecomRpaPackageHandoff | undefined {
@@ -7226,6 +7339,7 @@ function normalizeMomentPasteMode(value: unknown): WecomBridgeMomentPasteMode | 
   const raw = String(value || '').toLowerCase();
   if (raw === 'clipboard-only' || raw === 'clipboard' || raw === 'clipboard_only') return 'clipboard-only';
   if (raw === 'current-input' || raw === 'current_input' || raw === 'input') return 'current-input';
+  if (raw === 'external-rpa' || raw === 'external_rpa' || raw === 'rpa' || raw === 'rpa-command') return 'external-rpa';
   return null;
 }
 

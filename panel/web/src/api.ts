@@ -257,7 +257,7 @@ export type WecomBridgeRunStatus = 'started' | 'completed' | 'failed';
 export type WecomBridgeRunnerMode = 'dry-run' | 'prepare' | 'send';
 export type WecomBridgeRunnerTarget = 'replies' | 'mass' | 'moments' | 'all';
 export type WecomBridgeRunnerEngine = 'bridge' | 'rpa-package';
-export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input';
+export type WecomBridgeMomentPasteMode = 'clipboard-only' | 'current-input' | 'external-rpa';
 export type WecomBridgeRunReportItemTarget = 'reply' | 'mass' | 'moment' | 'doctor' | 'unknown';
 export type BridgeRecoveryReleaseMode = 'none' | 'expired' | 'all';
 export type WecomRpaPackageTarget = 'replies' | 'mass' | 'moments' | 'all';
@@ -582,6 +582,7 @@ export interface AutomationBridgeRunnerGuide {
     dryRunAll: string;
     dryRunRpaPackageAll?: string;
     prepareAll: string;
+    prepareMomentExternalRpa?: string;
     sendAll: string;
     dryRunLaunchAgent: string;
     installLaunchAgent: string;

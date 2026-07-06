@@ -275,6 +275,9 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     `WECOM_RUNNER_LIMIT=${shellSingle(String(policy.limit))}`,
     `WECOM_CLAIM_TTL_SECONDS=${shellSingle(String(policy.claimTtlSeconds))}`,
     `WECOM_MOMENT_PASTE_MODE=${shellSingle(policy.momentPasteMode)}`,
+    '# Optional: hand off Moments composer preparation to your existing Mac RPA project.',
+    "# WECOM_MOMENT_PASTE_MODE='external-rpa'",
+    '# WECOM_MOMENT_RPA_COMMAND=$HOME/path/to/your-wecom-moment-rpa.sh',
     `WECOM_MATERIAL_MAP_FILE=${materialMapPath}`,
     "WECOM_MATERIAL_MAP_KIND='image'",
     "WECOM_MATERIAL_MAP_INCLUDE_SKIPPED='1'",
@@ -373,6 +376,8 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       dryRunRpaPackageAll:
         'WECOM_USE_RPA_PACKAGE=1 WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       prepareAll: 'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
+      prepareMomentExternalRpa:
+        'WECOM_RUNNER_MODE=prepare WECOM_RUNNER_TARGET=moments WECOM_MOMENT_PASTE_MODE=external-rpa WECOM_MOMENT_RPA_COMMAND="$HOME/path/to/your-wecom-moment-rpa.sh" scripts/wecom-bridge-runner.sh run-once',
       sendAll: 'WECOM_RUNNER_MODE=send WECOM_RUNNER_TARGET=all WECOM_ALLOW_SEND=1 scripts/wecom-bridge-runner.sh run-once',
       dryRunLaunchAgent:
         "WECOM_RUNNER_MODE='dry-run' WECOM_RUNNER_TARGET='all' WECOM_BRIDGE_INTERVAL_SEC=60 scripts/install-wecom-bridge-launchagent.sh --dry-run --redact-secrets",

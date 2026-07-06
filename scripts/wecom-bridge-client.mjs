@@ -788,6 +788,13 @@ function normalizeEnum(value, allowed, fallback) {
   return allowed.includes(raw) ? raw : fallback;
 }
 
+function normalizeMomentPasteMode(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+  if (['current-input', 'input', 'open-draft', 'open-composer'].includes(raw)) return 'current-input';
+  if (['external-rpa', 'rpa', 'rpa-command', 'external'].includes(raw)) return 'external-rpa';
+  return 'clipboard-only';
+}
+
 function normalizePackageTarget(value) {
   const raw = String(value || 'all').trim().toLowerCase().replace(/_/g, '-');
   if (['reply', 'replies', 'ai-reply', 'ai-replies'].includes(raw)) return 'replies';
@@ -858,7 +865,7 @@ function localRunnerPolicy(options) {
     runnerEngine,
     mode: mode === 'send' && target === 'moments' ? 'prepare' : mode,
     target,
-    momentPasteMode: normalizeEnum(process.env.WECOM_MOMENT_PASTE_MODE, ['clipboard-only', 'open-draft', 'rpa'], 'clipboard-only'),
+    momentPasteMode: normalizeMomentPasteMode(process.env.WECOM_MOMENT_PASTE_MODE),
     allowSend: envBool('WECOM_ALLOW_SEND', 'WECOM_ACCEPT_REMOTE_SEND'),
     requireTargetMatch: envBool('WECOM_REQUIRE_TARGET_MATCH'),
     requireHandlerVerification: envBool('WECOM_REQUIRE_HANDLER_VERIFICATION', 'WECOM_REQUIRE_VERIFICATION', 'WECOM_REQUIRE_POSITIVE_VERIFICATION'),
@@ -904,7 +911,7 @@ async function resolveRpaPackageHandoff(options, packageTarget, tasks, snapshot)
     allowSend: policy.allowSend === true,
     requireTargetMatch: policy.requireTargetMatch === true,
     requireHandlerVerification: policy.requireHandlerVerification === true,
-    momentPasteMode: normalizeEnum(policy.momentPasteMode, ['clipboard-only', 'open-draft', 'rpa'], 'clipboard-only'),
+    momentPasteMode: normalizeMomentPasteMode(policy.momentPasteMode),
     preflightLevel,
     preflightSummary,
     blockedByPreflight: preflightLevel === 'block' || preflightSummary.block > 0,

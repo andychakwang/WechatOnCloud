@@ -7,7 +7,8 @@ set -euo pipefail
 # Environment:
 #   WECOM_HANDLER_MODE=dry-run|prepare        default: prepare
 #   WECOM_APP_NAME='企业微信'                  macOS app name
-#   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input
+#   WECOM_MOMENT_PASTE_MODE=clipboard-only|current-input|external-rpa
+#   WECOM_MOMENT_RPA_COMMAND='...'           external command; stdin is normalized JSON, must not publish
 #   WECOM_VERIFY_TARGET=1                     include window-title verification in handler JSON
 #   WECOM_MATERIAL_MAP='{"poster":"/Users/me/Pictures/poster.png"}'
 #   WECOM_MATERIAL_MAP_FILE=/path/to/wecom-materials.json
@@ -21,8 +22,8 @@ if [[ "$MODE" != "dry-run" && "$MODE" != "prepare" ]]; then
   exit 2
 fi
 
-if [[ "$PASTE_MODE" != "clipboard-only" && "$PASTE_MODE" != "current-input" ]]; then
-  echo "ERROR: WECOM_MOMENT_PASTE_MODE must be clipboard-only or current-input." >&2
+if [[ "$PASTE_MODE" != "clipboard-only" && "$PASTE_MODE" != "current-input" && "$PASTE_MODE" != "external-rpa" ]]; then
+  echo "ERROR: WECOM_MOMENT_PASTE_MODE must be clipboard-only, current-input, or external-rpa." >&2
   exit 2
 fi
 
@@ -125,6 +126,7 @@ process.stdout.write(JSON.stringify({
   text,
   imageNotes,
   materials,
+  resolvedMaterialPaths: materials.filter((item) => item.localPath && item.exists).map((item) => item.localPath),
   textChars: [...text].length,
   materialCount: materials.length,
   resolvedMaterialCount: materials.filter((item) => item.localPath && item.exists).length,
@@ -154,11 +156,6 @@ if [[ -n "$material_errors" ]]; then
   echo "ERROR: Bridge moment material assets are not ready:" >&2
   echo "$material_errors" >&2
   exit 4
-fi
-
-if ! command -v osascript >/dev/null 2>&1; then
-  echo "ERROR: osascript is required for prepare mode on macOS." >&2
-  exit 3
 fi
 
 target_verification() {
@@ -233,6 +230,141 @@ console.log(JSON.stringify({
 }));
 NODE
 }
+
+moment_rpa_payload="$(node - "$parsed" <<'NODE'
+const parsed = JSON.parse(process.argv[2] || '{}');
+process.stdout.write(JSON.stringify({
+  schema: 'woc.wecom.moment.prepare.v1',
+  id: parsed.id || '',
+  draftId: parsed.draftId || parsed.id || '',
+  title: parsed.title || '',
+  text: parsed.text || '',
+  imageNotes: parsed.imageNotes || '',
+  materials: parsed.materials || [],
+  resolvedMaterialPaths: parsed.resolvedMaterialPaths || [],
+  textChars: parsed.textChars || 0,
+  materialCount: parsed.materialCount || 0,
+  resolvedMaterialCount: parsed.resolvedMaterialCount || 0,
+}));
+NODE
+)"
+
+run_external_rpa() {
+  local command="${WECOM_MOMENT_RPA_COMMAND:-${WECOM_MOMENT_PREPARE_COMMAND:-}}"
+  if [[ -z "$command" ]]; then
+    echo "ERROR: WECOM_MOMENT_PASTE_MODE=external-rpa requires WECOM_MOMENT_RPA_COMMAND." >&2
+    node - "$PASTE_MODE" "$APP_NAME" "$title" "$text_chars" "$materials_count" "$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.resolvedMaterialCount || 0))' "$parsed")" <<'NODE'
+console.log(JSON.stringify({
+  ok: false,
+  mode: 'prepare',
+  pasteMode: process.argv[2],
+  appName: process.argv[3],
+  title: process.argv[4],
+  textChars: Number(process.argv[5]),
+  materialsCount: Number(process.argv[6]),
+  resolvedMaterialsCount: Number(process.argv[7]),
+  error: 'Missing WECOM_MOMENT_RPA_COMMAND',
+}, null, 2));
+NODE
+    return 2
+  fi
+
+  local stdout_file stderr_file status external_result_json verification_json
+  stdout_file="$(mktemp "${TMPDIR:-/tmp}/woc-moment-rpa-stdout.XXXXXX")"
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/woc-moment-rpa-stderr.XXXXXX")"
+  if printf '%s' "$moment_rpa_payload" | \
+    WECOM_MOMENT_TITLE="$title" \
+    WECOM_MOMENT_TEXT="$moment_text" \
+    WECOM_MOMENT_IMAGE_NOTES="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.imageNotes || "")' "$parsed")" \
+    WECOM_MOMENT_MATERIAL_PATHS="$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write((p.resolvedMaterialPaths || []).join("\\n"))' "$parsed")" \
+    WECOM_MOMENT_PAYLOAD_JSON="$moment_rpa_payload" \
+    bash -lc "$command" >"$stdout_file" 2>"$stderr_file"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  if [[ -s "$stderr_file" ]]; then
+    sed -n '1,80p' "$stderr_file" >&2
+  fi
+
+  external_result_json="$(node - "$stdout_file" <<'NODE'
+const fs = require('node:fs');
+const text = fs.readFileSync(process.argv[2], 'utf8');
+function parseJsonOutput(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (!lines[i].startsWith('{') && !lines[i].startsWith('[')) continue;
+      try {
+        return JSON.parse(lines[i]);
+      } catch {
+        // keep scanning handler logs
+      }
+    }
+  }
+  return undefined;
+}
+const parsed = parseJsonOutput(text);
+process.stdout.write(JSON.stringify({
+  parsed,
+  rawOutput: parsed ? undefined : text.trim().slice(-1000) || undefined,
+}));
+NODE
+)"
+  verification_json="$(node - "$external_result_json" <<'NODE'
+const wrapper = JSON.parse(process.argv[2] || '{}');
+const parsed = wrapper.parsed && typeof wrapper.parsed === 'object' ? wrapper.parsed : {};
+const verification =
+  parsed.verification && typeof parsed.verification === 'object'
+    ? parsed.verification
+    : parsed.targetVerification && typeof parsed.targetVerification === 'object'
+      ? parsed.targetVerification
+      : parsed.visualCheck && typeof parsed.visualCheck === 'object'
+        ? parsed.visualCheck
+        : undefined;
+process.stdout.write(verification ? JSON.stringify(verification) : '');
+NODE
+)"
+  if [[ -z "$verification_json" ]]; then
+    verification_json="$(target_verification "$title" 0)"
+  fi
+
+  node - "$PASTE_MODE" "$APP_NAME" "$title" "$text_chars" "$materials_count" "$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(String(p.resolvedMaterialCount || 0))' "$parsed")" "$status" "$external_result_json" "$verification_json" <<'NODE'
+const verification = process.argv[10] ? JSON.parse(process.argv[10]) : undefined;
+const externalResult = JSON.parse(process.argv[9] || '{}');
+const exitCode = Number(process.argv[8]);
+console.log(JSON.stringify({
+  ok: exitCode === 0,
+  mode: 'prepare',
+  pasteMode: process.argv[2],
+  appName: process.argv[3],
+  title: process.argv[4],
+  textChars: Number(process.argv[5]),
+  materialsCount: Number(process.argv[6]),
+  resolvedMaterialsCount: Number(process.argv[7]),
+  externalExitCode: exitCode,
+  externalResult,
+  ...(verification ? { verification } : {}),
+}, null, 2));
+NODE
+  rm -f "$stdout_file" "$stderr_file"
+  return "$status"
+}
+
+if [[ "$PASTE_MODE" == "external-rpa" ]]; then
+  run_external_rpa
+  exit $?
+fi
+
+if ! command -v osascript >/dev/null 2>&1; then
+  echo "ERROR: osascript is required for prepare mode on macOS." >&2
+  exit 3
+fi
 
 osascript - "$APP_NAME" "$moment_text" "$PASTE_MODE" <<'APPLESCRIPT'
 on run argv
