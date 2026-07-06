@@ -23,6 +23,7 @@ import {
   type AutomationHealth,
   type AutomationPreflightReport,
   type AutomationActionQueue,
+  type AutomationActionQueueItem,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type InstanceAutomationTargetVerifyResult,
@@ -466,6 +467,13 @@ function actionQueuePriorityClass(priority: string): string {
   return 'tag-on';
 }
 
+function actionQueueReviewLabel(item: AutomationActionQueueItem): string {
+  if (item.target === 'reply') return '审核回复';
+  if (item.target === 'mass') return '审核并排队';
+  if (item.target === 'moment') return '审核就绪';
+  return '审核';
+}
+
 function KnowledgeRefs({ refs }: { refs?: AutomationKnowledgeReference[] }) {
   if (!refs?.length) return null;
   return (
@@ -874,6 +882,32 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       toast('复制失败，请手动复制代码块', 'error');
     }
   };
+
+  const approveActionQueueReview = async (item: AutomationActionQueueItem) => {
+    if (item.kind !== 'review-task' || !item.refId) return;
+    setBusy(`action-review-${item.id}`);
+    try {
+      if (item.target === 'reply') {
+        await api.patchWecomBridgeEvent(item.refId, { replyApproved: true });
+        toast('AI 回复草稿已审核，Mac Runner 可领取', 'ok');
+      } else if (item.target === 'mass') {
+        await api.patchMassSendJob(item.refId, { approved: true, status: 'queued' });
+        toast('群发队列已审核并排队', 'ok');
+      } else if (item.target === 'moment') {
+        await api.patchMomentDraft(item.refId, { approved: true, status: 'ready' });
+        toast('朋友圈草稿已审核并设为就绪', 'ok');
+      } else {
+        toast('该待办暂不支持快捷审核', 'error');
+        return;
+      }
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '快捷审核失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const setSetting = (patch: Partial<AutomationConfig['settings']>) =>
     setConfig((current) => {
       const base = current ?? defaultAutomationConfig();
@@ -2300,7 +2334,18 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                       )}
                     </div>
                   </div>
-                  <div className="muted small auto-action-age">{item.staleSeconds !== undefined ? fmtStaleSeconds(item.staleSeconds) : ''}</div>
+                  <div className="auto-action-side">
+                    <div className="muted small auto-action-age">{item.staleSeconds !== undefined ? fmtStaleSeconds(item.staleSeconds) : ''}</div>
+                    {item.kind === 'review-task' && item.refId && item.target !== 'ops' && (
+                      <button
+                        className="btn-text"
+                        disabled={busy === `action-review-${item.id}`}
+                        onClick={() => approveActionQueueReview(item)}
+                      >
+                        {actionQueueReviewLabel(item)}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
               {actionQueue.items.length === 0 && <div className="muted small">暂无待处理动作</div>}

@@ -1394,8 +1394,15 @@ button {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
-.auto-action-age {
+.auto-action-side {
   flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 88px;
+}
+.auto-action-age {
   text-align: right;
 }
 .auto-preflight {
@@ -1865,6 +1872,10 @@ button {
   }
   .auto-action-age {
     text-align: left;
+  }
+  .auto-action-side {
+    align-items: flex-start;
+    min-width: 0;
   }
   .auto-preflight-summary {
     justify-content: flex-start;
