@@ -1168,6 +1168,104 @@ button {
   gap: 8px;
   padding-bottom: 2px;
 }
+.auto-health {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: var(--r-small);
+  background: rgba(255 255 255 / 0.58);
+  box-shadow: inset 0 1px 0 rgba(var(--shadow) / 0.08), var(--crease-press);
+}
+.auto-health-blocked {
+  background: rgba(var(--danger-rgb) / 0.08);
+}
+.auto-health-attention {
+  background: rgba(245 158 11 / 0.1);
+}
+.auto-health-ok {
+  background: rgba(var(--green-rgb) / 0.08);
+}
+.auto-health-head,
+.auto-health-title,
+.auto-health-strip,
+.auto-health-lane-top,
+.auto-health-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.auto-health-head {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.auto-health-title {
+  flex-wrap: wrap;
+}
+.auto-health-title b {
+  font-size: 14px;
+}
+.auto-health-score {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 70px;
+  justify-content: flex-end;
+  color: var(--text);
+}
+.auto-health-score span {
+  font-size: 34px;
+  font-weight: 760;
+  line-height: 1;
+}
+.auto-health-score small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.auto-health-strip,
+.auto-health-actions {
+  flex-wrap: wrap;
+}
+.auto-health-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+.auto-health-lane {
+  min-width: 0;
+  padding: 8px;
+  border-radius: var(--r-small);
+  background: rgba(255 255 255 / 0.48);
+  box-shadow: inset 0 1px 0 rgba(var(--shadow) / 0.08);
+}
+.auto-health-lane-top {
+  justify-content: space-between;
+}
+.auto-health-lane-top b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.auto-health-bar {
+  overflow: hidden;
+  height: 6px;
+  margin: 8px 0 6px;
+  border-radius: 999px;
+  background: rgba(var(--shadow) / 0.12);
+}
+.auto-health-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.auto-health-actions .chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 .auto-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));

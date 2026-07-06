@@ -83,6 +83,7 @@ import {
   initAutomationStore,
   getAutomationConfig,
   getAutomationOverview,
+  getAutomationHealth,
   getAutomationPreflightReport,
   getAutomationActionQueue,
   updateAutomationConfig,
@@ -512,6 +513,11 @@ app.get('/api/admin/automation/config', async (req, reply) => {
 app.get('/api/admin/automation/overview', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { overview: getAutomationOverview() };
+});
+
+app.get('/api/admin/automation/health', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { health: getAutomationHealth() };
 });
 
 app.get('/api/admin/automation/preflight', async (req, reply) => {

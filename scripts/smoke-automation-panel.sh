@@ -315,6 +315,39 @@ json_assert_path overview.bridge.capabilities.rpa-package
 json_assert_path overview.bridge.capabilities.unknown
 json_assert_path overview.mass.itemsPending
 json_assert_path overview.moments.draftsTotal
+request_json GET /api/admin/automation/health
+json_assert_path health.generatedAt
+json_assert_path health.score
+json_assert_path health.level
+json_assert_path health.summary
+json_assert_path health.totals.preflightBlocks
+json_assert_path health.totals.pendingReplies
+json_assert_path health.lanes[0].key
+python3 - "$body_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    health = json.load(fh)["health"]
+score = health.get("score")
+if not isinstance(score, int) or score < 0 or score > 100:
+    raise SystemExit(f"health score out of range: {score!r}")
+if health.get("level") not in {"ok", "attention", "blocked"}:
+    raise SystemExit(f"unexpected health level: {health.get('level')!r}")
+lanes = {lane.get("key"): lane for lane in health.get("lanes", [])}
+for key in ("reply", "mass", "moment", "bridge", "materials"):
+    lane = lanes.get(key)
+    if not lane:
+        raise SystemExit(f"missing health lane: {key}")
+    if lane.get("level") not in {"ok", "attention", "blocked"}:
+        raise SystemExit(f"unexpected lane level for {key}: {lane.get('level')!r}")
+    if not isinstance(lane.get("score"), int) or lane["score"] < 0 or lane["score"] > 100:
+        raise SystemExit(f"lane score out of range for {key}: {lane.get('score')!r}")
+    if "nextAction" not in lane:
+        raise SystemExit(f"missing nextAction for lane: {key}")
+if not isinstance(health.get("recommendedActions"), list):
+    raise SystemExit("health recommendedActions should be a list")
+PY
 request_json GET /api/admin/automation/preflight
 json_assert_path report.generatedAt
 json_assert_path report.level

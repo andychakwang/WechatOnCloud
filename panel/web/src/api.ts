@@ -782,6 +782,43 @@ export interface AutomationPreflightReport {
   checks: AutomationPreflightCheck[];
 }
 
+export type AutomationHealthLevel = 'ok' | 'attention' | 'blocked';
+export type AutomationHealthLaneKey = 'reply' | 'mass' | 'moment' | 'bridge' | 'materials';
+
+export interface AutomationHealthLane {
+  key: AutomationHealthLaneKey;
+  title: string;
+  level: AutomationHealthLevel;
+  score: number;
+  ready: boolean;
+  pending: number;
+  blockers: AutomationPreflightCheck[];
+  warnings: AutomationPreflightCheck[];
+  nextAction: string;
+  metrics: Record<string, number | string | boolean | null>;
+}
+
+export interface AutomationHealth {
+  generatedAt: string;
+  score: number;
+  level: AutomationHealthLevel;
+  summary: string;
+  totals: {
+    pendingReplies: number;
+    pendingMassTasks: number;
+    pendingMomentTasks: number;
+    actionItems: number;
+    workersOnline: number;
+    workersTotal: number;
+    preflightBlocks: number;
+    preflightWarnings: number;
+  };
+  lanes: AutomationHealthLane[];
+  blockers: AutomationPreflightCheck[];
+  warnings: AutomationPreflightCheck[];
+  recommendedActions: string[];
+}
+
 export type AutomationActionQueueItemKind = 'preflight-check' | 'bridge-reply' | 'mass-task' | 'moment-task' | 'runner-report';
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
@@ -1060,6 +1097,7 @@ export const api = {
   // 自动化实验版（规则、AI 草稿、确认发送）
   getAutomationConfig: () => req<{ config: AutomationConfig }>('/api/admin/automation/config'),
   getAutomationOverview: () => req<{ overview: AutomationOverview }>('/api/admin/automation/overview'),
+  getAutomationHealth: () => req<{ health: AutomationHealth }>('/api/admin/automation/health'),
   getAutomationPreflight: () => req<{ report: AutomationPreflightReport }>('/api/admin/automation/preflight'),
   getAutomationActionQueue: (limit = 20) => req<{ queue: AutomationActionQueue }>(`/api/admin/automation/action-queue?limit=${encodeURIComponent(limit)}`),
   updateAutomationConfig: (config: AutomationConfig) =>

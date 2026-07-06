@@ -613,6 +613,43 @@ export interface AutomationPreflightReport {
   checks: AutomationPreflightCheck[];
 }
 
+export type AutomationHealthLevel = 'ok' | 'attention' | 'blocked';
+export type AutomationHealthLaneKey = 'reply' | 'mass' | 'moment' | 'bridge' | 'materials';
+
+export interface AutomationHealthLane {
+  key: AutomationHealthLaneKey;
+  title: string;
+  level: AutomationHealthLevel;
+  score: number;
+  ready: boolean;
+  pending: number;
+  blockers: AutomationPreflightCheck[];
+  warnings: AutomationPreflightCheck[];
+  nextAction: string;
+  metrics: Record<string, number | string | boolean | null>;
+}
+
+export interface AutomationHealth {
+  generatedAt: string;
+  score: number;
+  level: AutomationHealthLevel;
+  summary: string;
+  totals: {
+    pendingReplies: number;
+    pendingMassTasks: number;
+    pendingMomentTasks: number;
+    actionItems: number;
+    workersOnline: number;
+    workersTotal: number;
+    preflightBlocks: number;
+    preflightWarnings: number;
+  };
+  lanes: AutomationHealthLane[];
+  blockers: AutomationPreflightCheck[];
+  warnings: AutomationPreflightCheck[];
+  recommendedActions: string[];
+}
+
 export type AutomationActionQueueItemKind =
   | 'preflight-check'
   | 'bridge-reply'
@@ -1747,6 +1784,190 @@ export function getAutomationPreflightReport(): AutomationPreflightReport {
     summary,
     checks,
   };
+}
+
+export function getAutomationHealth(): AutomationHealth {
+  const overview = getAutomationOverview();
+  const preflight = getAutomationPreflightReport();
+  const actionQueue = getAutomationActionQueue(20);
+  const blockers = preflight.checks.filter((check) => check.level === 'block');
+  const warnings = preflight.checks.filter((check) => check.level === 'warn');
+  const pendingTotal = overview.bridge.pendingReplies + overview.bridge.pendingMassTasks + overview.bridge.pendingMomentTasks;
+  const score = clampScore(100 - blockers.length * 18 - warnings.length * 5 - Math.min(15, overview.bridge.runs.recentFailures * 2));
+  const level: AutomationHealthLevel = blockers.length > 0 ? 'blocked' : warnings.length > 0 || score < 85 ? 'attention' : 'ok';
+  const commonOperationalIds = ['automation_off', 'quiet_hours_active', 'daily_action_limit_reached'];
+  const workerIds = ['pending_without_active_worker', 'pending_without_worker', 'bridge_workers_offline', 'bridge_worker_not_registered'];
+
+  const lane = (
+    key: AutomationHealthLaneKey,
+    title: string,
+    pending: number,
+    exactIds: string[],
+    patterns: RegExp[],
+    nextWhenOk: string,
+    metrics: Record<string, number | string | boolean | null>,
+  ): AutomationHealthLane => {
+    const related = checksFor(exactIds, patterns);
+    const laneBlockers = related.filter((check) => check.level === 'block');
+    const laneWarnings = related.filter((check) => check.level === 'warn');
+    const laneScore = clampScore(100 - laneBlockers.length * 35 - laneWarnings.length * 10);
+    const laneLevel: AutomationHealthLevel = laneBlockers.length > 0 ? 'blocked' : laneWarnings.length > 0 ? 'attention' : 'ok';
+    return {
+      key,
+      title,
+      level: laneLevel,
+      score: laneScore,
+      ready: laneBlockers.length === 0,
+      pending,
+      blockers: laneBlockers.slice(0, 6),
+      warnings: laneWarnings.slice(0, 6),
+      nextAction: laneBlockers[0]?.action || laneWarnings[0]?.action || nextWhenOk,
+      metrics,
+    };
+  };
+
+  const lanes: AutomationHealthLane[] = [
+    lane(
+      'reply',
+      'AI 回复',
+      overview.bridge.pendingReplies,
+      [
+        ...commonOperationalIds,
+        ...workerIds,
+        'ai_draft_off',
+        'rule_replies_off',
+        'worker_capability_replies',
+        'worker_capability_replies_unknown',
+        'runner_target_excludes_replies',
+      ],
+      [/reply/i, /replies/i, /ai_draft/i, /rule_/i],
+      overview.bridge.pendingReplies > 0 ? '等待 Mac Runner 领取已批准回复。' : '继续导入企微消息或审核 AI 草稿。',
+      {
+        activeEvents: overview.bridge.events.active,
+        pendingReplies: overview.bridge.pendingReplies,
+        claimedReplies: overview.bridge.events.claimed,
+        deliveredReplies: overview.bridge.events.delivered,
+      },
+    ),
+    lane(
+      'mass',
+      '群发队列',
+      overview.bridge.pendingMassTasks,
+      [
+        ...commonOperationalIds,
+        ...workerIds,
+        'mass_send_off',
+        'worker_capability_mass',
+        'worker_capability_mass_unknown',
+        'runner_target_excludes_mass',
+        'mass_content_risk',
+        'mass_failures',
+      ],
+      [/mass/i, /material/i, /direct_image_paths/i],
+      overview.bridge.pendingMassTasks > 0 ? '按受控队列让 Mac Runner 逐条准备或发送。' : '创建并审核群发队列后再交给 Runner。',
+      {
+        runnableJobs: overview.mass.approvedRunnableJobs,
+        pendingItems: overview.mass.itemsPending,
+        sentItems: overview.mass.itemsSent,
+        failedItems: overview.mass.itemsFailed,
+      },
+    ),
+    lane(
+      'moment',
+      '朋友圈',
+      overview.bridge.pendingMomentTasks,
+      [
+        ...commonOperationalIds,
+        ...workerIds,
+        'moments_off',
+        'worker_capability_moments',
+        'worker_capability_moments_unknown',
+        'runner_target_excludes_moments',
+        'moment_content_risk',
+        'moment_failures',
+      ],
+      [/moment/i, /moments/i, /material/i, /direct_image_paths/i],
+      overview.bridge.pendingMomentTasks > 0 ? '让 Mac Runner 半自动填入朋友圈草稿，人工确认发布。' : '生成并审核朋友圈草稿后进入半自动准备。',
+      {
+        readyDrafts: overview.moments.approvedReady,
+        preparedDrafts: overview.moments.prepared,
+        publishedDrafts: overview.moments.published,
+        failedDrafts: overview.moments.bridgeFailedDrafts,
+      },
+    ),
+    lane(
+      'bridge',
+      'Mac Runner',
+      pendingTotal,
+      [
+        ...workerIds,
+        'worker_capability_target_match',
+        'worker_capability_target_match_unknown',
+        'worker_capability_handler_verification',
+        'worker_capability_handler_verification_unknown',
+        'worker_capability_rpa_package',
+        'worker_capability_rpa_package_unknown',
+        'runner_send_locked',
+        'recent_runner_failures',
+      ],
+      [/worker/i, /runner/i, /bridge/i, /rpa_package/i, /target_match/i, /handler_verification/i],
+      overview.bridge.workersOnline > 0 ? '保持 Runner 心跳在线并按远程策略处理出箱任务。' : '启动 Mac Bridge Runner 并确认心跳回到面板。',
+      {
+        pendingTotal,
+        workersOnline: overview.bridge.workersOnline,
+        workersTotal: overview.bridge.workersTotal,
+        workersPaused: overview.bridge.workersPaused,
+        recentFailures: overview.bridge.runs.recentFailures,
+      },
+    ),
+    lane(
+      'materials',
+      '素材与受众',
+      Math.max(0, overview.materials.total - overview.materials.approved) + Math.max(0, overview.audience.total - overview.audience.approved),
+      [
+        'material_references_ok',
+        'worker_material_map_not_reported',
+        'worker_material_map_invalid',
+        'worker_material_map_skipped',
+        'direct_image_paths',
+      ],
+      [/material/i, /direct_image_paths/i],
+      '继续同步企微联系人、群聊和本机素材映射。',
+      {
+        approvedMaterials: overview.materials.approved,
+        materials: overview.materials.total,
+        approvedAudience: overview.audience.approved,
+        audience: overview.audience.total,
+        groups: overview.audience.groups,
+      },
+    ),
+  ];
+
+  return {
+    generatedAt: preflight.generatedAt,
+    score,
+    level,
+    summary: healthSummary(level, score, blockers, warnings, pendingTotal),
+    totals: {
+      pendingReplies: overview.bridge.pendingReplies,
+      pendingMassTasks: overview.bridge.pendingMassTasks,
+      pendingMomentTasks: overview.bridge.pendingMomentTasks,
+      actionItems: actionQueue.summary.total,
+      workersOnline: overview.bridge.workersOnline,
+      workersTotal: overview.bridge.workersTotal,
+      preflightBlocks: preflight.summary.block,
+      preflightWarnings: preflight.summary.warn,
+    },
+    lanes,
+    blockers: blockers.slice(0, 10),
+    warnings: warnings.slice(0, 10),
+    recommendedActions: recommendedHealthActions(blockers, warnings, actionQueue),
+  };
+
+  function checksFor(exactIds: string[], patterns: RegExp[]) {
+    const idSet = new Set(exactIds);
+    return preflight.checks.filter((check) => idSet.has(check.id) || patterns.some((pattern) => pattern.test(check.id)));
+  }
 }
 
 export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
@@ -6010,6 +6231,47 @@ function preflightSummary(checks: AutomationPreflightCheck[]): Record<Automation
     },
     { ok: 0, warn: 0, block: 0 } as Record<AutomationPreflightLevel, number>,
   );
+}
+
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function healthSummary(
+  level: AutomationHealthLevel,
+  score: number,
+  blockers: AutomationPreflightCheck[],
+  warnings: AutomationPreflightCheck[],
+  pendingTotal: number,
+): string {
+  if (level === 'blocked') {
+    const first = blockers[0];
+    return `健康度 ${score}，当前有 ${blockers.length} 个阻断项；优先处理「${first?.title || '自动化预检'}」。`;
+  }
+  if (level === 'attention') {
+    const first = warnings[0];
+    return `健康度 ${score}，链路可继续推进，但有 ${warnings.length} 个提醒；建议先看「${first?.title || '自动化预检'}」。`;
+  }
+  return pendingTotal > 0
+    ? `健康度 ${score}，当前有 ${pendingTotal} 个出箱待办，可交给 Mac Runner 处理。`
+    : `健康度 ${score}，自动化链路健康，暂无必须处理的出箱待办。`;
+}
+
+function recommendedHealthActions(
+  blockers: AutomationPreflightCheck[],
+  warnings: AutomationPreflightCheck[],
+  actionQueue: AutomationActionQueue,
+): string[] {
+  const actions: string[] = [];
+  for (const check of [...blockers, ...warnings]) {
+    const action = (check.action || check.message || '').trim();
+    if (action) actions.push(action);
+  }
+  for (const item of actionQueue.items) {
+    if (item.action) actions.push(item.action);
+  }
+  return uniqueStrings(actions).slice(0, 6);
 }
 
 function ruleText(rule: AutomationRule): string {

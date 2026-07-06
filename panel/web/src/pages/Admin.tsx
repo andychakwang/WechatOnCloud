@@ -19,6 +19,7 @@ import {
   type AutomationMaterialAsset,
   type AutomationMaterialKind,
   type AutomationOverview,
+  type AutomationHealth,
   type AutomationPreflightReport,
   type AutomationActionQueue,
   type AutomationReplyPlan,
@@ -387,6 +388,12 @@ const PREFLIGHT_LEVEL_LABEL: Record<string, string> = {
   block: '阻断',
 };
 
+const AUTOMATION_HEALTH_LABEL: Record<string, string> = {
+  ok: '健康',
+  attention: '关注',
+  blocked: '阻断',
+};
+
 const ACTION_QUEUE_PRIORITY_LABEL: Record<string, string> = {
   block: '阻断',
   high: '高优先',
@@ -404,6 +411,12 @@ const ACTION_QUEUE_TARGET_LABEL: Record<string, string> = {
 function preflightLevelClass(level: string): string {
   if (level === 'block') return 'tag-off';
   if (level === 'warn') return 'tag-warn';
+  return 'tag-on';
+}
+
+function automationHealthClass(level: string): string {
+  if (level === 'blocked') return 'tag-off';
+  if (level === 'attention') return 'tag-warn';
   return 'tag-on';
 }
 
@@ -593,6 +606,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [drafts, setDrafts] = useState<MomentDraft[]>([]);
   const [audit, setAudit] = useState<import('../api').AutomationAuditEvent[]>([]);
   const [overview, setOverview] = useState<AutomationOverview | null>(null);
+  const [health, setHealth] = useState<AutomationHealth | null>(null);
   const [preflight, setPreflight] = useState<AutomationPreflightReport | null>(null);
   const [actionQueue, setActionQueue] = useState<AutomationActionQueue | null>(null);
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
@@ -683,6 +697,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       const [
         { config },
         { overview },
+        { health },
         { report },
         { queue },
         { contacts },
@@ -698,6 +713,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       ] = await Promise.all([
         api.getAutomationConfig(),
         api.getAutomationOverview(),
+        api.getAutomationHealth(),
         api.getAutomationPreflight(),
         api.getAutomationActionQueue(12),
         api.listAutomationAudience(200),
@@ -714,6 +730,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       api.getAutomationBridge().then(({ bridge }) => setBridge(bridge)).catch(() => setBridge(null));
       setConfig(config);
       setOverview(overview);
+      setHealth(health);
       setPreflight(report);
       setActionQueue(queue);
       setAudienceContacts(contacts);
@@ -1762,6 +1779,59 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <input className="input" type="time" value={cfg.settings.quietHoursEnd} onChange={(e) => setSetting({ quietHoursEnd: e.target.value })} />
           </label>
         </div>
+        {health && (
+          <div className={'auto-health auto-health-' + health.level}>
+            <div className="auto-health-head">
+              <div>
+                <div className="auto-health-title">
+                  <b>自动化健康度</b>
+                  <span className={'tag ' + automationHealthClass(health.level)}>{AUTOMATION_HEALTH_LABEL[health.level] || health.level}</span>
+                </div>
+                <div className="muted small">{health.summary}</div>
+              </div>
+              <div className="auto-health-score" aria-label={`自动化健康度 ${health.score} 分`}>
+                <span>{health.score}</span>
+                <small>/100</small>
+              </div>
+            </div>
+            <div className="auto-health-strip">
+              <span className="tag tag-off">阻断 {health.totals.preflightBlocks}</span>
+              <span className="tag tag-warn">提醒 {health.totals.preflightWarnings}</span>
+              <span className="tag">出箱 {health.totals.pendingReplies + health.totals.pendingMassTasks + health.totals.pendingMomentTasks}</span>
+              <span className={'tag ' + (health.totals.workersOnline ? 'tag-on' : 'tag-off')}>
+                Mac {health.totals.workersOnline}/{health.totals.workersTotal}
+              </span>
+            </div>
+            <div className="auto-health-lanes">
+              {health.lanes.map((lane) => {
+                const issue = lane.blockers[0] || lane.warnings[0];
+                return (
+                  <div key={lane.key} className="auto-health-lane">
+                    <div className="auto-health-lane-top">
+                      <b>{lane.title}</b>
+                      <span className={'tag ' + automationHealthClass(lane.level)}>{AUTOMATION_HEALTH_LABEL[lane.level] || lane.level}</span>
+                    </div>
+                    <div className="auto-health-bar" aria-hidden="true">
+                      <span style={{ width: `${lane.score}%` }} />
+                    </div>
+                    <div className="muted small">
+                      {lane.pending} 待办 · {issue ? issue.title : lane.nextAction}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {health.recommendedActions.length > 0 && (
+              <div className="auto-health-actions">
+                {health.recommendedActions.slice(0, 3).map((action) => (
+                  <span key={action} className="chip chip-static">
+                    {action}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {overview && (
           <div className="auto-overview-grid">
             <div className="auto-overview-card">
