@@ -25,6 +25,7 @@ import {
   type AutomationActionQueue,
   type AutomationActionQueueItem,
   type AutomationActionQueueReviewBulkTarget,
+  type AutomationActionQueueTarget,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type InstanceAutomationTargetVerifyResult,
@@ -449,6 +450,16 @@ const ACTION_QUEUE_TARGET_LABEL: Record<string, string> = {
   moment: '朋友圈',
 };
 
+type AutomationActionQueueFilterTarget = 'all' | AutomationActionQueueTarget;
+
+const ACTION_QUEUE_FILTERS: Array<{ target: AutomationActionQueueFilterTarget; label: string }> = [
+  { target: 'all', label: '全部' },
+  { target: 'ops', label: ACTION_QUEUE_TARGET_LABEL.ops },
+  { target: 'reply', label: ACTION_QUEUE_TARGET_LABEL.reply },
+  { target: 'mass', label: ACTION_QUEUE_TARGET_LABEL.mass },
+  { target: 'moment', label: ACTION_QUEUE_TARGET_LABEL.moment },
+];
+
 function preflightLevelClass(level: string): string {
   if (level === 'block') return 'tag-off';
   if (level === 'warn') return 'tag-warn';
@@ -474,6 +485,17 @@ function actionQueueApproveReviewAction(item: AutomationActionQueueItem): NonNul
 
 function actionQueueRpaPackageAction(item: AutomationActionQueueItem): NonNullable<AutomationActionQueueItem['actions']>[number] | undefined {
   return item.actions?.find((action) => action.kind === 'preview-rpa-package');
+}
+
+function actionQueueTargetCounts(items: AutomationActionQueueItem[]): Record<AutomationActionQueueFilterTarget, number> {
+  const counts: Record<AutomationActionQueueFilterTarget, number> = { all: items.length, ops: 0, reply: 0, mass: 0, moment: 0 };
+  for (const item of items) counts[item.target] += 1;
+  return counts;
+}
+
+function actionQueueFilteredItems(queue: AutomationActionQueue, target: AutomationActionQueueFilterTarget): AutomationActionQueueItem[] {
+  if (target === 'all') return queue.items;
+  return queue.items.filter((item) => item.target === target);
 }
 
 function KnowledgeRefs({ refs }: { refs?: AutomationKnowledgeReference[] }) {
@@ -543,7 +565,7 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
   };
 }
 
-function actionQueueReviewBatchTarget(queue: AutomationActionQueue): {
+function actionQueueReviewBatchTarget(items: AutomationActionQueueItem[]): {
   target: AutomationActionQueueReviewBulkTarget;
   total: number;
   reply: number;
@@ -554,7 +576,7 @@ function actionQueueReviewBatchTarget(queue: AutomationActionQueue): {
 } {
   const counts = { reply: 0, mass: 0, moment: 0 };
   const itemIds: string[] = [];
-  for (const item of queue.items) {
+  for (const item of items) {
     if (!actionQueueApproveReviewAction(item)) continue;
     if (item.target === 'reply' || item.target === 'mass' || item.target === 'moment') {
       counts[item.target] += 1;
@@ -731,6 +753,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [health, setHealth] = useState<AutomationHealth | null>(null);
   const [preflight, setPreflight] = useState<AutomationPreflightReport | null>(null);
   const [actionQueue, setActionQueue] = useState<AutomationActionQueue | null>(null);
+  const [actionQueueFilter, setActionQueueFilter] = useState<AutomationActionQueueFilterTarget>('all');
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
@@ -917,7 +940,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const bridgeWorkerOptions = Array.from(new Map(bridgeWorkersSorted.map((worker) => [worker.workerId, worker])).values());
   const selectedRpaPackageWorker = bridgeWorkersSorted.find((worker) => worker.id === rpaPackageWorkerRef) || null;
   const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue) : null;
-  const actionQueueReview = actionQueue ? actionQueueReviewBatchTarget(actionQueue) : null;
+  const actionQueueVisibleItems = actionQueue ? actionQueueFilteredItems(actionQueue, actionQueueFilter) : [];
+  const actionQueueCounts = actionQueue ? actionQueueTargetCounts(actionQueue.items) : null;
+  const actionQueueReview = actionQueue ? actionQueueReviewBatchTarget(actionQueueVisibleItems) : null;
   const actionQueueRpaReadiness = actionQueueRpa
     ? (['replies', 'mass', 'moments'] as const)
         .map((target) => actionQueueRpa.workerReadiness[target])
@@ -2433,8 +2458,23 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </button>
               </div>
             </div>
+            <div className="chip-row auto-action-filter-row">
+              {ACTION_QUEUE_FILTERS.map((filter) => {
+                const count = actionQueueCounts?.[filter.target] || 0;
+                return (
+                  <button
+                    key={filter.target}
+                    className={'chip chip-toggle' + (actionQueueFilter === filter.target ? ' on' : '')}
+                    disabled={count === 0 && actionQueueFilter !== filter.target}
+                    onClick={() => setActionQueueFilter(filter.target)}
+                  >
+                    {filter.label} {count}
+                  </button>
+                );
+              })}
+            </div>
             <div className="auto-action-queue-list">
-              {actionQueue.items.slice(0, 8).map((item) => {
+              {actionQueueVisibleItems.slice(0, 8).map((item) => {
                 const approveAction = actionQueueApproveReviewAction(item);
                 const rpaAction = actionQueueRpaPackageAction(item);
                 return (
@@ -2488,6 +2528,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 );
               })}
               {actionQueue.items.length === 0 && <div className="muted small">暂无待处理动作</div>}
+              {actionQueue.items.length > 0 && actionQueueVisibleItems.length === 0 && (
+                <div className="muted small">当前分类暂无待处理动作</div>
+              )}
             </div>
           </div>
         )}

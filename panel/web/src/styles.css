@@ -1153,6 +1153,10 @@ button {
   box-shadow: inset 0 1px 2px rgba(var(--shadow) / 0.16);
   transition: transform 0.15s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.chip-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
 .chip-toggle:active {
   transform: scale(0.95);
 }
@@ -1354,6 +1358,15 @@ button {
   gap: 6px 10px;
   max-width: 360px;
   text-align: right;
+}
+.auto-action-filter-row {
+  display: flex;
+  width: 100%;
+}
+.auto-action-filter-row .chip {
+  flex: none;
+  min-width: 0;
+  white-space: nowrap;
 }
 .auto-action-queue-head b,
 .auto-action-queue-item b {
