@@ -52,6 +52,19 @@ BUILD_WECHAT_IMAGE=0 ./scripts/deploy-automation-dev.sh
 ## 2026-07-06 R86 镜像发布
 
 - GitHub tag：`andy-automation-usable-r86-2026-07-06`
+- GitHub Actions release run `28795337020` 已成功构建并推送 panel / wechat 双镜像。
+- 已通过 GHCR Registry manifest 验证：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r86-2026-07-06
+    digest sha256:66c3ad9bb4d0847b91a924e763d013baebacf6fa2d7fd7695e68bd73d9af286e
+    platforms linux/amd64, linux/arm64
+
+  ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r86-2026-07-06
+    digest sha256:01c1ca55923667a5b8a66199bc161714859f2611bbfff9b27bd51cc22723a512
+    platforms linux/amd64, linux/arm64
+  ```
+
 - 本地已完成：
 
   ```text
@@ -77,7 +90,7 @@ BUILD_WECHAT_IMAGE=0 ./scripts/deploy-automation-dev.sh
   ```
 
 - Bridge CLI 已验证 `import-assistant --dry-run --apply-settings` 会把 `applySettings` 传给 Bridge 导入接口。
-- 等 GitHub Actions release 完成后，再补充 run id、GHCR digest 和 NAS `36081` 升级验收。
+- `36081` NAS 测试面板仍需执行 Docker socket helper 后再登录 `/api/version` 验证是否升级到 R86。
 
 ## 2026-07-06 R84 镜像发布
 
