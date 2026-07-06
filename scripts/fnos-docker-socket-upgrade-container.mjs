@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const TARGET = process.env.WOC_TARGET_CONTAINER || 'woc-panel-automation-test';
 const IMAGE_PREFIX = process.env.WOC_IMAGE_PREFIX || 'ghcr.io/andychakwang';
-const VERSION = process.env.WOC_VERSION || 'andy-automation-usable-r78-2026-07-06';
+const VERSION = process.env.WOC_VERSION || 'andy-automation-usable-r83-2026-07-06';
 const PANEL_IMAGE = process.env.WOC_PANEL_IMAGE || `${IMAGE_PREFIX}/woc-panel:${VERSION}`;
 const WECHAT_IMAGE = process.env.WOC_WECHAT_IMAGE || `${IMAGE_PREFIX}/wechat-on-cloud:${VERSION}`;
 const HELPER_MODE = process.env.WOC_HELPER_MODE === '1';

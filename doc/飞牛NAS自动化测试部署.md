@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r82-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r83-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,23 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r82-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r82-2026-07-06`
-- 本版新增：Web「Mac Runner 接入」在企微 CLI 探测基础上增加 `sync-cli-audience` 命令，可把已授权 `@wecom/cli` 通讯录导入云端受众资产池；默认未审核，不会自动进入群发。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r83-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r83-2026-07-06`
+- 本版新增：自动化工作台顶部新增健康度卡，把总览、预检和下一步队列聚合成 0-100 分，并按 AI 回复、群发、朋友圈、Mac Runner、素材受众拆出阻断原因和下一步动作。
+
+## 2026-07-06 R83 更新验收
+
+- 本地已完成：
+
+  ```text
+  npm exec -- tsc --noEmit  # panel/server
+  npm exec -- tsc --noEmit  # panel/web
+  npm run build             # panel/web
+  bash -n scripts/smoke-automation-panel.sh
+  ./scripts/smoke-automation-panel.sh  # 临时本地面板 + Bridge token
+  ```
+
+- Chrome DevTools 检查已验证管理页 `.auto-health` 正常渲染，包含 `AI 回复`、`群发队列`、`朋友圈`、`Mac Runner`、`素材与受众` 5 条 lane，未检测到横向溢出。
 
 ## 2026-07-06 R82 更新验收
 
@@ -338,7 +352,7 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 推荐用提交哈希固定脚本来源：
 
 ```bash
-WOC_VERSION=andy-automation-usable-r82-2026-07-06 \
+WOC_VERSION=andy-automation-usable-r83-2026-07-06 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```
