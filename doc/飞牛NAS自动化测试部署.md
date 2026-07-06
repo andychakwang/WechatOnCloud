@@ -15,6 +15,7 @@
 
 ## 2026-07-06 R83 更新验收
 
+- GitHub Actions release run `28761638637` 已成功构建并推送 panel / wechat 双镜像。
 - 本地已完成：
 
   ```text
@@ -26,6 +27,40 @@
   ```
 
 - Chrome DevTools 检查已验证管理页 `.auto-health` 正常渲染，包含 `AI 回复`、`群发队列`、`朋友圈`、`Mac Runner`、`素材与受众` 5 条 lane，未检测到横向溢出。
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板已通过飞牛 Docker socket helper 更新到 R83，公网入口返回 `200`。
+- 测试面板管理员密码已按当前口令完成修改；明文不写入 Git、文档或共享记录。
+- 测试面板 `/api/version` 已登录验证：
+
+  ```json
+  {
+    "current": "andy-automation-usable-r83-2026-07-06",
+    "latest": null,
+    "hasUpdate": false,
+    "source": "ghcr"
+  }
+  ```
+
+- 自动化健康度接口已登录验证：
+
+  ```text
+  GET /api/admin/automation/health -> 200
+  score = 77
+  level = blocked
+  lanes = AI 回复 / 群发队列 / 朋友圈 / Mac Runner / 素材与受众
+  ```
+
+  当前阻断项为“自动化总开关关闭”，属于运行策略默认值；部署和接口本身正常。
+
+- 本次公网入口检查：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  http://nasbot.cloud:36081/api/auth/me -> 401 {"error":"未登录"}
+  ```
+
+  其中 `/api/auth/me` 返回 401 属于未登录预期响应，说明后端 API 正常响应。
 
 ## 2026-07-06 R82 更新验收
 
