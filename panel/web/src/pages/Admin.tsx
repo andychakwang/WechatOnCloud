@@ -576,6 +576,19 @@ function actionQueueReviewBatchTarget(queue: AutomationActionQueue): {
   };
 }
 
+function actionQueueReviewCandidatesLabel(items: AutomationActionQueueItem[]): string {
+  const counts = { reply: 0, mass: 0, moment: 0 };
+  for (const item of items) {
+    if (item.target === 'reply' || item.target === 'mass' || item.target === 'moment') counts[item.target] += 1;
+  }
+  const active = [
+    { count: counts.reply, label: 'AI 回复' },
+    { count: counts.mass, label: '群发' },
+    { count: counts.moment, label: '朋友圈' },
+  ].filter((item) => item.count > 0);
+  return active.length === 1 ? active[0].label : '全部待审';
+}
+
 function fallbackRpaWorkerReadiness(
   target: 'replies' | 'mass' | 'moments',
   label: string,
@@ -944,19 +957,42 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
 
   const approveActionQueueReviews = async () => {
     if (!actionQueueReview || actionQueueReview.total <= 0) return toast('当前队列没有待审核草稿', 'error');
+    const request = {
+      target: actionQueueReview.target,
+      itemIds: actionQueueReview.itemIds,
+      limit: actionQueueReview.itemIds.length,
+      queueLimit: 12,
+    };
+    setBusy('action-review-bulk');
+    let dryRun: Awaited<ReturnType<typeof api.approveAutomationActionQueueReviews>>['result'];
+    try {
+      const { result } = await api.approveAutomationActionQueueReviews({ ...request, dryRun: true });
+      dryRun = result;
+      setActionQueue(result.queue);
+    } catch (e: any) {
+      setBusy('');
+      return toast(e.message || '批量审核预检失败', 'error');
+    } finally {
+      setBusy('');
+    }
+    if (dryRun.candidates.length <= 0) {
+      toast('待审核队列已变化，请刷新后重试', 'error');
+      await loadAutomation();
+      return;
+    }
+    const candidateLabel = actionQueueReviewCandidatesLabel(dryRun.candidates);
     const ok = await confirm({
-      title: `批量审核 ${actionQueueReview.total} 个${actionQueueReview.label}任务？`,
-      body: '这里只会批准 AI 回复草稿、把群发置为 queued、把朋友圈置为 ready；不会发送、粘贴、填入发布框或发布。',
+      title: `批量审核 ${dryRun.candidates.length} 个${candidateLabel}任务？`,
+      body: '后端已完成 dry-run 校验。这里仍只会批准 AI 回复草稿、把群发置为 queued、把朋友圈置为 ready；不会发送、粘贴、填入发布框或发布。',
       confirmText: '批量审核',
     });
     if (!ok) return;
     setBusy('action-review-bulk');
     try {
       const { result } = await api.approveAutomationActionQueueReviews({
-        target: actionQueueReview.target,
-        itemIds: actionQueueReview.itemIds,
-        limit: actionQueueReview.itemIds.length,
-        queueLimit: 12,
+        ...request,
+        itemIds: dryRun.requestedItemIds.length ? dryRun.requestedItemIds : request.itemIds,
+        limit: dryRun.limit,
       });
       setActionQueue(result.queue);
       const suffix = result.failed.length ? `，失败 ${result.failed.length} 个` : '';
