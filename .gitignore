@@ -74,6 +74,7 @@ web_modules/
 
 # dotenv environment variable files
 .env
+.env.automation-dev
 .env.development.local
 .env.test.local
 .env.production.local
@@ -140,5 +141,6 @@ dist
 # WechatOnCloud: 面板账号数据（含密码哈希，勿提交）
 /data-panel/
 /data-panel-automation-test/
+/data-panel-automation-dev/
 /.claude
 .DS_Store

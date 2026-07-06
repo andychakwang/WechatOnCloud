@@ -13,6 +13,39 @@
 - 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r84-2026-07-06`
 - 本版新增：朋友圈草稿可通过 `external-rpa` 交给现有企业微信 Mac 自动化项目打开发布框、选图和填文案；云端仍只回写 prepared/published，不自动点击发布。
 
+## 本地源码开发版（36082）
+
+仓库还提供一套源码构建版，用于继续开发自动化 SaaS 能力，不依赖已发布镜像，也不复用生产/测试数据：
+
+- compose 文件：`docker-compose.automation-dev.yml`
+- 环境模板：`.env.automation-dev.example`，复制为 `.env.automation-dev` 后填写本机密码、AI key、Bridge token。
+- 启动脚本：`./scripts/deploy-automation-dev.sh`
+- 默认端口：`36082`
+- 默认容器：`woc-panel-automation-dev`
+- 默认数据目录：`data-panel-automation-dev`
+- 默认本地镜像：`woc-dev/woc-panel:automation-dev` 与 `woc-dev/wechat-on-cloud:automation-dev`
+
+运行：
+
+```bash
+cp .env.automation-dev.example .env.automation-dev
+./scripts/deploy-automation-dev.sh
+```
+
+脚本会从当前 checkout 构建面板和微信实例镜像，然后只启动 `panel-automation-dev`。如果只改了面板代码、暂时不想重建微信实例镜像，可以：
+
+```bash
+BUILD_WECHAT_IMAGE=0 ./scripts/deploy-automation-dev.sh
+```
+
+这样三套环境互不覆盖：
+
+| 用途 | 端口 | compose | 数据目录 | 镜像来源 |
+| --- | --- | --- | --- | --- |
+| 原版生产面板 | `36080` | `docker-compose.yml` | `data-panel` | Docker Hub / GHCR 正式镜像 |
+| 自动化测试面板 | `36081` | `docker-compose.automation-test.yml` / `fnos/woc-automation-test/docker-compose.yaml` | `data-panel-automation-test` | GHCR 已发布自动化镜像 |
+| 自动化源码开发面板 | `36082` | `docker-compose.automation-dev.yml` | `data-panel-automation-dev` | 当前源码本地构建 |
+
 ## 2026-07-06 R84 镜像发布
 
 - GitHub Actions release run `28765427265` 已成功构建并推送 panel / wechat 双镜像。

@@ -1,0 +1,63 @@
+# Automation development panel for the andy/automation-lab branch.
+# This compose builds images from the current checkout and keeps data isolated
+# from both the production panel (36080) and the image-based test panel (36081).
+#
+# Typical flow:
+#   cp .env.automation-dev.example .env.automation-dev
+#   ./scripts/deploy-automation-dev.sh
+#
+# Manual flow:
+#   docker compose --env-file .env.automation-dev -f docker-compose.automation-dev.yml --profile image-build build
+#   docker compose --env-file .env.automation-dev -f docker-compose.automation-dev.yml up -d panel-automation-dev
+
+name: ${WOC_DEV_PROJECT:-woc-automation-dev}
+
+services:
+  panel-automation-dev:
+    build:
+      context: ./panel
+      args:
+        WOC_VERSION: ${WOC_DEV_VERSION:-automation-dev}
+    image: ${WOC_DEV_IMAGE_PREFIX:-woc-dev}/woc-panel:${WOC_DEV_VERSION:-automation-dev}
+    container_name: ${WOC_DEV_PANEL_CONTAINER:-woc-panel-automation-dev}
+
+    environment:
+      - PORT=8080
+      - WOC_WECHAT_IMAGE=${WOC_DEV_IMAGE_PREFIX:-woc-dev}/wechat-on-cloud:${WOC_DEV_VERSION:-automation-dev}
+      - PUID=${WOC_PUID:-1000}
+      - PGID=${WOC_PGID:-1000}
+      - TZ=${WOC_TZ:-Asia/Shanghai}
+      - WOC_VIDEO_DEVICES=${WOC_VIDEO_DEVICES:-}
+      - WOC_ENABLE_GPU=${WOC_ENABLE_GPU:-}
+      - WOC_INSTANCE_MEM_GB=${WOC_INSTANCE_MEM_GB:-}
+      - WOC_INSTANCE_MEM_SOFT_MB=${WOC_INSTANCE_MEM_SOFT_MB:-1500}
+      - WOC_INSTANCE_MEM_HARD_MB=${WOC_INSTANCE_MEM_HARD_MB:-2500}
+      - WOC_WATCHDOG_INTERVAL_SEC=${WOC_WATCHDOG_INTERVAL_SEC:-300}
+      - WOC_SPOOF_OS=${WOC_SPOOF_OS:-1}
+      - PANEL_ADMIN_USER=${WOC_DEV_USER:-admin}
+      - PANEL_ADMIN_PASSWORD=${WOC_DEV_PASSWORD:-wechat}
+      - PANEL_DATA=/data/accounts.json
+      - PANEL_AUTOMATION_DATA=/data/automation.json
+      - AUTOMATION_AI_API_KEY=${AUTOMATION_AI_API_KEY:-}
+      - AUTOMATION_AI_BASE_URL=${AUTOMATION_AI_BASE_URL:-}
+      - AUTOMATION_AI_MODEL=${AUTOMATION_AI_MODEL:-}
+      - AUTOMATION_BRIDGE_TOKEN=${AUTOMATION_BRIDGE_TOKEN:-}
+      - PANEL_ALLOWED_HOSTS=${PANEL_ALLOWED_HOSTS:-localhost,127.0.0.1,nasbot.cloud}
+
+    volumes:
+      - ./data-panel-automation-dev:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /dev:/host-dev:ro
+
+    ports:
+      - "${WOC_DEV_HTTP_PORT:-36082}:8080"
+
+    restart: unless-stopped
+
+  wechat-image-dev:
+    profiles:
+      - image-build
+    build:
+      context: ./docker
+    image: ${WOC_DEV_IMAGE_PREFIX:-woc-dev}/wechat-on-cloud:${WOC_DEV_VERSION:-automation-dev}
+    command: ["true"]
