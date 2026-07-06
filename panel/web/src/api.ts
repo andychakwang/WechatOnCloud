@@ -1195,6 +1195,7 @@ async function req<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
 
 function wecomRpaPackageParams(options: {
   target?: WecomRpaPackageTarget;
+  actionQueueItemIds?: string[];
   limit?: number;
   ttlMinutes?: number;
   format?: WecomRpaPackageFormat;
@@ -1217,6 +1218,7 @@ function wecomRpaPackageParams(options: {
   if (options.workerSource) params.set('workerSource', options.workerSource);
   if (options.capabilities?.length) params.set('capabilities', options.capabilities.join(','));
   if (options.requireSendable) params.set('requireSendable', '1');
+  if (options.actionQueueItemIds?.length) params.set('actionQueueItemIds', options.actionQueueItemIds.join(','));
   return params.toString();
 }
 
@@ -1302,6 +1304,7 @@ export const api = {
   getAutomationBridge: () => req<{ bridge: AutomationBridgeStatus }>('/api/admin/automation/bridge'),
   exportWecomRpaPackage: (options: {
     target?: WecomRpaPackageTarget;
+    actionQueueItemIds?: string[];
     limit?: number;
     format?: WecomRpaPackageFormat;
     includeSource?: boolean;

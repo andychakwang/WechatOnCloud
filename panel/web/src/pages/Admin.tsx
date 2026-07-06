@@ -1043,8 +1043,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!Number.isFinite(parsed)) return 720;
     return Math.max(5, Math.min(7 * 24 * 60, parsed));
   };
-  const wecomRpaPackageOptions = (format: WecomRpaPackageFormat, targetOverride?: WecomRpaPackageTarget, limitOverride?: number) => ({
+  const wecomRpaPackageOptions = (
+    format: WecomRpaPackageFormat,
+    targetOverride?: WecomRpaPackageTarget,
+    limitOverride?: number,
+    actionQueueItemIds?: string[],
+  ) => ({
     target: targetOverride || rpaPackageTarget,
+    actionQueueItemIds,
     limit: limitOverride ?? wecomRpaPackageLimit(),
     ttlMinutes: wecomRpaPackageTtlMinutes(),
     format,
@@ -1073,13 +1079,18 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (download) params.set('download', '1');
     return params.toString();
   };
-  const previewWecomRpaPackage = async (targetOverride?: WecomRpaPackageTarget, limitOverride?: number, busyKey = 'rpa-package') => {
+  const previewWecomRpaPackage = async (
+    targetOverride?: WecomRpaPackageTarget,
+    limitOverride?: number,
+    busyKey = 'rpa-package',
+    actionQueueItemIds?: string[],
+  ) => {
     const target = targetOverride || rpaPackageTarget;
     const limit = limitOverride ?? wecomRpaPackageLimit();
     setBusy(busyKey);
     try {
       const { package: pkg } = await api.exportWecomRpaPackage({
-        ...wecomRpaPackageOptions('json', target, limit),
+        ...wecomRpaPackageOptions('json', target, limit, actionQueueItemIds),
       });
       setRpaPackagePreview(pkg);
       api.listWecomRpaPackageIssues(20).then(({ packages }) => setRpaPackageIssues(packages)).catch(() => undefined);
@@ -1096,7 +1107,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     const limit = action.packageLimit || 50;
     setRpaPackageTarget(action.packageTarget);
     setRpaPackageLimit(String(limit));
-    await previewWecomRpaPackage(action.packageTarget, limit, `action-rpa-${item.id}`);
+    await previewWecomRpaPackage(action.packageTarget, limit, `action-rpa-${item.id}`, [item.id]);
   };
   const previewActionQueueRpaPackage = async () => {
     if (!actionQueueRpa || actionQueueRpa.total <= 0) {

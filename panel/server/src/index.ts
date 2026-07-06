@@ -631,6 +631,7 @@ app.get('/api/admin/automation/rpa-package', async (req, reply) => {
     const query = req.query as any;
     const pkg = exportWecomRpaPackage({
       target: query?.target,
+      actionQueueItemIds: query?.actionQueueItemIds ?? query?.queueItemIds ?? query?.itemIds,
       limit: query?.limit,
       ttlMinutes: query?.ttlMinutes ?? query?.ttl ?? query?.expiresInMinutes,
       expiresAt: query?.expiresAt,

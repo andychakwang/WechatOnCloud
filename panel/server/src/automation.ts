@@ -951,6 +951,9 @@ export interface WecomRpaPackage {
 export interface WecomRpaPackageExportOptions {
   target?: unknown;
   queue?: unknown;
+  actionQueueItemIds?: unknown;
+  queueItemIds?: unknown;
+  itemIds?: unknown;
   limit?: unknown;
   ttlMinutes?: unknown;
   ttl?: unknown;
@@ -2397,6 +2400,26 @@ function normalizeActionQueueReviewBulkTarget(value: unknown): AutomationActionQ
   if (!raw || raw === 'all') return 'all';
   if (raw === 'reply' || raw === 'mass' || raw === 'moment') return raw;
   throw new Error('批量审核目标不合法');
+}
+
+function normalizeRpaPackageActionQueueItemIds(value: unknown): string[] {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[,;\n]+/)
+      : value && typeof value === 'object'
+        ? Object.values(value)
+        : [];
+  return uniqueStrings(rawItems.map((item) => str(item, 240).trim()).filter(Boolean)).slice(0, 200);
+}
+
+function rpaPackageActionQueueItemId(
+  target: WecomRpaTaskTarget,
+  task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask,
+): string {
+  if (target === 'reply') return `reply:${(task as WecomBridgeEvent).id}`;
+  if (target === 'mass') return `mass:${(task as WecomBridgeMassSendTask).id}`;
+  return `moment:${(task as WecomBridgeMomentTask).id}`;
 }
 
 function actionQueueItemActions(item: AutomationActionQueueItem): AutomationActionQueueItemAction[] {
@@ -4701,6 +4724,8 @@ export function listAutomationAudit(limit = 200): AutomationAuditEvent[] {
 export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): WecomRpaPackage {
   const target = normalizeRpaPackageTarget(raw.target ?? raw.queue ?? 'all');
   const limit = clampInt(raw.limit, 1, 200, 50);
+  const actionQueueItemIds = normalizeRpaPackageActionQueueItemIds(raw.actionQueueItemIds ?? raw.queueItemIds ?? raw.itemIds);
+  const actionQueueItemIdSet = new Set(actionQueueItemIds);
   const ttlMinutes = normalizeRpaPackageTtlMinutes(raw.ttlMinutes ?? raw.expiresInMinutes ?? raw.ttl);
   const format = normalizeRpaPackageFormat(raw.format);
   const includeSource = boolish(raw.includeSource) || boolish(raw.include_source) || boolish(raw.sourceTask);
@@ -4711,16 +4736,22 @@ export function exportWecomRpaPackage(raw: WecomRpaPackageExportOptions = {}): W
   const packageId = str(raw.packageId, 160).trim() || `woc-rpa-${exportedAt.replace(/[:.]/g, '-')}`;
   const meta = { packageId, exportedAt, expiresAt, source, workerId };
   const pulled: Array<{ target: WecomRpaTaskTarget; task: WecomBridgeEvent | WecomBridgeMassSendTask | WecomBridgeMomentTask }> = [];
+  const pullLimit = actionQueueItemIdSet.size ? 200 : limit;
 
   for (const itemTarget of rpaPackageTargets(target)) {
     const pullOptions = rpaPackagePullOptions(raw, workerId, itemTarget);
     if (!rpaPackageTargetAllowedForWorker(pullOptions, workerId, itemTarget)) continue;
-    if (itemTarget === 'replies') pulled.push(...listApprovedWecomBridgeReplies(limit, pullOptions).map((task) => ({ target: 'reply' as const, task })));
-    if (itemTarget === 'mass') pulled.push(...listApprovedWecomBridgeMassTasks(limit, pullOptions).map((task) => ({ target: 'mass' as const, task })));
-    if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(limit, pullOptions).map((task) => ({ target: 'moment' as const, task })));
+    if (itemTarget === 'replies') pulled.push(...listApprovedWecomBridgeReplies(pullLimit, pullOptions).map((task) => ({ target: 'reply' as const, task })));
+    if (itemTarget === 'mass') pulled.push(...listApprovedWecomBridgeMassTasks(pullLimit, pullOptions).map((task) => ({ target: 'mass' as const, task })));
+    if (itemTarget === 'moments') pulled.push(...listApprovedWecomBridgeMomentTasks(pullLimit, pullOptions).map((task) => ({ target: 'moment' as const, task })));
   }
 
-  const baseTasks = pulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
+  const selectedPulled = actionQueueItemIdSet.size
+    ? pulled.filter((item) => actionQueueItemIdSet.has(rpaPackageActionQueueItemId(item.target, item.task)))
+    : pulled;
+  if (actionQueueItemIdSet.size && selectedPulled.length === 0) throw new Error('指定的队列项不存在或当前不可交付，请刷新后重试');
+
+  const baseTasks = selectedPulled.map((item) => buildWecomRpaTask(item.target, item.task, meta, includeSource));
   const taskDigest = digestWecomRpaTasks(baseTasks);
   const tasks = baseTasks.map((task) => ({ ...task, taskDigest }));
   const policy = getWecomBridgeRunnerPolicy();
