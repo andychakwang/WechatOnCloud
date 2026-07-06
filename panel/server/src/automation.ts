@@ -712,6 +712,15 @@ export interface AutomationActionQueue {
   items: AutomationActionQueueItem[];
 }
 
+export interface AutomationActionQueueReviewResult {
+  item: AutomationActionQueueItem;
+  target: AutomationActionQueueTarget;
+  queue: AutomationActionQueue;
+  event?: WecomBridgeEvent;
+  job?: MassSendJob;
+  draft?: MomentDraft;
+}
+
 export type RiskLevel = 'normal' | 'review' | 'block';
 
 export interface RiskAssessment {
@@ -2266,6 +2275,28 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
   );
 
   return { generatedAt, summary, handoff, items: selected };
+}
+
+export function approveAutomationActionQueueReview(actor: User, itemId: string, limit = 20): AutomationActionQueueReviewResult {
+  const id = str(itemId, 200).trim();
+  if (!id) throw new Error('队列项 ID 不能为空');
+  const item = getAutomationActionQueue(100).items.find((candidate) => candidate.id === id);
+  if (!item) throw new Error('队列项不存在或已变化，请刷新后重试');
+  if (item.kind !== 'review-task' || !item.refId) throw new Error('该队列项不是待审核任务');
+
+  if (item.target === 'reply') {
+    const event = patchWecomBridgeEvent(actor, item.refId, { replyApproved: true });
+    return { item, target: item.target, event, queue: getAutomationActionQueue(limit) };
+  }
+  if (item.target === 'mass') {
+    const job = patchMassSendJob(actor, item.refId, { approved: true, status: 'queued' });
+    return { item, target: item.target, job, queue: getAutomationActionQueue(limit) };
+  }
+  if (item.target === 'moment') {
+    const draft = patchMomentDraft(actor, item.refId, { approved: true, status: 'ready' });
+    return { item, target: item.target, draft, queue: getAutomationActionQueue(limit) };
+  }
+  throw new Error('该队列项暂不支持快捷审核');
 }
 
 function actionQueueRpaWorkerReadiness(

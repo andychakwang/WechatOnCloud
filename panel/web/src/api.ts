@@ -898,6 +898,15 @@ export interface AutomationActionQueue {
   items: AutomationActionQueueItem[];
 }
 
+export interface AutomationActionQueueReviewResult {
+  item: AutomationActionQueueItem;
+  target: AutomationActionQueueTarget;
+  queue: AutomationActionQueue;
+  event?: WecomBridgeEvent;
+  job?: MassSendJob;
+  draft?: MomentDraft;
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -1198,6 +1207,11 @@ export const api = {
   getAutomationHealth: () => req<{ health: AutomationHealth }>('/api/admin/automation/health'),
   getAutomationPreflight: () => req<{ report: AutomationPreflightReport }>('/api/admin/automation/preflight'),
   getAutomationActionQueue: (limit = 20) => req<{ queue: AutomationActionQueue }>(`/api/admin/automation/action-queue?limit=${encodeURIComponent(limit)}`),
+  approveAutomationActionQueueItem: (itemId: string, limit = 20) =>
+    req<{ result: AutomationActionQueueReviewResult }>(`/api/admin/automation/action-queue/items/${encodeURIComponent(itemId)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ limit }),
+    }),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),
   exportAutomationBundle: (options: { includeBridgeEvents?: boolean; includeOperational?: boolean; includeAudit?: boolean } = {}) =>

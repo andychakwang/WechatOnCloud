@@ -887,18 +887,16 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (item.kind !== 'review-task' || !item.refId) return;
     setBusy(`action-review-${item.id}`);
     try {
-      if (item.target === 'reply') {
-        await api.patchWecomBridgeEvent(item.refId, { replyApproved: true });
+      const { result } = await api.approveAutomationActionQueueItem(item.id, 12);
+      setActionQueue(result.queue);
+      if (result.target === 'reply') {
         toast('AI 回复草稿已审核，Mac Runner 可领取', 'ok');
-      } else if (item.target === 'mass') {
-        await api.patchMassSendJob(item.refId, { approved: true, status: 'queued' });
+      } else if (result.target === 'mass') {
         toast('群发队列已审核并排队', 'ok');
-      } else if (item.target === 'moment') {
-        await api.patchMomentDraft(item.refId, { approved: true, status: 'ready' });
+      } else if (result.target === 'moment') {
         toast('朋友圈草稿已审核并设为就绪', 'ok');
       } else {
         toast('该待办暂不支持快捷审核', 'error');
-        return;
       }
       await loadAutomation();
     } catch (e: any) {

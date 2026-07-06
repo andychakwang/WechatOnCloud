@@ -90,6 +90,7 @@ import {
   getAutomationHealth,
   getAutomationPreflightReport,
   getAutomationActionQueue,
+  approveAutomationActionQueueReview,
   updateAutomationConfig,
   exportAutomationBundle,
   exportWecomRpaPackage,
@@ -567,6 +568,20 @@ app.get('/api/admin/automation/action-queue', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   const query = req.query as any;
   return { queue: getAutomationActionQueue(Number(query?.limit || 20)) };
+});
+
+app.post('/api/admin/automation/action-queue/items/:itemId/approve', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const query = req.query as any;
+    const body = req.body as any;
+    const result = approveAutomationActionQueueReview(admin, (req.params as any).itemId, Number(body?.limit ?? query?.limit ?? 20));
+    appendPanelLog('INFO', `审核自动化队列项「${result.item.title}」by ${admin.username}`);
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '审核自动化队列项失败' });
+  }
 });
 
 app.put('/api/admin/automation/config', async (req, reply) => {
