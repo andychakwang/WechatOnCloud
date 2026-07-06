@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r83-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r84-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,37 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r83-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r83-2026-07-06`
-- 本版新增：自动化工作台顶部新增健康度卡，把总览、预检和下一步队列聚合成 0-100 分，并按 AI 回复、群发、朋友圈、Mac Runner、素材受众拆出阻断原因和下一步动作。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r84-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r84-2026-07-06`
+- 本版新增：朋友圈草稿可通过 `external-rpa` 交给现有企业微信 Mac 自动化项目打开发布框、选图和填文案；云端仍只回写 prepared/published，不自动点击发布。
+
+## 2026-07-06 R84 镜像发布
+
+- GitHub Actions release run `28765427265` 已成功构建并推送 panel / wechat 双镜像。
+- 已通过 GHCR Registry manifest 验证：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r84-2026-07-06
+    digest sha256:4f8766780cbc3e840e2ed86c7a9e1a0510dd8a510633cadd35bfa2efa8d0b648
+    platforms linux/amd64, linux/arm64
+
+  ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r84-2026-07-06
+    digest sha256:0b227571c2ad1bdb39052f613671708d6ba02ec9d5d5446c349a6e0141dbbfbc
+    platforms linux/amd64, linux/arm64
+  ```
+
+- 本地已完成：
+
+  ```text
+  npx tsc --noEmit        # panel/server
+  npx tsc --noEmit        # panel/web
+  npm run build           # panel/web
+  bash -n scripts/smoke-automation-panel.sh scripts/wecom-mac-moment-handler.sh scripts/wecom-bridge-runner.sh scripts/install-wecom-bridge-launchagent.sh
+  ```
+
+- 本地临时 panel 已验证 `/api/admin/automation/bridge` 会返回 `commands.prepareMomentExternalRpa`，且 env 模板包含 `WECOM_MOMENT_RPA_COMMAND` 占位提示。
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板公网入口仍返回 `200`；当前 NAS 容器是否已升级到 R84 需执行下方 Docker socket helper 后再登录 `/api/version` 验证。
 
 ## 2026-07-06 R83 更新验收
 
@@ -387,7 +415,7 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 推荐用提交哈希固定脚本来源：
 
 ```bash
-WOC_VERSION=andy-automation-usable-r83-2026-07-06 \
+WOC_VERSION=andy-automation-usable-r84-2026-07-06 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```
