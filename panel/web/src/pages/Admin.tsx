@@ -1653,6 +1653,62 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const saveCampaignKit = async () => {
+    const recipients = linesOf(massRecipients);
+    const hasAudienceFilter = !!massAudienceQuery.trim() || !!massAudienceTag.trim() || massAudienceType !== 'all';
+    if (!massMessage.trim()) return toast('请先生成或填写群发内容', 'error');
+    if (!momentText.trim()) return toast('请先生成或填写朋友圈正文', 'error');
+    if (!recipients.length && !hasAudienceFilter) return toast('请先填写群发目标，或设置受众关键词/标签/类型', 'error');
+    setBusy('campaign-save');
+    try {
+      const options = {
+        perSendDelaySeconds: Number(massDelay) || 0,
+        requireOperatorConfirmRecipient: true,
+        openConversationBeforeSend: massAutoOpen,
+        searchShortcut: massSearchShortcut,
+        searchResultDelaySeconds: Number(massSearchDelay) || 2,
+        postOpenDelaySeconds: Number(massPostOpenDelay) || 1,
+      };
+      const massResult = recipients.length
+        ? await api.createMassSendJob({
+            title: massTitle.trim() || campaignTopic.trim() || `活动群发 ${new Date().toLocaleString()}`,
+            message: massMessage,
+            recipients,
+            scheduledAt: isoFromLocalDatetime(massScheduledAt),
+            options,
+          })
+        : await api.createMassSendJobFromAudience({
+            title: massTitle.trim() || campaignTopic.trim() || `活动群发 ${new Date().toLocaleString()}`,
+            message: massMessage,
+            scheduledAt: isoFromLocalDatetime(massScheduledAt),
+            audienceFilter: {
+              query: massAudienceQuery.trim(),
+              tag: massAudienceTag.trim(),
+              type: massAudienceType,
+              requireApproved: true,
+              requireEnabled: true,
+              limit: Number(massAudienceLimit) || 500,
+            },
+            options,
+          });
+      const { draft } = await api.createMomentDraft({
+        title: momentTitle.trim() || campaignTopic.trim() || `活动朋友圈 ${new Date().toLocaleString()}`,
+        text: momentText,
+        imageNotes: momentImageNotes,
+        materials: linesOf(momentMaterials),
+        scheduledAt: isoFromLocalDatetime(momentScheduledAt),
+      });
+      setJobs((list) => [massResult.job, ...list]);
+      setDrafts((list) => [draft, ...list]);
+      toast('活动套件已保存为未审核群发队列和朋友圈草稿', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '保存活动套件失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const saveReplyAsRule = async () => {
     if (!replyPlan?.draft) return toast('没有可沉淀的话术', 'error');
     const triggers = linesOf(ruleTriggers || replyInbound);
@@ -3622,6 +3678,10 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <button className="btn btn-primary s-btn" disabled={busy === 'campaign-kit' || !campaignTopic.trim()} onClick={draftCampaignKit}>
               生成群发和朋友圈草稿
             </button>
+            <button className="btn s-btn" disabled={busy === 'campaign-save' || !massMessage.trim() || !momentText.trim()} onClick={saveCampaignKit}>
+              保存为队列和草稿
+            </button>
+            <div className="muted small">保存后仍为未审核状态，不会被 Mac Runner 立即发送或发布。</div>
             <KnowledgeRefs refs={campaignKnowledgeRefs} />
           </section>
 
