@@ -24,8 +24,8 @@ import {
   type AutomationPreflightReport,
   type AutomationActionQueue,
   type AutomationActionQueueItem,
+  type AutomationActionQueueListTarget,
   type AutomationActionQueueReviewBulkTarget,
-  type AutomationActionQueueTarget,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type InstanceAutomationTargetVerifyResult,
@@ -450,9 +450,7 @@ const ACTION_QUEUE_TARGET_LABEL: Record<string, string> = {
   moment: '朋友圈',
 };
 
-type AutomationActionQueueFilterTarget = 'all' | AutomationActionQueueTarget;
-
-const ACTION_QUEUE_FILTERS: Array<{ target: AutomationActionQueueFilterTarget; label: string }> = [
+const ACTION_QUEUE_FILTERS: Array<{ target: AutomationActionQueueListTarget; label: string }> = [
   { target: 'all', label: '全部' },
   { target: 'ops', label: ACTION_QUEUE_TARGET_LABEL.ops },
   { target: 'reply', label: ACTION_QUEUE_TARGET_LABEL.reply },
@@ -487,13 +485,14 @@ function actionQueueRpaPackageAction(item: AutomationActionQueueItem): NonNullab
   return item.actions?.find((action) => action.kind === 'preview-rpa-package');
 }
 
-function actionQueueTargetCounts(items: AutomationActionQueueItem[]): Record<AutomationActionQueueFilterTarget, number> {
-  const counts: Record<AutomationActionQueueFilterTarget, number> = { all: items.length, ops: 0, reply: 0, mass: 0, moment: 0 };
-  for (const item of items) counts[item.target] += 1;
-  return counts;
+function actionQueueTargetCounts(queue: AutomationActionQueue): Record<AutomationActionQueueListTarget, number> {
+  const counts: Record<AutomationActionQueueListTarget, number> = { all: queue.items.length, ops: 0, reply: 0, mass: 0, moment: 0 };
+  for (const item of queue.items) counts[item.target] += 1;
+  return queue.targetSummary || counts;
 }
 
-function actionQueueFilteredItems(queue: AutomationActionQueue, target: AutomationActionQueueFilterTarget): AutomationActionQueueItem[] {
+function visibleActionQueueItems(queue: AutomationActionQueue, target: AutomationActionQueueListTarget): AutomationActionQueueItem[] {
+  if (queue.filters?.target === target) return queue.items;
   if (target === 'all') return queue.items;
   return queue.items.filter((item) => item.target === target);
 }
@@ -520,7 +519,7 @@ function KnowledgeRefs({ refs }: { refs?: AutomationKnowledgeReference[] }) {
   );
 }
 
-function actionQueueRpaTarget(queue: AutomationActionQueue): {
+function actionQueueRpaTarget(queue: AutomationActionQueue, filter: AutomationActionQueueListTarget = 'all'): {
   target: WecomRpaPackageTarget;
   total: number;
   replies: number;
@@ -534,6 +533,50 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
   label: string;
   workerReadiness: NonNullable<AutomationActionQueue['handoff']>['rpa']['workerReadiness'];
 } {
+  if (filter === 'ops') {
+    const workerReadiness = queue.handoff?.rpa?.workerReadiness || {
+      replies: fallbackRpaWorkerReadiness('replies', 'AI 回复', 'reply', 0),
+      mass: fallbackRpaWorkerReadiness('mass', '群发', 'mass', 0),
+      moments: fallbackRpaWorkerReadiness('moments', '朋友圈', 'moment', 0),
+    };
+    return {
+      target: 'all',
+      total: 0,
+      replies: 0,
+      mass: 0,
+      moments: 0,
+      limit: 50,
+      ready: false,
+      blockedByPreflight: queue.handoff?.rpa?.blockedByPreflight || false,
+      blockedByWorker: queue.handoff?.rpa?.blockedByWorker || false,
+      reason: '运维分类没有可交给 Mac/RPA 的业务任务。',
+      label: '运维',
+      workerReadiness,
+    };
+  }
+  if (queue.handoff?.rpa && filter !== 'all') {
+    const base = queue.handoff.rpa;
+    const targetMap = {
+      reply: { target: 'replies' as const, count: base.replies, label: 'AI 回复' },
+      mass: { target: 'mass' as const, count: base.mass, label: '群发' },
+      moment: { target: 'moments' as const, count: base.moments, label: '朋友圈' },
+    };
+    const scoped = targetMap[filter];
+    const worker = base.workerReadiness[scoped.target];
+    return {
+      ...base,
+      target: scoped.target,
+      total: scoped.count,
+      replies: filter === 'reply' ? scoped.count : 0,
+      mass: filter === 'mass' ? scoped.count : 0,
+      moments: filter === 'moment' ? scoped.count : 0,
+      limit: Math.min(200, Math.max(50, scoped.count || 50)),
+      ready: scoped.count > 0 && !base.blockedByPreflight && !worker.blocked,
+      blockedByWorker: worker.blocked,
+      reason: scoped.count > 0 ? `${scoped.label}分类可生成 RPA 运行包预览。` : `${scoped.label}分类暂无可交给 Mac/RPA 的任务。`,
+      label: scoped.label,
+    };
+  }
   if (queue.handoff?.rpa) return queue.handoff.rpa;
   const replies = queue.items.filter((item) => item.target === 'reply').length;
   const mass = queue.items.filter((item) => item.target === 'mass').length;
@@ -753,7 +796,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [health, setHealth] = useState<AutomationHealth | null>(null);
   const [preflight, setPreflight] = useState<AutomationPreflightReport | null>(null);
   const [actionQueue, setActionQueue] = useState<AutomationActionQueue | null>(null);
-  const [actionQueueFilter, setActionQueueFilter] = useState<AutomationActionQueueFilterTarget>('all');
+  const [actionQueueFilter, setActionQueueFilter] = useState<AutomationActionQueueListTarget>('all');
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
@@ -854,6 +897,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const runningInstances = instances.filter((inst) => inst.runtime === 'running');
   const selectedInstance = instances.find((inst) => inst.id === selectedInstanceId);
 
+  const loadActionQueue = async (target: AutomationActionQueueListTarget = actionQueueFilter) => {
+    const { queue } = await api.getAutomationActionQueue(12, target);
+    setActionQueue(queue);
+    return queue;
+  };
+
   const loadAutomation = async () => {
     setErr('');
     try {
@@ -878,7 +927,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
         api.getAutomationOverview(),
         api.getAutomationHealth(),
         api.getAutomationPreflight(),
-        api.getAutomationActionQueue(12),
+        api.getAutomationActionQueue(12, actionQueueFilter),
         api.listAutomationAudience(200),
         api.listAutomationMaterials(200),
         api.listMassSendJobs(),
@@ -939,15 +988,26 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   });
   const bridgeWorkerOptions = Array.from(new Map(bridgeWorkersSorted.map((worker) => [worker.workerId, worker])).values());
   const selectedRpaPackageWorker = bridgeWorkersSorted.find((worker) => worker.id === rpaPackageWorkerRef) || null;
-  const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue) : null;
-  const actionQueueVisibleItems = actionQueue ? actionQueueFilteredItems(actionQueue, actionQueueFilter) : [];
-  const actionQueueCounts = actionQueue ? actionQueueTargetCounts(actionQueue.items) : null;
+  const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue, actionQueueFilter) : null;
+  const actionQueueVisibleItems = actionQueue ? visibleActionQueueItems(actionQueue, actionQueueFilter) : [];
+  const actionQueueCounts = actionQueue ? actionQueueTargetCounts(actionQueue) : null;
   const actionQueueReview = actionQueue ? actionQueueReviewBatchTarget(actionQueueVisibleItems) : null;
   const actionQueueRpaReadiness = actionQueueRpa
     ? (['replies', 'mass', 'moments'] as const)
         .map((target) => actionQueueRpa.workerReadiness[target])
         .filter((item) => item.tasks > 0)
     : [];
+  const selectActionQueueFilter = async (target: AutomationActionQueueListTarget) => {
+    setActionQueueFilter(target);
+    setBusy('action-queue-filter');
+    try {
+      await loadActionQueue(target);
+    } catch (e: any) {
+      toast(e.message || '加载分类队列失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
   const copyBridgeText = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -961,7 +1021,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!actionQueueApproveReviewAction(item)) return;
     setBusy(`action-review-${item.id}`);
     try {
-      const { result } = await api.approveAutomationActionQueueItem(item.id, 12);
+      const { result } = await api.approveAutomationActionQueueItem(item.id, 12, actionQueueFilter);
       setActionQueue(result.queue);
       if (result.target === 'reply') {
         toast('AI 回复草稿已审核，Mac Runner 可领取', 'ok');
@@ -984,6 +1044,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!actionQueueReview || actionQueueReview.total <= 0) return toast('当前队列没有待审核草稿', 'error');
     const request = {
       target: actionQueueReview.target,
+      queueTarget: actionQueueFilter,
       itemIds: actionQueueReview.itemIds,
       limit: actionQueueReview.itemIds.length,
       queueLimit: 12,
@@ -2465,8 +2526,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                   <button
                     key={filter.target}
                     className={'chip chip-toggle' + (actionQueueFilter === filter.target ? ' on' : '')}
-                    disabled={count === 0 && actionQueueFilter !== filter.target}
-                    onClick={() => setActionQueueFilter(filter.target)}
+                    disabled={busy === 'action-queue-filter' || (count === 0 && actionQueueFilter !== filter.target)}
+                    onClick={() => selectActionQueueFilter(filter.target)}
                   >
                     {filter.label} {count}
                   </button>

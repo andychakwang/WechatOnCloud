@@ -659,6 +659,7 @@ export type AutomationActionQueueItemKind =
   | 'runner-report';
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
+export type AutomationActionQueueListTarget = 'all' | AutomationActionQueueTarget;
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
 export type AutomationActionQueueItemActionKind = 'approve-review' | 'preview-rpa-package';
 
@@ -692,6 +693,14 @@ export interface AutomationActionQueueItem {
 export interface AutomationActionQueue {
   generatedAt: string;
   summary: Record<AutomationActionQueuePriority, number> & { total: number };
+  targetSummary: Record<AutomationActionQueueListTarget, number>;
+  filters: {
+    target: AutomationActionQueueListTarget;
+    limit: number;
+    total: number;
+    filtered: number;
+    returned: number;
+  };
   handoff: {
     rpa: {
       target: WecomRpaPackageTarget;
@@ -722,6 +731,11 @@ export interface AutomationActionQueue {
     };
   };
   items: AutomationActionQueueItem[];
+}
+
+export interface AutomationActionQueueOptions {
+  limit?: number;
+  target?: unknown;
 }
 
 export interface AutomationActionQueueReviewResult {
@@ -2042,8 +2056,10 @@ export function getAutomationHealth(): AutomationHealth {
   }
 }
 
-export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
-  const n = clampInt(limit, 1, 100, 20);
+export function getAutomationActionQueue(raw: number | AutomationActionQueueOptions = 20): AutomationActionQueue {
+  const options: AutomationActionQueueOptions = typeof raw === 'number' ? { limit: raw } : raw || {};
+  const n = clampInt(options.limit, 1, 100, 20);
+  const targetFilter = normalizeAutomationActionQueueListTarget(options.target);
   const rpaScanLimit = 200;
   const generatedAt = new Date().toISOString();
   const nowMs = Date.parse(generatedAt);
@@ -2296,14 +2312,22 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
       workerReadiness,
     },
   };
-  const selected = items
-    .sort(
-      (a, b) =>
-        priorityRank[a.priority] - priorityRank[b.priority] ||
-        (b.staleSeconds ?? -1) - (a.staleSeconds ?? -1) ||
-        a.title.localeCompare(b.title),
-    )
-    .slice(0, n);
+  const sorted = items.sort(
+    (a, b) =>
+      priorityRank[a.priority] - priorityRank[b.priority] ||
+      (b.staleSeconds ?? -1) - (a.staleSeconds ?? -1) ||
+      a.title.localeCompare(b.title),
+  );
+  const targetSummary = sorted.reduce(
+    (acc, item) => {
+      acc.all += 1;
+      acc[item.target] += 1;
+      return acc;
+    },
+    { all: 0, ops: 0, reply: 0, mass: 0, moment: 0 } as AutomationActionQueue['targetSummary'],
+  );
+  const filtered = targetFilter === 'all' ? sorted : sorted.filter((item) => item.target === targetFilter);
+  const selected = filtered.slice(0, n);
   const summary = selected.reduce(
     (acc, item) => {
       acc[item.priority] += 1;
@@ -2313,10 +2337,28 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     { block: 0, high: 0, normal: 0, low: 0, total: 0 } as AutomationActionQueue['summary'],
   );
 
-  return { generatedAt, summary, handoff, items: selected };
+  return {
+    generatedAt,
+    summary,
+    targetSummary,
+    filters: {
+      target: targetFilter,
+      limit: n,
+      total: sorted.length,
+      filtered: filtered.length,
+      returned: selected.length,
+    },
+    handoff,
+    items: selected,
+  };
 }
 
-export function approveAutomationActionQueueReview(actor: User, itemId: string, limit = 20): AutomationActionQueueReviewResult {
+export function approveAutomationActionQueueReview(
+  actor: User,
+  itemId: string,
+  rawQueue: number | AutomationActionQueueOptions = 20,
+): AutomationActionQueueReviewResult {
+  const queueOptions: AutomationActionQueueOptions = typeof rawQueue === 'number' ? { limit: rawQueue } : rawQueue || {};
   const id = str(itemId, 200).trim();
   if (!id) throw new Error('队列项 ID 不能为空');
   const item = getAutomationActionQueue(100).items.find((candidate) => candidate.id === id);
@@ -2325,15 +2367,15 @@ export function approveAutomationActionQueueReview(actor: User, itemId: string, 
 
   if (item.target === 'reply') {
     const event = patchWecomBridgeEvent(actor, item.refId, { replyApproved: true });
-    return { item, target: item.target, event, queue: getAutomationActionQueue(limit) };
+    return { item, target: item.target, event, queue: getAutomationActionQueue(queueOptions) };
   }
   if (item.target === 'mass') {
     const job = patchMassSendJob(actor, item.refId, { approved: true, status: 'queued' });
-    return { item, target: item.target, job, queue: getAutomationActionQueue(limit) };
+    return { item, target: item.target, job, queue: getAutomationActionQueue(queueOptions) };
   }
   if (item.target === 'moment') {
     const draft = patchMomentDraft(actor, item.refId, { approved: true, status: 'ready' });
-    return { item, target: item.target, draft, queue: getAutomationActionQueue(limit) };
+    return { item, target: item.target, draft, queue: getAutomationActionQueue(queueOptions) };
   }
   throw new Error('该队列项暂不支持快捷审核');
 }
@@ -2345,6 +2387,7 @@ export function approveAutomationActionQueueReviews(actor: User, raw: any = {}):
     : [];
   const limit = requestedItemIds.length > 0 ? requestedItemIds.length : clampInt(raw?.limit, 1, 100, 20);
   const queueLimit = clampInt(raw?.queueLimit, 1, 100, 20);
+  const queueTarget = normalizeAutomationActionQueueListTarget(raw?.queueTarget ?? raw?.viewTarget ?? raw?.targetFilter);
   const dryRun = raw?.dryRun === true || raw?.dryRun === '1' || raw?.dryRun === 'true';
   const queueItems = getAutomationActionQueue(100).items;
   const candidates =
@@ -2365,7 +2408,7 @@ export function approveAutomationActionQueueReviews(actor: User, raw: any = {}):
     candidates,
     approved: { reply: 0, mass: 0, moment: 0, total: 0 },
     failed: [],
-    queue: getAutomationActionQueue(queueLimit),
+    queue: getAutomationActionQueue({ limit: queueLimit, target: queueTarget }),
   };
   if (dryRun) return result;
 
@@ -2391,8 +2434,15 @@ export function approveAutomationActionQueueReviews(actor: User, raw: any = {}):
     }
   }
   result.approved.total = result.approved.reply + result.approved.mass + result.approved.moment;
-  result.queue = getAutomationActionQueue(queueLimit);
+  result.queue = getAutomationActionQueue({ limit: queueLimit, target: queueTarget });
   return result;
+}
+
+function normalizeAutomationActionQueueListTarget(value: unknown): AutomationActionQueueListTarget {
+  const raw = str(value || 'all', 20).trim();
+  if (!raw || raw === 'all') return 'all';
+  if (raw === 'ops' || raw === 'reply' || raw === 'mass' || raw === 'moment') return raw;
+  throw new Error('队列分类不合法');
 }
 
 function normalizeActionQueueReviewBulkTarget(value: unknown): AutomationActionQueueReviewBulkTarget {

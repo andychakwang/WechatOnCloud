@@ -845,6 +845,7 @@ export interface AutomationHealth {
 export type AutomationActionQueueItemKind = 'preflight-check' | 'review-task' | 'bridge-reply' | 'mass-task' | 'moment-task' | 'runner-report';
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
+export type AutomationActionQueueListTarget = 'all' | AutomationActionQueueTarget;
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';
 export type AutomationActionQueueItemActionKind = 'approve-review' | 'preview-rpa-package';
 
@@ -878,6 +879,14 @@ export interface AutomationActionQueueItem {
 export interface AutomationActionQueue {
   generatedAt: string;
   summary: Record<AutomationActionQueuePriority, number> & { total: number };
+  targetSummary: Record<AutomationActionQueueListTarget, number>;
+  filters: {
+    target: AutomationActionQueueListTarget;
+    limit: number;
+    total: number;
+    filtered: number;
+    returned: number;
+  };
   handoff?: {
     rpa: {
       target: WecomRpaPackageTarget;
@@ -1243,14 +1252,18 @@ export const api = {
   getAutomationOverview: () => req<{ overview: AutomationOverview }>('/api/admin/automation/overview'),
   getAutomationHealth: () => req<{ health: AutomationHealth }>('/api/admin/automation/health'),
   getAutomationPreflight: () => req<{ report: AutomationPreflightReport }>('/api/admin/automation/preflight'),
-  getAutomationActionQueue: (limit = 20) => req<{ queue: AutomationActionQueue }>(`/api/admin/automation/action-queue?limit=${encodeURIComponent(limit)}`),
-  approveAutomationActionQueueItem: (itemId: string, limit = 20) =>
+  getAutomationActionQueue: (limit = 20, target: AutomationActionQueueListTarget = 'all') =>
+    req<{ queue: AutomationActionQueue }>(
+      `/api/admin/automation/action-queue?limit=${encodeURIComponent(limit)}&target=${encodeURIComponent(target)}`,
+    ),
+  approveAutomationActionQueueItem: (itemId: string, limit = 20, queueTarget: AutomationActionQueueListTarget = 'all') =>
     req<{ result: AutomationActionQueueReviewResult }>(`/api/admin/automation/action-queue/items/${encodeURIComponent(itemId)}/approve`, {
       method: 'POST',
-      body: JSON.stringify({ limit }),
+      body: JSON.stringify({ limit, queueTarget }),
     }),
   approveAutomationActionQueueReviews: (payload: {
     target?: AutomationActionQueueReviewBulkTarget;
+    queueTarget?: AutomationActionQueueListTarget;
     dryRun?: boolean;
     itemIds?: string[];
     limit?: number;
