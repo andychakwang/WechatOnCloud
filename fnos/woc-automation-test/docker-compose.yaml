@@ -4,13 +4,13 @@
 
 services:
   panel-automation-test:
-    image: ghcr.io/andychakwang/woc-panel:andy-automation-usable-r81-2026-07-06
+    image: ghcr.io/andychakwang/woc-panel:andy-automation-usable-r82-2026-07-06
     container_name: woc-panel-automation-test
     pull_policy: always
 
     environment:
       - PORT=8080
-      - WOC_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r81-2026-07-06
+      - WOC_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r82-2026-07-06
       - PUID=1000
       - PGID=1000
       - TZ=Asia/Shanghai

@@ -365,6 +365,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
       wecomCliInstall: 'npm install -g @wecom/cli',
       wecomCliInit: `${wecomCliExecutable} init`,
       wecomCliCheck: `${wecomCliExecutable} --version && ${wecomCliExecutable} auth show --auth-status`,
+      syncCliAudience: `node scripts/wecom-bridge-client.mjs sync-cli-audience --wecom-cli ${wecomCliExecutable} --source wecom-cli-contact --tag wecom-cli`,
       dryRunAll: 'WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',
       dryRunRpaPackageAll:
         'WECOM_USE_RPA_PACKAGE=1 WECOM_RUNNER_MODE=dry-run WECOM_RUNNER_TARGET=all scripts/wecom-bridge-runner.sh run-once',

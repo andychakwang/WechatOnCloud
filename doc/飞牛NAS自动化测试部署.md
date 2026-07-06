@@ -1,6 +1,6 @@
 # 飞牛 NAS 自动化测试部署
 
-> 本文用于把 `andy-automation-usable-r81-2026-07-06` 部署成独立测试面板。
+> 本文用于把 `andy-automation-usable-r82-2026-07-06` 部署成独立测试面板。
 > 它不会替换现有 `36080` 生产面板，默认使用 `36081`。
 
 ## 当前部署目标
@@ -9,9 +9,9 @@
 - 测试面板新开端口：`http://nasbot.cloud:36081/`
 - 测试容器名：`woc-panel-automation-test`
 - 测试数据目录：`data-panel-automation-test`
-- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r81-2026-07-06`
-- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r81-2026-07-06`
-- 本版新增：Web「Mac Runner 接入」增加企微 CLI 接入探测，配置模板写入 `WECOM_CLI_EXECUTABLE`，面板可复制 `@wecom/cli` 安装、初始化和授权检查命令，`doctor` 会检查 CLI 安装与授权状态。
+- 镜像版本：`ghcr.io/andychakwang/woc-panel:andy-automation-usable-r82-2026-07-06`
+- 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r82-2026-07-06`
+- 本版新增：Web「Mac Runner 接入」在企微 CLI 探测基础上增加 `sync-cli-audience` 命令，可把已授权 `@wecom/cli` 通讯录导入云端受众资产池；默认未审核，不会自动进入群发。
 
 ## 2026-07-06 R81 更新验收
 
@@ -301,7 +301,7 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 推荐用提交哈希固定脚本来源：
 
 ```bash
-WOC_VERSION=andy-automation-usable-r81-2026-07-06 \
+WOC_VERSION=andy-automation-usable-r82-2026-07-06 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```

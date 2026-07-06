@@ -26,11 +26,12 @@ verification_handler_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-verification-hand
 handler_error_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-handler-error.XXXXXX.log")"
 fake_osascript_log_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX.log")"
 fake_osascript_dir="$(mktemp -d "${TMPDIR:-/tmp}/woc-smoke-fake-osascript.XXXXXX")"
+fake_wecom_cli_file="$(mktemp "${TMPDIR:-/tmp}/woc-smoke-wecom-cli.XXXXXX")"
 reply_image_key="smoke-poster"
 : > "$reply_image_file"
 
 cleanup() {
-  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$rpa_admin_package_file" "$rpa_run_result_file" "$expired_rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file"
+  rm -f "$cookie_jar" "$body_file" "$reply_image_file" "$material_map_file" "$rpa_package_file" "$rpa_admin_package_file" "$rpa_run_result_file" "$expired_rpa_package_file" "$rpa_cloud_package_file" "$verification_handler_file" "$handler_error_file" "$fake_osascript_log_file" "$fake_wecom_cli_file"
   rm -rf "$fake_osascript_dir"
 }
 trap cleanup EXIT
@@ -344,6 +345,7 @@ json_assert_path bridge.runnerGuide.commands.wecomCliInstall
 json_assert_path bridge.runnerGuide.commands.wecomCliInit
 json_assert_path bridge.runnerGuide.commands.wecomCliCheck
 json_assert_path bridge.runnerGuide.commands.doctorWithoutCli
+json_assert_path bridge.runnerGuide.commands.syncCliAudience
 if [[ "$(json_get bridge.runnerGuide.envFile)" != *"AUTOMATION_BRIDGE_TOKEN="* ]]; then
   echo "ERROR: Bridge runner guide env file is missing AUTOMATION_BRIDGE_TOKEN placeholder" >&2
   sed -n '1,120p' "$body_file" >&2
@@ -391,6 +393,11 @@ if [[ "$(json_get bridge.runnerGuide.commands.wecomCliInstall)" != *"@wecom/cli"
 fi
 if [[ "$(json_get bridge.runnerGuide.commands.wecomCliCheck)" != *"auth show --auth-status"* ]]; then
   echo "ERROR: Bridge runner guide wecom-cli check command is missing auth status check" >&2
+  sed -n '1,160p' "$body_file" >&2
+  exit 1
+fi
+if [[ "$(json_get bridge.runnerGuide.commands.syncCliAudience)" != *"sync-cli-audience"* ]]; then
+  echo "ERROR: Bridge runner guide is missing sync-cli-audience command" >&2
   sed -n '1,160p' "$body_file" >&2
   exit 1
 fi
@@ -830,6 +837,50 @@ PY
   json_assert_path result.contacts[0].id
   bridge_audience_id="$(json_get result.contacts[0].id)"
   request_json DELETE "/api/admin/automation/audience/$bridge_audience_id"
+  json_assert_path ok
+
+  say "Sync audience from fake wecom-cli through Bridge"
+  cat > "$fake_wecom_cli_file" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "contact" && "${2:-}" == "get_userlist" ]]; then
+  cat <<'JSON'
+{
+  "errcode": 0,
+  "userlist": [
+    {
+      "userid": "smoke_cli_1",
+      "name": "Smoke CLI Contact",
+      "alias": "SmokeAlias",
+      "english_name": "Smoke English",
+      "department": [1, 2],
+      "position": "顾问",
+      "tags": ["smoke-source"]
+    }
+  ]
+}
+JSON
+  exit 0
+fi
+echo "unexpected fake wecom-cli args: $*" >&2
+exit 2
+SH
+  chmod +x "$fake_wecom_cli_file"
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" sync-cli-audience --wecom-cli "$fake_wecom_cli_file" --source "smoke-wecom-cli-$stamp" --tag cli-sync --dry-run > "$body_file"
+  json_assert_eq dryRun True
+  json_assert_eq total 1
+  json_assert_eq payload.contacts[0].name "Smoke CLI Contact"
+  json_assert_eq payload.contacts[0].tags[0] cli-sync
+  if [[ "$(json_get payload.contacts[0].note)" != *"userid=smoke_cli_1"* ]]; then
+    echo "ERROR: CLI audience dry-run payload is missing userid note" >&2
+    sed -n '1,160p' "$body_file" >&2
+    exit 1
+  fi
+  WOC_PANEL_URL="$PANEL_URL" AUTOMATION_BRIDGE_TOKEN="$AUTOMATION_BRIDGE_TOKEN" node "$BRIDGE_CLIENT" sync-cli-audience --wecom-cli "$fake_wecom_cli_file" --source "smoke-wecom-cli-$stamp" --tag cli-sync > "$body_file"
+  json_assert_path result.contacts[0].id
+  json_assert_eq result.contacts[0].name "Smoke CLI Contact"
+  bridge_cli_audience_id="$(json_get result.contacts[0].id)"
+  request_json DELETE "/api/admin/automation/audience/$bridge_cli_audience_id"
   json_assert_path ok
 
   say "Import materials through Bridge"

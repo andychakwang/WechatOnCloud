@@ -578,6 +578,7 @@ export interface AutomationBridgeRunnerGuide {
     wecomCliInstall?: string;
     wecomCliInit?: string;
     wecomCliCheck?: string;
+    syncCliAudience?: string;
     dryRunAll: string;
     dryRunRpaPackageAll?: string;
     prepareAll: string;

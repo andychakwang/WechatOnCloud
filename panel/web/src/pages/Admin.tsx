@@ -2614,6 +2614,17 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                           </button>
                         </div>
                       )}
+                      {bridgeGuide.commands.syncCliAudience && (
+                        <div className="bridge-command-row">
+                          <div>
+                            <b>同步企微通讯录</b>
+                            <code>{bridgeGuide.commands.syncCliAudience}</code>
+                          </div>
+                          <button className="btn-text" onClick={() => copyBridgeText(bridgeGuide.commands.syncCliAudience!, '企微通讯录同步命令')}>
+                            复制
+                          </button>
+                        </div>
+                      )}
                       <div className="bridge-command-row">
                         <div>
                           <b>接入体检</b>

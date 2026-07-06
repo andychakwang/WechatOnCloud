@@ -6,7 +6,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const DEFAULT_SOURCE = 'wecom-mac-bridge';
-const CLIENT_VERSION = 'automation-lab-r81-wecom-cli-doctor';
+const CLIENT_VERSION = 'automation-lab-r82-wecom-cli-audience-sync';
 const RPA_PACKAGE_SCHEMA = 'woc.wecom.rpa.package.v1';
 const RPA_TASK_SCHEMA = 'woc.wecom.rpa.task.v1';
 const DEFAULT_RPA_PACKAGE_TTL_MINUTES = 12 * 60;
@@ -60,6 +60,7 @@ Environment:
 Commands:
   import-knowledge <file|-> [--source name] [--category faq|script|target|moment|other] [--approve-imported]
   import-audience <file|-> [--source name] [--type contact|group|room|unknown] [--approve-imported]
+  sync-cli-audience [--wecom-cli wecom-cli] [--source wecom-cli-contact] [--tag tag] [--approve-imported] [--dry-run] [--output file]
   import-materials <file|-> [--source name] [--kind image|video|file|link|text|other] [--approve-imported]
   material-map [--kind image|video|file|link|text|other|all] [--tag tag] [--source name] [--include-skipped 0|1] [--output file]
   push-events <file|-> [--source name] [--plan-replies] [--approve-rule-replies] [--overwrite-reply-drafts]
@@ -92,6 +93,7 @@ Commands:
 Examples:
   node scripts/wecom-bridge-client.mjs import-knowledge doc/examples/wecom-knowledge.sample.json
   node scripts/wecom-bridge-client.mjs import-audience doc/examples/wecom-audience.sample.json
+  node scripts/wecom-bridge-client.mjs sync-cli-audience --dry-run
   node scripts/wecom-bridge-client.mjs import-materials doc/examples/wecom-materials.sample.json
   node scripts/wecom-bridge-client.mjs material-map --kind image --output ~/.config/wechat-on-cloud/wecom-materials.json
   node scripts/wecom-bridge-client.mjs push-events doc/examples/wecom-events.sample.json
@@ -266,6 +268,160 @@ function normalizeAudiencePayload(input, options) {
   if (Array.isArray(input?.recipients)) return { ...input, source, type: input.type || type, mode, approveImported };
   if (Array.isArray(input?.items)) return { ...input, source, type: input.type || type, mode, approveImported };
   return { source, type, mode, approveImported, contacts: [input] };
+}
+
+function stringValue(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+}
+
+function stringList(value) {
+  if (value === undefined || value === null) return [];
+  const raw = Array.isArray(value) ? value : String(value).split(/[,;|\n]+/);
+  return raw.map((item) => stringValue(item)).filter(Boolean);
+}
+
+function uniqueList(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const value = stringValue(item);
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function firstRecordArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  for (const key of ['userlist', 'user_list', 'users', 'members', 'member_list', 'contacts', 'items', 'list']) {
+    if (Array.isArray(value[key])) return value[key];
+  }
+  for (const key of ['data', 'result', 'response', 'payload']) {
+    const nested = firstRecordArray(value[key]);
+    if (nested.length) return nested;
+  }
+  if (Array.isArray(value.content)) {
+    const text = value.content
+      .map((item) => (typeof item === 'string' ? item : item?.text || item?.content || ''))
+      .join('\n')
+      .trim();
+    if (text) {
+      const parsed = parseJsonText(text, 'wecom-cli content');
+      const nested = firstRecordArray(parsed);
+      if (nested.length) return nested;
+    }
+  }
+  return [];
+}
+
+function normalizeWecomCliAudienceContact(item, options) {
+  if (typeof item === 'string') return { name: item, type: 'contact' };
+  if (!item || typeof item !== 'object') return null;
+  const userid = stringValue(item.userid ?? item.user_id ?? item.userId ?? item.open_userid ?? item.openUserId ?? item.id);
+  const name = stringValue(item.name ?? item.display_name ?? item.displayName ?? item.realname ?? item.realName ?? item.alias ?? userid);
+  if (!name) return null;
+  const aliasCandidates = [
+    item.alias,
+    item.english_name,
+    item.englishName,
+    item.nickname,
+    item.nickName,
+    userid,
+    ...stringList(item.aliases),
+  ];
+  const departments = stringList(item.department ?? item.department_id ?? item.departmentId ?? item.dept_id ?? item.deptId);
+  const positions = stringList(item.position ?? item.title);
+  const tags = uniqueList([...stringList(options.tag || options.tags), 'wecom-cli', 'wecom-contact', ...stringList(item.tags)]).slice(0, 30);
+  const noteParts = [
+    userid ? `userid=${userid}` : '',
+    departments.length ? `department=${departments.join(',')}` : '',
+    positions.length ? `position=${positions.join(',')}` : '',
+  ].filter(Boolean);
+  return {
+    name,
+    type: 'contact',
+    aliases: uniqueList(aliasCandidates.filter((alias) => stringValue(alias) && stringValue(alias).toLowerCase() !== name.toLowerCase())).slice(0, 20),
+    tags,
+    note: noteParts.join('；'),
+    externalId: userid || undefined,
+  };
+}
+
+async function runWecomCli(options, args) {
+  const executable = stringValue(options['wecom-cli'] || options.cli || process.env.WECOM_CLI_EXECUTABLE || 'wecom-cli') || 'wecom-cli';
+  const timeoutMs = intOpt(options.timeout || process.env.WECOM_CLI_TIMEOUT_SECONDS, 45, 5, 300) * 1000;
+  const env = { ...process.env };
+  for (const [key, value] of [
+    ['WECOM_CLI_CONFIG_DIR', options['cli-config-dir'] || process.env.WECOM_CLI_CONFIG_DIR],
+    ['WECOM_CLI_TMP_DIR', options['cli-tmp-dir'] || process.env.WECOM_CLI_TMP_DIR],
+    ['WECOM_CLI_LOG_LEVEL', options['cli-log-level'] || process.env.WECOM_CLI_LOG_LEVEL],
+  ]) {
+    const clean = stringValue(value);
+    if (clean) env[key] = clean;
+  }
+  return await new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    const child = spawn(executable, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new BridgeError(`wecom-cli timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(new BridgeError(`failed to start wecom-cli: ${error.message}`));
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new BridgeError(`wecom-cli failed: exit=${code ?? 'signal'}${signal ? ` signal=${signal}` : ''}${stderr.trim() ? `: ${stderr.trim()}` : ''}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function syncCliAudience(options) {
+  const { stdout } = await runWecomCli(options, ['contact', 'get_userlist', '{}']);
+  const payload = parseHandlerJsonOutput(stdout) ?? parseJsonText(stdout, 'wecom-cli output');
+  const records = firstRecordArray(payload);
+  const contacts = records.map((item) => normalizeWecomCliAudienceContact(item, options)).filter(Boolean);
+  const importPayload = normalizeAudiencePayload(
+    {
+      source: options.source || 'wecom-cli-contact',
+      type: 'contact',
+      mode: options.mode || 'upsert',
+      approveImported: boolOpt(options, 'approve-imported', 'approve'),
+      contacts,
+    },
+    options,
+  );
+  const output = options.output || options.file;
+  if (output && output !== '-') {
+    await mkdir(dirname(output), { recursive: true });
+    await writeFile(output, `${JSON.stringify(importPayload, null, 2)}\n`, 'utf8');
+  }
+  if (boolOpt(options, 'dry-run')) {
+    printJson({ dryRun: true, source: importPayload.source, total: contacts.length, payload: importPayload });
+    return;
+  }
+  if (contacts.length === 0) throw new BridgeError('wecom-cli contact get_userlist returned no usable contacts.');
+  printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/audience', importPayload));
 }
 
 function normalizeMaterialPayload(input, options) {
@@ -1382,6 +1538,11 @@ async function main() {
     const input = await readJsonInput(positional[0] || options.file || '-');
     const payload = normalizeAudiencePayload(input, options);
     printJson(await requestJson(options, 'POST', '/api/automation/bridge/wecom/audience', payload));
+    return;
+  }
+
+  if (command === 'sync-cli-audience' || command === 'sync-wecom-cli-audience' || command === 'sync-wecom-audience') {
+    await syncCliAudience(options);
     return;
   }
 
