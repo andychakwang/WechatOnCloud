@@ -979,10 +979,21 @@ export interface AutomationReplyPlan {
   decision: AutomationDecision;
   draft: string;
   model?: string;
+  knowledgeRefs?: AutomationKnowledgeReference[];
   ruleId?: string;
   canSendRule: boolean;
   canSendText: boolean;
   reasons: string[];
+}
+
+export interface AutomationKnowledgeReference {
+  id: string;
+  title: string;
+  category: AutomationKnowledgeCategory;
+  source: string;
+  tags: string[];
+  triggers: string[];
+  excerpt: string;
 }
 
 export interface WecomBridgeReplyPlanResult {
@@ -1399,12 +1410,12 @@ export const api = {
   automationAudit: (limit = 200) =>
     req<{ events: AutomationAuditEvent[] }>(`/api/admin/automation/audit?limit=${encodeURIComponent(limit)}`),
   automationAiDraft: (payload: { inboundText: string; conversationContext?: string; extraInstruction?: string }) =>
-    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string }>(
+    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string; knowledgeRefs: AutomationKnowledgeReference[] }>(
       '/api/admin/automation/ai-draft',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
   automationMomentAiDraft: (payload: { topic: string; audience?: string; tone?: string; extraInstruction?: string }) =>
-    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string }>(
+    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string; knowledgeRefs: AutomationKnowledgeReference[] }>(
       '/api/admin/automation/moment-drafts/ai-draft',
       { method: 'POST', body: JSON.stringify(payload) },
     ),

@@ -1717,6 +1717,36 @@ button {
   font-size: 13px;
   line-height: 1.55;
 }
+.auto-knowledge-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.auto-knowledge-ref {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-small);
+  background: rgba(255 255 255 / 0.5);
+}
+.auto-knowledge-ref-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.auto-knowledge-ref-head b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auto-knowledge-ref-excerpt {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .auto-rule-box {
   display: flex;
   flex-direction: column;

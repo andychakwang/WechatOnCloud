@@ -732,10 +732,21 @@ export interface AutomationReplyPlan {
   decision: AutomationDecision;
   draft: string;
   model?: string;
+  knowledgeRefs?: AutomationKnowledgeReference[];
   ruleId?: string;
   canSendRule: boolean;
   canSendText: boolean;
   reasons: string[];
+}
+
+export interface AutomationKnowledgeReference {
+  id: string;
+  title: string;
+  category: AutomationKnowledgeCategory;
+  source: string;
+  tags: string[];
+  triggers: string[];
+  excerpt: string;
 }
 
 export type MassSendItemStatus = 'pending' | 'sent' | 'failed' | 'skipped';
@@ -5100,6 +5111,7 @@ export async function planAutomationReply(req: DraftReplyRequest): Promise<Autom
       decision: { ...decision, action: 'blocked', risk: ai.risk },
       draft: ai.draft,
       model: ai.model,
+      knowledgeRefs: ai.knowledgeRefs,
       canSendRule: false,
       canSendText: false,
       reasons: uniqueStrings([...baseReasons, ...ai.risk.reasons]),
@@ -5110,6 +5122,7 @@ export async function planAutomationReply(req: DraftReplyRequest): Promise<Autom
     decision: { ...decision, risk: ai.risk },
     draft: ai.draft,
     model: ai.model,
+    knowledgeRefs: ai.knowledgeRefs,
     canSendRule: false,
     canSendText: ai.risk.level === 'normal',
     reasons:
@@ -5397,6 +5410,7 @@ export interface DraftReplyResult {
   draft: string;
   risk: RiskAssessment;
   model: string;
+  knowledgeRefs: AutomationKnowledgeReference[];
 }
 
 export async function draftAutomationReply(req: DraftReplyRequest): Promise<DraftReplyResult> {
@@ -5464,6 +5478,7 @@ export async function draftAutomationReply(req: DraftReplyRequest): Promise<Draf
     draft: clipped,
     risk: assessRisk([inboundText, clipped]),
     model,
+    knowledgeRefs: knowledgeReferencesFromItems(matchedKnowledgeItems),
   };
 }
 
@@ -5478,6 +5493,7 @@ export interface DraftMomentResult {
   draft: string;
   risk: RiskAssessment;
   model: string;
+  knowledgeRefs: AutomationKnowledgeReference[];
 }
 
 export async function draftMomentContent(req: DraftMomentRequest): Promise<DraftMomentResult> {
@@ -5544,6 +5560,7 @@ export async function draftMomentContent(req: DraftMomentRequest): Promise<Draft
     draft: clipped,
     risk: assessRisk([topic, clipped]),
     model,
+    knowledgeRefs: knowledgeReferencesFromItems(matchedKnowledgeItems),
   };
 }
 
@@ -6795,6 +6812,25 @@ function formatKnowledgeForPrompt(items: AutomationKnowledgeItem[]) {
     targetNames: item.targetNames.slice(0, 30),
     content: item.content.slice(0, 1600),
   }));
+}
+
+function knowledgeReferencesFromItems(items: AutomationKnowledgeItem[]): AutomationKnowledgeReference[] {
+  return items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    category: item.category,
+    source: item.source,
+    tags: item.tags.slice(0, 8),
+    triggers: item.triggers.slice(0, 8),
+    excerpt: compactExcerpt(item.content, 180),
+  }));
+}
+
+function compactExcerpt(value: string, limit: number): string {
+  return str(value, limit * 2)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, limit);
 }
 
 function assessRisk(parts: string[]): RiskAssessment {

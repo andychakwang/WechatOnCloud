@@ -16,6 +16,7 @@ import {
   type AutomationBundleMode,
   type AutomationKnowledgeCategory,
   type AutomationKnowledgeItem,
+  type AutomationKnowledgeReference,
   type AutomationMaterialAsset,
   type AutomationMaterialKind,
   type AutomationOverview,
@@ -465,6 +466,28 @@ function actionQueuePriorityClass(priority: string): string {
   return 'tag-on';
 }
 
+function KnowledgeRefs({ refs }: { refs?: AutomationKnowledgeReference[] }) {
+  if (!refs?.length) return null;
+  return (
+    <div className="auto-knowledge-refs">
+      <div className="muted small">参考资料</div>
+      {refs.slice(0, 5).map((ref) => (
+        <div key={ref.id} className="auto-knowledge-ref">
+          <div className="auto-knowledge-ref-head">
+            <b>{ref.title}</b>
+            <span className="tag">{KNOWLEDGE_CATEGORY_LABEL[ref.category] || ref.category}</span>
+          </div>
+          <div className="muted small">
+            {ref.source}
+            {ref.triggers.length ? ` · ${ref.triggers.slice(0, 4).join('、')}` : ''}
+          </div>
+          {ref.excerpt && <div className="auto-knowledge-ref-excerpt">{ref.excerpt}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function actionQueueRpaTarget(queue: AutomationActionQueue): {
   target: WecomRpaPackageTarget;
   total: number;
@@ -715,6 +738,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [momentImageNotes, setMomentImageNotes] = useState('');
   const [momentMaterials, setMomentMaterials] = useState('');
   const [momentScheduledAt, setMomentScheduledAt] = useState('');
+  const [momentKnowledgeRefs, setMomentKnowledgeRefs] = useState<AutomationKnowledgeReference[]>([]);
 
   const [knowledgeSource, setKnowledgeSource] = useState('wecom-mac');
   const [knowledgeCategory, setKnowledgeCategory] = useState<AutomationKnowledgeCategory>('faq');
@@ -1754,12 +1778,13 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const draftMomentByAI = async () => {
     setBusy('moment-ai');
     try {
-      const { draft } = await api.automationMomentAiDraft({
+      const { draft, knowledgeRefs } = await api.automationMomentAiDraft({
         topic: momentTopic,
         audience: momentAudience,
         tone: momentTone,
       });
       setMomentText(draft);
+      setMomentKnowledgeRefs(knowledgeRefs || []);
       if (!momentTitle.trim()) setMomentTitle(momentTopic.slice(0, 28) || 'AI 朋友圈草稿');
       toast('已生成朋友圈草稿', 'ok');
     } catch (e: any) {
@@ -1785,6 +1810,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       setMomentImageNotes('');
       setMomentMaterials('');
       setMomentScheduledAt('');
+      setMomentKnowledgeRefs([]);
       toast('朋友圈草稿已创建，审核后可填入发布框', 'ok');
       await loadAutomation();
     } catch (e: any) {
@@ -3535,6 +3561,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               <div className="auto-result">
                 <div className="muted small">{replyPlan.reasons.join('；')}</div>
                 {replyPlan.draft && <pre>{replyPlan.draft}</pre>}
+                <KnowledgeRefs refs={replyPlan.knowledgeRefs} />
               </div>
             )}
             {replyPlan?.draft && (
@@ -3692,6 +3719,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <button className="btn s-btn" disabled={busy === 'moment-ai' || !momentTopic.trim()} onClick={draftMomentByAI}>
               AI 生成文案
             </button>
+            <KnowledgeRefs refs={momentKnowledgeRefs} />
             <input className="input" placeholder="草稿标题" value={momentTitle} onChange={(e) => setMomentTitle(e.target.value)} />
             <textarea className="input textarea tall" placeholder="朋友圈正文" value={momentText} onChange={(e) => setMomentText(e.target.value)} />
             <textarea className="input textarea" placeholder="图片/素材说明" value={momentImageNotes} onChange={(e) => setMomentImageNotes(e.target.value)} />
