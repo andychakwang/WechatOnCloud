@@ -842,7 +842,7 @@ export interface AutomationHealth {
   recommendedActions: string[];
 }
 
-export type AutomationActionQueueItemKind = 'preflight-check' | 'bridge-reply' | 'mass-task' | 'moment-task' | 'runner-report';
+export type AutomationActionQueueItemKind = 'preflight-check' | 'review-task' | 'bridge-reply' | 'mass-task' | 'moment-task' | 'runner-report';
 export type AutomationActionQueuePriority = 'block' | 'high' | 'normal' | 'low';
 export type AutomationActionQueueTarget = 'ops' | 'reply' | 'mass' | 'moment';
 export type AutomationActionQueueRpaWorkerTarget = 'replies' | 'mass' | 'moments';

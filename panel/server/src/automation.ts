@@ -652,6 +652,7 @@ export interface AutomationHealth {
 
 export type AutomationActionQueueItemKind =
   | 'preflight-check'
+  | 'review-task'
   | 'bridge-reply'
   | 'mass-task'
   | 'moment-task'
@@ -2046,6 +2047,26 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     });
   }
 
+  for (const event of data.bridgeEvents) {
+    if (event.replyApproved || event.replyDeliveredAt || event.status === 'archived') continue;
+    const replyText = event.replyDraft || bridgeReplyTextFromSteps(bridgeReplySteps(event));
+    if (!replyText.trim()) continue;
+    add({
+      id: `review:reply:${event.id}`,
+      kind: 'review-task',
+      priority: 'normal',
+      target: 'reply',
+      title: `待审核 AI 回复 · ${bridgeReplyConversationName(event) || event.id}`,
+      detail: clip(replyText || event.inboundText || 'AI 回复草稿待审核'),
+      action: '审核通过后，Mac Runner 才能准备或发送；建议先核对目标、上下文和素材步骤。',
+      refId: event.id,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt,
+      staleSeconds: staleSeconds(event.updatedAt || event.createdAt),
+      tags: ['待审核', 'AI 回复', event.source],
+    });
+  }
+
   const replies = listApprovedWecomBridgeReplies(rpaScanLimit);
   for (const event of replies) {
     const sendable = sendableReplyIds.has(event.id);
@@ -2107,6 +2128,27 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
     });
   }
 
+  for (const job of data.massSendJobs) {
+    if (job.approved || job.status === 'completed' || job.status === 'cancelled') continue;
+    if (!job.message.trim()) continue;
+    const pendingCount = job.items.filter((item) => item.status === 'pending').length;
+    if (pendingCount <= 0) continue;
+    add({
+      id: `review:mass:${job.id}`,
+      kind: 'review-task',
+      priority: 'normal',
+      target: 'mass',
+      title: `待审核群发 · ${job.title}`,
+      detail: clip(job.message),
+      action: '审核通过并进入队列后，Mac Runner 才能按受控队列领取；建议先核对目标名单和文案。',
+      refId: job.id,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      staleSeconds: staleSeconds(job.updatedAt || job.createdAt),
+      tags: ['待审核', '群发', `${pendingCount} 目标`, job.status],
+    });
+  }
+
   for (const task of listApprovedWecomBridgeMomentTasks(rpaScanLimit)) {
     const draft = data.momentDrafts.find((candidate) => candidate.id === task.draftId);
     add({
@@ -2122,6 +2164,25 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
       updatedAt: draft?.updatedAt,
       staleSeconds: staleSeconds(draft?.updatedAt || draft?.createdAt),
       tags: ['朋友圈', task.materials?.length ? `素材 ${task.materials.length}` : '半自动'],
+    });
+  }
+
+  for (const draft of data.momentDrafts) {
+    if (draft.approved || draft.status === 'published' || draft.status === 'archived') continue;
+    if (!draft.text.trim()) continue;
+    add({
+      id: `review:moment:${draft.id}`,
+      kind: 'review-task',
+      priority: 'normal',
+      target: 'moment',
+      title: `待审核朋友圈 · ${draft.title}`,
+      detail: clip(draft.text || draft.imageNotes || '朋友圈草稿待审核'),
+      action: '审核通过后，Mac Runner 才能准备到剪贴板或发布框；建议先核对文案、素材和计划时间。',
+      refId: draft.id,
+      createdAt: draft.createdAt,
+      updatedAt: draft.updatedAt,
+      staleSeconds: staleSeconds(draft.updatedAt || draft.createdAt),
+      tags: ['待审核', '朋友圈', draft.materials.length ? `素材 ${draft.materials.length}` : '无素材', draft.status],
     });
   }
 
@@ -2147,9 +2208,9 @@ export function getAutomationActionQueue(limit = 20): AutomationActionQueue {
 
   const priorityRank: Record<AutomationActionQueuePriority, number> = { block: 0, high: 1, normal: 2, low: 3 };
   const rpaCounts = {
-    replies: items.filter((item) => item.target === 'reply').length,
-    mass: items.filter((item) => item.target === 'mass').length,
-    moments: items.filter((item) => item.target === 'moment').length,
+    replies: items.filter((item) => item.kind === 'bridge-reply').length,
+    mass: items.filter((item) => item.kind === 'mass-task').length,
+    moments: items.filter((item) => item.kind === 'moment-task').length,
   };
   const rpaTotal = rpaCounts.replies + rpaCounts.mass + rpaCounts.moments;
   const rpaActiveTargets = [
