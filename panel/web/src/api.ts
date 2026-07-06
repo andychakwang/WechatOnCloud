@@ -1424,6 +1424,15 @@ export const api = {
       '/api/admin/automation/mass-jobs/ai-draft',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
+  automationCampaignKitAiDraft: (payload: { topic: string; audience?: string; tone?: string; extraInstruction?: string }) =>
+    req<{
+      mass: { draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string; knowledgeRefs: AutomationKnowledgeReference[] };
+      moment: { draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string; knowledgeRefs: AutomationKnowledgeReference[] };
+      knowledgeRefs: AutomationKnowledgeReference[];
+    }>('/api/admin/automation/campaign-kit/ai-draft', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   listMassSendJobs: (limit = 100) =>
     req<{ jobs: MassSendJob[] }>(`/api/admin/automation/mass-jobs?limit=${encodeURIComponent(limit)}`),
   createMassSendJob: (payload: {

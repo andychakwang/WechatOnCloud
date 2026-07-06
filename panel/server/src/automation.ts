@@ -5510,6 +5510,47 @@ export interface DraftMassSendResult {
   knowledgeRefs: AutomationKnowledgeReference[];
 }
 
+export interface DraftCampaignKitRequest {
+  topic: string;
+  audience?: string;
+  tone?: string;
+  extraInstruction?: string;
+}
+
+export interface DraftCampaignKitResult {
+  mass: DraftMassSendResult;
+  moment: DraftMomentResult;
+  knowledgeRefs: AutomationKnowledgeReference[];
+}
+
+export async function draftCampaignKit(req: DraftCampaignKitRequest): Promise<DraftCampaignKitResult> {
+  const topic = String(req.topic || '').trim();
+  if (!topic) throw new Error('活动主题不能为空');
+  if (topic.length > 1000) throw new Error('活动主题过长');
+  const audience = String(req.audience || '').trim();
+  const tone = String(req.tone || '').trim() || '自然、克制、有个人感';
+  const extraInstruction = String(req.extraInstruction || '').trim();
+  const [mass, moment] = await Promise.all([
+    draftMassSendContent({
+      topic,
+      audience,
+      tone,
+      extraInstruction: [extraInstruction, '这是群发队列草稿，请更像一对一通知，避免朋友圈式表达。'].filter(Boolean).join('\n'),
+    }),
+    draftMomentContent({
+      topic,
+      audience,
+      tone,
+      extraInstruction: [extraInstruction, '这是朋友圈草稿，可以更有个人感，但不要夸张营销。'].filter(Boolean).join('\n'),
+    }),
+  ]);
+  return {
+    mass,
+    moment,
+    knowledgeRefs: mergeKnowledgeReferences([...mass.knowledgeRefs, ...moment.knowledgeRefs]),
+  };
+}
+
 export async function draftMassSendContent(req: DraftMassSendRequest): Promise<DraftMassSendResult> {
   const topic = String(req.topic || '').trim();
   if (!topic) throw new Error('群发主题不能为空');
@@ -6906,6 +6947,18 @@ function knowledgeReferencesFromItems(items: AutomationKnowledgeItem[]): Automat
     triggers: item.triggers.slice(0, 8),
     excerpt: compactExcerpt(item.content, 180),
   }));
+}
+
+function mergeKnowledgeReferences(items: AutomationKnowledgeReference[]): AutomationKnowledgeReference[] {
+  const seen = new Set<string>();
+  const refs: AutomationKnowledgeReference[] = [];
+  for (const item of items) {
+    const key = item.id || `${item.source}\n${item.title}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push(item);
+  }
+  return refs.slice(0, 8);
 }
 
 function compactExcerpt(value: string, limit: number): string {

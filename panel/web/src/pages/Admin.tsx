@@ -708,6 +708,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [targetVerifyName, setTargetVerifyName] = useState('');
   const [targetVerifyResult, setTargetVerifyResult] = useState<InstanceAutomationTargetVerifyResult | null>(null);
 
+  const [campaignTopic, setCampaignTopic] = useState('');
+  const [campaignAudience, setCampaignAudience] = useState('');
+  const [campaignTone, setCampaignTone] = useState('自然、克制、有个人感');
+  const [campaignInstruction, setCampaignInstruction] = useState('');
+  const [campaignKnowledgeRefs, setCampaignKnowledgeRefs] = useState<AutomationKnowledgeReference[]>([]);
+
   const [replyInbound, setReplyInbound] = useState('');
   const [replyContext, setReplyContext] = useState('');
   const [replyInstruction, setReplyInstruction] = useState('');
@@ -1608,6 +1614,40 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '发送失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const draftCampaignKit = async () => {
+    const topic = campaignTopic.trim();
+    if (!topic) return toast('请输入活动主题', 'error');
+    setBusy('campaign-kit');
+    try {
+      const result = await api.automationCampaignKitAiDraft({
+        topic,
+        audience: campaignAudience,
+        tone: campaignTone,
+        extraInstruction: campaignInstruction,
+      });
+      setMassAiTopic(topic);
+      setMassAiTone(campaignTone);
+      setMassAiInstruction(campaignInstruction);
+      setMassMessage(result.mass.draft);
+      setMassKnowledgeRefs(result.mass.knowledgeRefs || []);
+      if (!massTitle.trim()) setMassTitle(topic.slice(0, 28) || 'AI 群发队列');
+
+      setMomentTopic(topic);
+      setMomentAudience(campaignAudience);
+      setMomentTone(campaignTone);
+      setMomentText(result.moment.draft);
+      setMomentKnowledgeRefs(result.moment.knowledgeRefs || []);
+      if (!momentTitle.trim()) setMomentTitle(topic.slice(0, 28) || 'AI 朋友圈草稿');
+
+      setCampaignKnowledgeRefs(result.knowledgeRefs || []);
+      toast('已生成群发和朋友圈草稿', 'ok');
+    } catch (e: any) {
+      toast(e.message || '生成失败', 'error');
     } finally {
       setBusy('');
     }
@@ -3566,6 +3606,23 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               ))}
               {bridgeEvents.length === 0 && <div className="muted small">暂无企微 Bridge 消息</div>}
             </div>
+          </section>
+
+          <section className="auto-panel">
+            <div className="auto-panel-head">
+              <b>运营活动套件</b>
+              <span className="tag">AI 草稿</span>
+            </div>
+            <input className="input" placeholder="活动主题" value={campaignTopic} onChange={(e) => setCampaignTopic(e.target.value)} />
+            <input className="input" placeholder="目标人群" value={campaignAudience} onChange={(e) => setCampaignAudience(e.target.value)} />
+            <div className="auto-grid two compact">
+              <input className="input" placeholder="语气" value={campaignTone} onChange={(e) => setCampaignTone(e.target.value)} />
+              <input className="input" placeholder="额外要求，可选" value={campaignInstruction} onChange={(e) => setCampaignInstruction(e.target.value)} />
+            </div>
+            <button className="btn btn-primary s-btn" disabled={busy === 'campaign-kit' || !campaignTopic.trim()} onClick={draftCampaignKit}>
+              生成群发和朋友圈草稿
+            </button>
+            <KnowledgeRefs refs={campaignKnowledgeRefs} />
           </section>
 
           <section className="auto-panel">
