@@ -90,7 +90,41 @@ BUILD_WECHAT_IMAGE=0 ./scripts/deploy-automation-dev.sh
   ```
 
 - Bridge CLI 已验证 `import-assistant --dry-run --apply-settings` 会把 `applySettings` 传给 Bridge 导入接口。
-- `36081` NAS 测试面板仍需执行 Docker socket helper 后再登录 `/api/version` 验证是否升级到 R86。
+- `36081` NAS 测试面板已通过飞牛 Docker socket helper 升级到 R86，且保持 `36080` 原版生产面板不变。
+- 测试面板已登录验证：
+
+  ```json
+  {
+    "current": "andy-automation-usable-r86-2026-07-06",
+    "deployment": {
+      "profile": "automation-test",
+      "publicUrl": "http://nasbot.cloud:36081",
+      "panelPort": "36081",
+      "panelContainer": "woc-panel-automation-test",
+      "panelImage": "ghcr.io/andychakwang/woc-panel:andy-automation-usable-r86-2026-07-06",
+      "wechatImage": "ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r86-2026-07-06",
+      "allowedHosts": ["nasbot.cloud"],
+      "dockerSocket": { "mounted": true }
+    }
+  }
+  ```
+
+- 自动化接口已登录验证：
+
+  ```text
+  GET /api/admin/automation/overview -> 200
+  GET /api/admin/automation/health -> 200
+  GET /api/admin/automation/preflight -> 200
+  GET /api/admin/automation/rpa-package?target=all&limit=20&format=json -> 200
+  ```
+
+- 飞牛 Docker 项目 `woc-automation-test` 已验证当前运行容器：
+
+  ```text
+  woc-panel-automation-test
+  image: ghcr.io/andychakwang/woc-panel:andy-automation-usable-r86-2026-07-06
+  env: WOC_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r86-2026-07-06
+  ```
 
 ## 2026-07-06 R84 镜像发布
 
@@ -488,13 +522,23 @@ PANEL_ADMIN_PASSWORD='替换成强密码' \
 - 读取当前测试容器配置，不读取生产容器。
 - 备份 `woc-automation-test` 项目目录下的 compose 文件。
 - 拉取目标 panel / wechat 镜像。
-- 重建 `woc-panel-automation-test`，保留原数据目录、端口、账号和环境变量。
+- 重建 `woc-panel-automation-test`，保留原数据目录、端口、账号和环境变量，并写入 `automation-test` 运行画像。
 - 成功后删除旧备份容器；失败时回滚旧容器。
+
+helper 默认按 `WOC_VERSION` 生成目标 panel / wechat 镜像。不要让运行中旧容器的 `WOC_PANEL_IMAGE` / `WOC_WECHAT_IMAGE` 覆盖升级目标；需要手工指定目标镜像时使用：
+
+```bash
+WOC_TARGET_PANEL_IMAGE=ghcr.io/andychakwang/woc-panel:andy-automation-usable-r86-2026-07-06
+WOC_TARGET_WECHAT_IMAGE=ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r86-2026-07-06
+```
 
 推荐用提交哈希固定脚本来源：
 
 ```bash
 WOC_VERSION=andy-automation-usable-r86-2026-07-06 \
+WOC_DEPLOYMENT_PROFILE=automation-test \
+WOC_PUBLIC_URL=http://nasbot.cloud:36081 \
+WOC_TEST_HTTP_PORT=36081 \
 WOC_ALLOWED_HOSTS=nasbot.cloud \
 node /tmp/fnos-docker-socket-upgrade-container.mjs
 ```

@@ -9,8 +9,14 @@ const SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const TARGET = process.env.WOC_TARGET_CONTAINER || 'woc-panel-automation-test';
 const IMAGE_PREFIX = process.env.WOC_IMAGE_PREFIX || 'ghcr.io/andychakwang';
 const VERSION = process.env.WOC_VERSION || 'andy-automation-usable-r86-2026-07-06';
-const PANEL_IMAGE = process.env.WOC_PANEL_IMAGE || `${IMAGE_PREFIX}/woc-panel:${VERSION}`;
-const WECHAT_IMAGE = process.env.WOC_WECHAT_IMAGE || `${IMAGE_PREFIX}/wechat-on-cloud:${VERSION}`;
+// Running containers already carry WOC_PANEL_IMAGE/WOC_WECHAT_IMAGE for the
+// current version. Use target-specific override names so upgrades do not
+// accidentally preserve stale runtime image tags.
+const PANEL_IMAGE = process.env.WOC_TARGET_PANEL_IMAGE || `${IMAGE_PREFIX}/woc-panel:${VERSION}`;
+const WECHAT_IMAGE = process.env.WOC_TARGET_WECHAT_IMAGE || `${IMAGE_PREFIX}/wechat-on-cloud:${VERSION}`;
+const DEPLOYMENT_PROFILE = process.env.WOC_DEPLOYMENT_PROFILE || 'automation-test';
+const PUBLIC_URL = process.env.WOC_PUBLIC_URL || 'http://nasbot.cloud:36081';
+const TEST_HTTP_PORT = process.env.WOC_TEST_HTTP_PORT || '36081';
 const HELPER_MODE = process.env.WOC_HELPER_MODE === '1';
 const PROJECT_DIR = process.env.WOC_PROJECT_DIR || '';
 const ALLOWED_HOSTS = process.env.WOC_ALLOWED_HOSTS || '';
@@ -166,6 +172,11 @@ function writeComposeBackup(projectDir) {
 
 function updateContainerEnv(env = []) {
   const map = envMap(env);
+  map.set('WOC_DEPLOYMENT_PROFILE', DEPLOYMENT_PROFILE);
+  map.set('WOC_PUBLIC_URL', PUBLIC_URL);
+  map.set('WOC_TEST_HTTP_PORT', TEST_HTTP_PORT);
+  map.set('WOC_PANEL_CONTAINER', TARGET);
+  map.set('WOC_PANEL_IMAGE', PANEL_IMAGE);
   map.set('WOC_VERSION', VERSION);
   map.set('WOC_WECHAT_IMAGE', WECHAT_IMAGE);
   if (ALLOWED_HOSTS) map.set('PANEL_ALLOWED_HOSTS', ALLOWED_HOSTS);
@@ -260,8 +271,13 @@ async function createHelper(inspect, projectDir) {
     `WOC_TARGET_CONTAINER=${TARGET}`,
     `WOC_VERSION=${VERSION}`,
     `WOC_IMAGE_PREFIX=${IMAGE_PREFIX}`,
+    `WOC_TARGET_PANEL_IMAGE=${PANEL_IMAGE}`,
+    `WOC_TARGET_WECHAT_IMAGE=${WECHAT_IMAGE}`,
     `WOC_PANEL_IMAGE=${PANEL_IMAGE}`,
     `WOC_WECHAT_IMAGE=${WECHAT_IMAGE}`,
+    `WOC_DEPLOYMENT_PROFILE=${DEPLOYMENT_PROFILE}`,
+    `WOC_PUBLIC_URL=${PUBLIC_URL}`,
+    `WOC_TEST_HTTP_PORT=${TEST_HTTP_PORT}`,
     `WOC_PROJECT_DIR=/project`,
     `WOC_ALLOWED_HOSTS=${ALLOWED_HOSTS}`,
     `WOC_UPDATER_SOURCE_B64=${Buffer.from(source, 'utf8').toString('base64')}`,
