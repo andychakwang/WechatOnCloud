@@ -24,6 +24,7 @@ import {
   type AutomationActionQueue,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
+  type InstanceAutomationTargetVerifyResult,
   type InstanceAutomationVisualSnapshot,
   type MassSendJob,
   type MomentDraft,
@@ -305,6 +306,14 @@ function visualCapabilityLabel(snapshot: InstanceAutomationVisualSnapshot): stri
   ]
     .filter(Boolean)
     .join(' · ') || '无可用感知能力';
+}
+
+function targetMatchSourceLabel(source: string): string {
+  if (source === 'activeWindow') return '活动窗口';
+  if (source === 'focusedWindow') return '焦点窗口';
+  if (source === 'visibleWindow') return '可见窗口';
+  if (source === 'ocrText') return 'OCR';
+  return source || '未知';
 }
 
 function bridgeRunHealthTag(summary: WecomBridgeRunReportsSummary): string {
@@ -660,6 +669,8 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [err, setErr] = useState('');
   const [selfTest, setSelfTest] = useState<InstanceAutomationSelfTest | null>(null);
   const [visualSnapshot, setVisualSnapshot] = useState<InstanceAutomationVisualSnapshot | null>(null);
+  const [targetVerifyName, setTargetVerifyName] = useState('');
+  const [targetVerifyResult, setTargetVerifyResult] = useState<InstanceAutomationTargetVerifyResult | null>(null);
 
   const [replyInbound, setReplyInbound] = useState('');
   const [replyContext, setReplyContext] = useState('');
@@ -784,6 +795,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   useEffect(() => {
     setSelfTest(null);
     setVisualSnapshot(null);
+    setTargetVerifyResult(null);
   }, [selectedInstanceId]);
 
   const cfg = config ?? defaultAutomationConfig();
@@ -1411,12 +1423,31 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
     setBusy(includeOcr ? 'visual-ocr' : includeScreenshot ? 'visual-screenshot' : 'visual-inspect');
     setVisualSnapshot(null);
+    setTargetVerifyResult(null);
     try {
       const { snapshot } = await api.automationInspect(selectedInstance.id, { includeScreenshot, includeOcr });
       setVisualSnapshot(snapshot);
       toast(snapshot.ok ? '已读取实例感知快照' : '实例感知快照未就绪', snapshot.ok ? 'ok' : 'error');
     } catch (e: any) {
       toast(e.message || '读取视觉快照失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const verifyInstanceTarget = async () => {
+    const expectedName = targetVerifyName.trim();
+    if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
+    if (!expectedName) return toast('请输入要校验的联系人或群名', 'error');
+    setBusy('target-verify');
+    setTargetVerifyResult(null);
+    try {
+      const result = await api.automationVerifyTarget(selectedInstance.id, { expectedName, includeScreenshot: true });
+      setTargetVerifyResult(result);
+      setVisualSnapshot(result.snapshot);
+      toast(result.verification.verified ? '目标会话校验通过' : '目标会话未确认', result.verification.verified ? 'ok' : 'error');
+    } catch (e: any) {
+      toast(e.message || '目标校验失败', 'error');
     } finally {
       setBusy('');
     }
@@ -1829,6 +1860,18 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <span className="field-label">结束</span>
             <input className="input" type="time" value={cfg.settings.quietHoursEnd} onChange={(e) => setSetting({ quietHoursEnd: e.target.value })} />
           </label>
+          <label className="auto-field compact">
+            <span className="field-label">目标会话</span>
+            <input
+              className="input"
+              placeholder="联系人或群名"
+              value={targetVerifyName}
+              onChange={(e) => setTargetVerifyName(e.target.value)}
+            />
+          </label>
+          <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'target-verify' || !targetVerifyName.trim()} onClick={verifyInstanceTarget}>
+            校验目标
+          </button>
         </div>
         {health && (
           <div className={'auto-health auto-health-' + health.level}>
@@ -2082,6 +2125,35 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </span>
               ))}
             </div>
+          </div>
+        )}
+        {targetVerifyResult && (
+          <div className={'auto-target-verify ' + (targetVerifyResult.verification.verified ? 'ok' : 'bad')}>
+            <div className="auto-visual-head">
+              <div>
+                <b>{targetVerifyResult.verification.verified ? '目标会话校验通过' : '目标会话未确认'}</b>
+                <div className="muted small">{targetVerifyResult.verification.visualSummary}</div>
+              </div>
+              <span className={'tag ' + (targetVerifyResult.verification.verified ? 'tag-on' : 'tag-off')}>
+                {targetVerifyResult.verification.confidence ?? 0}
+              </span>
+            </div>
+            <div className="chip-row">
+              <span className="chip chip-static">目标 {targetVerifyResult.verification.expectedName}</span>
+              {targetVerifyResult.verification.matchedName && <span className="chip chip-static">命中 {targetVerifyResult.verification.matchedName}</span>}
+              {targetVerifyResult.verification.activeApp && <span className="chip chip-static">{targetVerifyResult.verification.activeApp}</span>}
+              {targetVerifyResult.verification.inputReady && <span className="chip chip-static">输入区线索</span>}
+              {targetVerifyResult.verification.error && <span className="chip chip-static chip-bad">{targetVerifyResult.verification.error}</span>}
+            </div>
+            {targetVerifyResult.matches.length > 0 && (
+              <div className="auto-visual-windows">
+                {targetVerifyResult.matches.slice(0, 6).map((match, index) => (
+                  <span key={`${match.source}-${match.name}-${index}`} className="chip chip-static" title={match.value}>
+                    {targetMatchSourceLabel(match.source)} · {match.name} · {match.score}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {visualSnapshot && (

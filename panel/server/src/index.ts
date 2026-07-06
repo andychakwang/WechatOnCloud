@@ -59,6 +59,7 @@ import {
   openConversationInInstance,
   automationSelfTestInInstance,
   inspectAutomationInInstance,
+  verifyAutomationTargetInInstance,
   listOrphanVolumes,
   removeVolume,
   listOrphanContainers,
@@ -1255,6 +1256,24 @@ app.post('/api/admin/instances/:id/automation/inspect', async (req, reply) => {
     return { snapshot };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '读取实例视觉快照失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/verify-target', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const id = (req.params as any).id;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const result = await verifyAutomationTargetInInstance(inst, req.body as any);
+    appendPanelLog(
+      result.verification.verified ? 'INFO' : 'WARN',
+      `实例「${inst.name}」目标会话校验 by ${admin.username}：${result.verification.expectedName}，置信度=${result.verification.confidence}，${result.verification.verified ? '通过' : '未通过'}`,
+    );
+    return result;
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '目标会话校验失败' });
   }
 });
 

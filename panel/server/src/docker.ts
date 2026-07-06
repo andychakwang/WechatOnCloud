@@ -882,6 +882,28 @@ export interface InstanceAutomationVisualSnapshot {
   summary: string;
 }
 
+export interface InstanceAutomationTargetVerification {
+  required: boolean;
+  verified: boolean;
+  expectedName: string;
+  matchedName?: string;
+  conversationMatched: boolean;
+  inputReady?: boolean;
+  activeApp?: string;
+  windowTitle?: string;
+  ocrText?: string;
+  visualSummary: string;
+  confidence: number;
+  error?: string;
+  checkedAt: string;
+}
+
+export interface InstanceAutomationTargetVerifyResult {
+  verification: InstanceAutomationTargetVerification;
+  snapshot: InstanceAutomationVisualSnapshot;
+  matches: { source: string; name: string; value: string; score: number }[];
+}
+
 export async function automationSelfTestInInstance(inst: Instance): Promise<InstanceAutomationSelfTest> {
   const marker = `woc-selftest-${Date.now()}`;
   const b64 = Buffer.from(marker, 'utf8').toString('base64');
@@ -946,6 +968,55 @@ export async function inspectAutomationInInstance(
   ].join('; ');
   const out = await execCapture(inst, ['bash', '-c', cmd]);
   return parseAutomationVisualSnapshot(out);
+}
+
+export async function verifyAutomationTargetInInstance(
+  inst: Instance,
+  options: { expectedName?: unknown; aliases?: unknown; includeScreenshot?: boolean } = {},
+): Promise<InstanceAutomationTargetVerifyResult> {
+  const expectedName = String(options.expectedName || '').trim().slice(0, 160);
+  if (!expectedName) throw new Error('目标会话名不能为空');
+  const aliases = Array.isArray(options.aliases)
+    ? options.aliases.map((item) => String(item || '').trim())
+    : String(options.aliases || '')
+        .split(/[\n,，、|]/)
+        .map((item) => item.trim());
+  const targetNames = uniqueStrings([expectedName, ...aliases]).slice(0, 20);
+  const snapshot = await inspectAutomationInInstance(inst, {
+    includeScreenshot: !!options.includeScreenshot,
+    includeOcr: true,
+  });
+  const matches = findTargetMatches(snapshot, targetNames);
+  const windowTitle = snapshot.activeWindow?.name || snapshot.focusedWindow?.name || '';
+  const app = inferActiveApp([windowTitle, snapshot.focusedWindow?.name || '', ...snapshot.visibleWindows.map((window) => window.name)]);
+  const inputReady = inferInputReady(snapshot.ocr?.text || '');
+  const matchedName = matches[0]?.name;
+  const baseScore = matches.reduce((score, match) => Math.max(score, match.score), 0);
+  const confidence = Math.min(100, baseScore + (matchedName && inputReady ? 10 : 0) + (matchedName && app ? 5 : 0));
+  const verified = confidence >= 65;
+  const visualSummary = verified
+    ? `目标校验通过：${matchedName || expectedName} 命中 ${matches[0]?.source || 'unknown'}，置信度 ${confidence}。`
+    : matches.length > 0
+      ? `目标有弱命中：${matchedName || expectedName} 命中 ${matches[0]?.source || 'unknown'}，置信度 ${confidence}，建议人工确认。`
+      : `目标校验未命中：窗口标题和 OCR 中未发现「${expectedName}」。`;
+  const verification: InstanceAutomationTargetVerification = {
+    required: true,
+    verified,
+    expectedName,
+    matchedName,
+    conversationMatched: matches.length > 0,
+    inputReady,
+    activeApp: app,
+    windowTitle,
+    ocrText: snapshot.ocr?.text,
+    visualSummary,
+    confidence,
+    checkedAt: snapshot.capturedAt,
+  };
+  if (!snapshot.ok) verification.error = '实例窗口状态不可用';
+  else if (!snapshot.capabilities.ocr) verification.error = '实例 OCR 不可用';
+  else if (!matches.length) verification.error = '未命中目标会话';
+  return { verification, snapshot, matches };
 }
 
 function parseAutomationVisualSnapshot(out: string): InstanceAutomationVisualSnapshot {
@@ -1081,6 +1152,57 @@ function dedupeWindows(windows: InstanceAutomationWindowSnapshot[]): InstanceAut
     result.push(window);
   }
   return result.slice(0, 12);
+}
+
+function findTargetMatches(
+  snapshot: InstanceAutomationVisualSnapshot,
+  names: string[],
+): { source: string; name: string; value: string; score: number }[] {
+  const candidates = [
+    { source: 'activeWindow', value: snapshot.activeWindow?.name || '', score: 70 },
+    { source: 'focusedWindow', value: snapshot.focusedWindow?.name || '', score: 65 },
+    ...snapshot.visibleWindows.map((window) => ({ source: 'visibleWindow', value: window.name || '', score: 45 })),
+    { source: 'ocrText', value: snapshot.ocr?.text || '', score: 55 },
+  ];
+  const matches: { source: string; name: string; value: string; score: number }[] = [];
+  for (const candidate of candidates) {
+    const normalizedValue = normalizeVisualMatchText(candidate.value);
+    if (!normalizedValue) continue;
+    for (const name of names) {
+      const normalizedName = normalizeVisualMatchText(name);
+      if (!normalizedName || normalizedName.length < 2) continue;
+      if (normalizedValue.includes(normalizedName)) {
+        matches.push({
+          source: candidate.source,
+          name,
+          value: candidate.value.slice(0, 500),
+          score: candidate.score,
+        });
+      }
+    }
+  }
+  return matches.sort((a, b) => b.score - a.score || a.name.length - b.name.length).slice(0, 12);
+}
+
+function normalizeVisualMatchText(value: string): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function inferActiveApp(values: string[]): string | undefined {
+  const text = values.join('\n');
+  if (/企业微信|wecom/i.test(text)) return '企业微信';
+  if (/微信|wechat/i.test(text)) return '微信';
+  return undefined;
+}
+
+function inferInputReady(ocrText: string): boolean | undefined {
+  const text = normalizeVisualMatchText(ocrText);
+  if (!text) return undefined;
+  if (/发送|输入|消息|enter|send|message/.test(text)) return true;
+  return undefined;
 }
 
 function uniqueStrings(values: string[]): string[] {

@@ -1040,6 +1040,12 @@ export interface InstanceAutomationVisualSnapshot {
   summary: string;
 }
 
+export interface InstanceAutomationTargetVerifyResult {
+  verification: WecomBridgeTargetVerification;
+  snapshot: InstanceAutomationVisualSnapshot;
+  matches: { source: string; name: string; value: string; score: number }[];
+}
+
 export interface MomentDraft {
   id: string;
   title: string;
@@ -1434,6 +1440,11 @@ export const api = {
     req<{ result: InstanceAutomationSelfTest }>(`/api/admin/instances/${id}/automation/self-test`, { method: 'POST' }),
   automationInspect: (id: string, payload: { includeScreenshot?: boolean; includeOcr?: boolean }) =>
     req<{ snapshot: InstanceAutomationVisualSnapshot }>(`/api/admin/instances/${id}/automation/inspect`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  automationVerifyTarget: (id: string, payload: { expectedName: string; aliases?: string[]; includeScreenshot?: boolean }) =>
+    req<InstanceAutomationTargetVerifyResult>(`/api/admin/instances/${id}/automation/verify-target`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
