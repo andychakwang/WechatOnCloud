@@ -166,6 +166,7 @@ function writeComposeBackup(projectDir) {
 
 function updateContainerEnv(env = []) {
   const map = envMap(env);
+  map.set('WOC_VERSION', VERSION);
   map.set('WOC_WECHAT_IMAGE', WECHAT_IMAGE);
   if (ALLOWED_HOSTS) map.set('PANEL_ALLOWED_HOSTS', ALLOWED_HOSTS);
   return envArray(map);
