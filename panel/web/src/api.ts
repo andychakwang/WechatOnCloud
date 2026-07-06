@@ -1419,6 +1419,11 @@ export const api = {
       '/api/admin/automation/moment-drafts/ai-draft',
       { method: 'POST', body: JSON.stringify(payload) },
     ),
+  automationMassAiDraft: (payload: { topic: string; audience?: string; tone?: string; extraInstruction?: string }) =>
+    req<{ draft: string; risk: { level: 'normal' | 'review' | 'block'; reasons: string[] }; model: string; knowledgeRefs: AutomationKnowledgeReference[] }>(
+      '/api/admin/automation/mass-jobs/ai-draft',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
   listMassSendJobs: (limit = 100) =>
     req<{ jobs: MassSendJob[] }>(`/api/admin/automation/mass-jobs?limit=${encodeURIComponent(limit)}`),
   createMassSendJob: (payload: {

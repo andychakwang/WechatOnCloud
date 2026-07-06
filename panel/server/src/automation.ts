@@ -5496,6 +5496,88 @@ export interface DraftMomentResult {
   knowledgeRefs: AutomationKnowledgeReference[];
 }
 
+export interface DraftMassSendRequest {
+  topic: string;
+  audience?: string;
+  tone?: string;
+  extraInstruction?: string;
+}
+
+export interface DraftMassSendResult {
+  draft: string;
+  risk: RiskAssessment;
+  model: string;
+  knowledgeRefs: AutomationKnowledgeReference[];
+}
+
+export async function draftMassSendContent(req: DraftMassSendRequest): Promise<DraftMassSendResult> {
+  const topic = String(req.topic || '').trim();
+  if (!topic) throw new Error('群发主题不能为空');
+  if (topic.length > 1000) throw new Error('群发主题过长');
+  if (!data.settings.aiDraftEnabled) throw new Error('AI 草稿开关未开启');
+
+  const apiKey = process.env.AUTOMATION_AI_API_KEY || process.env.OPENAI_API_KEY || '';
+  if (!apiKey) throw new Error('未配置 AUTOMATION_AI_API_KEY 或 OPENAI_API_KEY');
+  const baseUrl = stripTrailingSlash(process.env.AUTOMATION_AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
+  const model = process.env.AUTOMATION_AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const matchedKnowledgeItems = selectKnowledgeForAi(
+    [topic, String(req.audience || ''), String(req.tone || ''), String(req.extraInstruction || '')],
+    8,
+  );
+  const payload = {
+    model,
+    temperature: 0.45,
+    max_tokens: 520,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          '你是微信私域群发文案助手。生成一条适合受控群发队列的中文消息。',
+          '语气要自然、克制、像真人通知，不要像广告，不要夸大承诺，不要制造紧迫焦虑。',
+          '不要编造价格、政策、链接、优惠或活动细节；没有明确素材时只写可人工确认的表达。',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(
+          {
+            persona: data.persona,
+            knowledgeNotes: data.knowledgeNotes.slice(0, 6000),
+            matchedKnowledgeItems: formatKnowledgeForPrompt(matchedKnowledgeItems),
+            topic,
+            audience: String(req.audience || '').slice(0, 1000),
+            tone: String(req.tone || '').slice(0, 120) || '自然、克制、像一对一通知',
+            extraInstruction: String(req.extraInstruction || '').slice(0, 1000),
+            outputRules: ['只返回群发正文', '不要解释', '控制在 300 字以内', '不要使用夸张营销口号', '不要频繁使用表情'],
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const body: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error?.message || body?.message || `AI 接口请求失败 (${res.status})`);
+  const draft = String(body?.choices?.[0]?.message?.content || '').trim();
+  if (!draft) throw new Error('AI 没有返回群发文案');
+  const clipped = draft.slice(0, 800);
+  return {
+    draft: clipped,
+    risk: assessRisk([topic, String(req.audience || ''), clipped]),
+    model,
+    knowledgeRefs: knowledgeReferencesFromItems(matchedKnowledgeItems),
+  };
+}
+
 export async function draftMomentContent(req: DraftMomentRequest): Promise<DraftMomentResult> {
   const topic = String(req.topic || '').trim();
   if (!topic) throw new Error('朋友圈主题不能为空');

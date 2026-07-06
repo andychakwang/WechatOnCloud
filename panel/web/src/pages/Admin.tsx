@@ -717,9 +717,13 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [ruleApprove, setRuleApprove] = useState(false);
 
   const [massTitle, setMassTitle] = useState('');
+  const [massAiTopic, setMassAiTopic] = useState('');
+  const [massAiTone, setMassAiTone] = useState('自然、克制、像一对一通知');
+  const [massAiInstruction, setMassAiInstruction] = useState('');
   const [massRecipients, setMassRecipients] = useState('');
   const [massMessage, setMassMessage] = useState('');
   const [massScheduledAt, setMassScheduledAt] = useState('');
+  const [massKnowledgeRefs, setMassKnowledgeRefs] = useState<AutomationKnowledgeReference[]>([]);
   const [massDelay, setMassDelay] = useState('10');
   const [massAutoOpen, setMassAutoOpen] = useState(true);
   const [massSearchShortcut, setMassSearchShortcut] = useState('ctrl+f');
@@ -1648,6 +1652,34 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const draftMassByAI = async () => {
+    const topic = massAiTopic.trim() || massTitle.trim();
+    if (!topic) return toast('请输入群发主题', 'error');
+    setBusy('mass-ai');
+    try {
+      const audienceParts = [
+        massRecipients.trim() ? `指定目标：${linesOf(massRecipients).slice(0, 30).join('、')}` : '',
+        massAudienceQuery.trim() ? `受众关键词：${massAudienceQuery.trim()}` : '',
+        massAudienceTag.trim() ? `受众标签：${massAudienceTag.trim()}` : '',
+        massAudienceType !== 'all' ? `受众类型：${AUDIENCE_TYPE_LABEL[massAudienceType] || massAudienceType}` : '',
+      ].filter(Boolean);
+      const { draft, knowledgeRefs } = await api.automationMassAiDraft({
+        topic,
+        audience: audienceParts.join('\n'),
+        tone: massAiTone,
+        extraInstruction: massAiInstruction,
+      });
+      setMassMessage(draft);
+      setMassKnowledgeRefs(knowledgeRefs || []);
+      if (!massTitle.trim()) setMassTitle(topic.slice(0, 28) || 'AI 群发队列');
+      toast('已生成群发文案', 'ok');
+    } catch (e: any) {
+      toast(e.message || '生成失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const createMassJob = async () => {
     const recipients = linesOf(massRecipients);
     setBusy('mass-create');
@@ -1668,9 +1700,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       });
       setJobs((list) => [job, ...list]);
       setMassTitle('');
+      setMassAiTopic('');
+      setMassAiInstruction('');
       setMassRecipients('');
       setMassMessage('');
       setMassScheduledAt('');
+      setMassKnowledgeRefs([]);
       toast('群发队列已创建，审核后可逐条发送', 'ok');
       await loadAutomation();
     } catch (e: any) {
@@ -1706,8 +1741,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       });
       setJobs((list) => [job, ...list]);
       setMassTitle('');
+      setMassAiTopic('');
+      setMassAiInstruction('');
       setMassMessage('');
       setMassScheduledAt('');
+      setMassKnowledgeRefs([]);
       toast(`已从受众创建 ${selection.selected} 个目标的群发队列`, 'ok');
       await loadAutomation();
     } catch (e: any) {
@@ -3590,12 +3628,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               <span className="tag">{jobs.length} 个队列</span>
             </div>
             <input className="input" placeholder="队列名称" value={massTitle} onChange={(e) => setMassTitle(e.target.value)} />
-            <textarea className="input textarea tall" placeholder="群发内容" value={massMessage} onChange={(e) => setMassMessage(e.target.value)} />
+            <input className="input" placeholder="AI 群发主题，例如：资料领取提醒 / 活动通知 / 老客户回访" value={massAiTopic} onChange={(e) => setMassAiTopic(e.target.value)} />
+            <div className="auto-grid two compact">
+              <input className="input" placeholder="群发语气" value={massAiTone} onChange={(e) => setMassAiTone(e.target.value)} />
+              <input className="input" placeholder="额外要求，可选" value={massAiInstruction} onChange={(e) => setMassAiInstruction(e.target.value)} />
+            </div>
             <textarea className="input textarea" placeholder="联系人或群聊名，一行一个" value={massRecipients} onChange={(e) => setMassRecipients(e.target.value)} />
-            <label className="auto-field">
-              <span className="field-label">计划开始时间</span>
-              <input className="input" type="datetime-local" value={massScheduledAt} onChange={(e) => setMassScheduledAt(e.target.value)} />
-            </label>
             <div className="auto-grid two compact">
               <input className="input" placeholder="受众关键词" value={massAudienceQuery} onChange={(e) => setMassAudienceQuery(e.target.value)} />
               <input className="input" placeholder="受众标签" value={massAudienceTag} onChange={(e) => setMassAudienceTag(e.target.value)} />
@@ -3608,6 +3646,15 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
               </select>
               <input className="input" inputMode="numeric" placeholder="最多目标数" value={massAudienceLimit} onChange={(e) => setMassAudienceLimit(e.target.value.replace(/[^0-9]/g, ''))} />
             </div>
+            <button className="btn s-btn" disabled={busy === 'mass-ai' || (!massAiTopic.trim() && !massTitle.trim())} onClick={draftMassByAI}>
+              AI 生成群发文案
+            </button>
+            <KnowledgeRefs refs={massKnowledgeRefs} />
+            <textarea className="input textarea tall" placeholder="群发内容" value={massMessage} onChange={(e) => setMassMessage(e.target.value)} />
+            <label className="auto-field">
+              <span className="field-label">计划开始时间</span>
+              <input className="input" type="datetime-local" value={massScheduledAt} onChange={(e) => setMassScheduledAt(e.target.value)} />
+            </label>
             <button className="btn s-btn" disabled={busy === 'mass-audience-create' || !massMessage.trim()} onClick={createMassJobFromAudience}>
               从受众创建队列
             </button>

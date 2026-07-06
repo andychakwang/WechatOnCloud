@@ -142,6 +142,7 @@ import {
   patchMomentDraft,
   planAutomationReply,
   draftAutomationReply,
+  draftMassSendContent,
   draftMomentContent,
   sendAutomationRule,
   sendAutomationText,
@@ -1148,6 +1149,15 @@ app.post('/api/admin/automation/moment-drafts/ai-draft', async (req, reply) => {
     return await draftMomentContent(req.body as any);
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '生成朋友圈文案失败' });
+  }
+});
+
+app.post('/api/admin/automation/mass-jobs/ai-draft', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  try {
+    return await draftMassSendContent(req.body as any);
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '生成群发文案失败' });
   }
 });
 
