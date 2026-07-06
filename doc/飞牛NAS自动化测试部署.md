@@ -13,6 +13,29 @@
 - 实例镜像：`ghcr.io/andychakwang/wechat-on-cloud:andy-automation-usable-r81-2026-07-06`
 - 本版新增：Web「Mac Runner 接入」增加企微 CLI 接入探测，配置模板写入 `WECOM_CLI_EXECUTABLE`，面板可复制 `@wecom/cli` 安装、初始化和授权检查命令，`doctor` 会检查 CLI 安装与授权状态。
 
+## 2026-07-06 R81 更新验收
+
+- GitHub Actions release run `28759156165` 已成功构建并推送 panel / wechat 双镜像。
+- `36080` 原版面板保持不变，公网入口仍返回 `200`。
+- `36081` 自动化测试面板已通过飞牛 Docker socket helper 更新，公网入口返回 `200`。
+- 飞牛 Docker 容器详情已验证 `woc-panel-automation-test` 使用镜像：
+
+  ```text
+  ghcr.io/andychakwang/woc-panel:andy-automation-usable-r81-2026-07-06
+  ```
+
+- 一次性 helper 容器 `woc-updater-...` 已在更新完成后删除。
+- 本版新增企微 CLI 接入探测：Mac Runner 配置模板包含 `WECOM_CLI_EXECUTABLE`，Web 面板提供安装、初始化、授权检查和跳过 CLI 体检命令；`doctor` 可检查 `@wecom/cli` 安装与授权状态。
+- 本次公网入口检查：
+
+  ```text
+  http://nasbot.cloud:36080/ -> 200
+  http://nasbot.cloud:36081/ -> 200
+  http://nasbot.cloud:36081/api/auth/me -> 401 {"error":"未登录"}
+  ```
+
+  其中 `/api/auth/me` 返回 401 属于未登录预期响应，说明后端 API 正常响应。
+
 ## 2026-07-06 R80 更新验收
 
 - GitHub Actions release run `28758586946` 已成功构建并推送 panel / wechat 双镜像。
