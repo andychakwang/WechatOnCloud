@@ -119,6 +119,10 @@ import {
   summarizeWecomBridgeRunReports,
   getWecomBridgeRunnerPolicy,
   updateWecomBridgeRunnerPolicy,
+  listWecomBridgeAccessTokens,
+  createWecomBridgeAccessToken,
+  revokeWecomBridgeAccessToken,
+  verifyWecomBridgeAccessToken,
   recoverAutomationBridgeOutbox,
   listApprovedWecomBridgeReplies,
   listApprovedWecomBridgeMassTasks,
@@ -285,7 +289,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
   const launchAgentLogPath = `~/Library/Logs/${launchAgentLabel}.log`;
   const launchAgentErrorLogPath = `~/Library/Logs/${launchAgentLabel}.err.log`;
   const wecomCliExecutable = 'wecom-cli';
-  const tokenPlaceholder = 'replace-with-bridge-token-from-nas-docker-env';
+  const tokenPlaceholder = 'replace-with-runner-token-from-web-panel-or-nas-env';
   const defaultWorkerId = 'mac-bridge-01';
   const envFile = [
     '# WechatOnCloud WeCom Bridge runner config',
@@ -354,7 +358,7 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
     '',
     'cd "$workspace_dir"',
     'echo "Wrote $config_file"',
-    'echo "Edit AUTOMATION_BRIDGE_TOKEN in $config_file, then run:"',
+    'echo "Edit AUTOMATION_BRIDGE_TOKEN in $config_file with a Web-managed Runner token or NAS env token, then run:"',
     'echo "  npm install -g @wecom/cli"',
     'echo "  wecom-cli init"',
     'echo "  scripts/wecom-bridge-runner.sh doctor"',
@@ -417,12 +421,20 @@ function automationBridgeRunnerGuide(req?: FastifyRequest) {
 }
 
 function automationBridgeStatus(req?: FastifyRequest) {
-  const configured = AUTOMATION_BRIDGE_TOKEN.length > 0;
-  const tokenLengthOk = AUTOMATION_BRIDGE_TOKEN.length >= AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH;
+  const accessTokens = listWecomBridgeAccessTokens();
+  const activeAccessTokens = accessTokens.filter((token) => token.active);
+  const envConfigured = AUTOMATION_BRIDGE_TOKEN.length > 0;
+  const envTokenLengthOk = AUTOMATION_BRIDGE_TOKEN.length >= AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH;
+  const configured = envConfigured || activeAccessTokens.length > 0;
+  const tokenLengthOk = envTokenLengthOk || activeAccessTokens.length > 0;
   return {
     enabled: configured && tokenLengthOk,
     configured,
     tokenLengthOk,
+    envConfigured,
+    envTokenLengthOk,
+    accessTokens,
+    activeAccessTokenCount: activeAccessTokens.length,
     tokenEnvName: 'AUTOMATION_BRIDGE_TOKEN',
     compatibilityEnvName: 'WECOM_BRIDGE_TOKEN',
     endpoint: AUTOMATION_BRIDGE_ENDPOINT,
@@ -466,7 +478,7 @@ function boolQuery(value: unknown): boolean {
 function requireAutomationBridge(req: FastifyRequest, reply: FastifyReply): boolean {
   const status = automationBridgeStatus();
   if (!status.configured) {
-    reply.code(404).send({ error: '自动化 Bridge 未启用' });
+    reply.code(404).send({ error: '自动化 Bridge 未启用，请先配置环境变量 token 或创建托管 Runner token' });
     return false;
   }
   if (!status.tokenLengthOk) {
@@ -478,7 +490,8 @@ function requireAutomationBridge(req: FastifyRequest, reply: FastifyReply): bool
     reply.code(401).send({ error: '缺少 Bridge token' });
     return false;
   }
-  if (!tokenEquals(token, AUTOMATION_BRIDGE_TOKEN)) {
+  const envOk = AUTOMATION_BRIDGE_TOKEN.length >= AUTOMATION_BRIDGE_TOKEN_MIN_LENGTH && tokenEquals(token, AUTOMATION_BRIDGE_TOKEN);
+  if (!envOk && !verifyWecomBridgeAccessToken(token)) {
     reply.code(403).send({ error: 'Bridge token 不正确' });
     return false;
   }
@@ -721,6 +734,35 @@ app.post('/api/admin/automation/wecom-assistant/import', async (req, reply) => {
 app.get('/api/admin/automation/bridge', async (req, reply) => {
   if (!requireAdmin(req, reply)) return;
   return { bridge: automationBridgeStatus(req) };
+});
+
+app.get('/api/admin/automation/bridge-tokens', async (req, reply) => {
+  if (!requireAdmin(req, reply)) return;
+  return { accessTokens: listWecomBridgeAccessTokens() };
+});
+
+app.post('/api/admin/automation/bridge-tokens', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = createWecomBridgeAccessToken(admin, req.body as any);
+    appendPanelLog('INFO', `创建 Bridge Runner token「${result.accessToken.name}」by ${admin.username}`);
+    return result;
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '创建 Bridge Runner token 失败' });
+  }
+});
+
+app.delete('/api/admin/automation/bridge-tokens/:tokenId', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const accessToken = revokeWecomBridgeAccessToken(admin, (req.params as any).tokenId);
+    appendPanelLog('INFO', `撤销 Bridge Runner token「${accessToken.name}」by ${admin.username}`);
+    return { accessToken };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '撤销 Bridge Runner token 失败' });
+  }
 });
 
 app.get('/api/admin/automation/bridge-events', async (req, reply) => {

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Instance, User } from './store.js';
 
 export type AutomationStep =
@@ -229,6 +229,39 @@ export interface WecomBridgeWorkerStatus extends WecomBridgeWorker {
   online: boolean;
   staleSeconds: number;
   offlineAfterSeconds: number;
+}
+
+export interface WecomBridgeAccessToken {
+  id: string;
+  name: string;
+  note?: string;
+  tokenHash: string;
+  tokenPrefix: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  revokedBy?: string;
+}
+
+export interface WecomBridgeAccessTokenPublic {
+  id: string;
+  name: string;
+  note?: string;
+  tokenPrefix: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  revokedBy?: string;
+  active: boolean;
+}
+
+export interface WecomBridgeAccessTokenCreateResult {
+  token: string;
+  accessToken: WecomBridgeAccessTokenPublic;
 }
 
 export type WecomBridgeRunTarget = 'replies' | 'mass' | 'moments' | 'all' | 'doctor' | 'unknown';
@@ -1112,6 +1145,7 @@ interface AutomationData extends AutomationConfig {
   materialAssets: AutomationMaterialAsset[];
   bridgeEvents: WecomBridgeEvent[];
   bridgeWorkers: WecomBridgeWorker[];
+  bridgeAccessTokens: WecomBridgeAccessToken[];
   bridgeRunReports: WecomBridgeRunReport[];
   rpaPackageIssues: WecomRpaPackageIssue[];
   runnerPolicy: WecomBridgeRunnerPolicy;
@@ -1127,6 +1161,7 @@ const MAX_AUDIENCE_CONTACTS = 2000;
 const MAX_MATERIAL_ASSETS = 1000;
 const MAX_BRIDGE_EVENTS = 500;
 const MAX_BRIDGE_WORKERS = 100;
+const MAX_BRIDGE_ACCESS_TOKENS = 100;
 const MAX_BRIDGE_RUN_REPORTS = 300;
 const MAX_BRIDGE_RUN_REPORT_ITEMS = 100;
 const MAX_RPA_PACKAGE_ISSUES = 300;
@@ -1193,6 +1228,7 @@ const DEFAULT_DATA: AutomationData = {
   materialAssets: [],
   bridgeEvents: [],
   bridgeWorkers: [],
+  bridgeAccessTokens: [],
   bridgeRunReports: [],
   rpaPackageIssues: [],
   runnerPolicy: DEFAULT_RUNNER_POLICY,
@@ -3399,6 +3435,70 @@ export function updateWecomBridgeRunnerPolicy(actor: User, raw: any): WecomBridg
     message: `更新 Mac Runner 策略：${data.runnerPolicy.runnerEngine}/${data.runnerPolicy.target}/${data.runnerPolicy.mode}，limit=${data.runnerPolicy.limit}`,
   });
   return cloneRunnerPolicy(data.runnerPolicy);
+}
+
+export function listWecomBridgeAccessTokens(): WecomBridgeAccessTokenPublic[] {
+  return data.bridgeAccessTokens
+    .map(publicBridgeAccessToken)
+    .sort((a, b) => sortableIsoMs(b.createdAt) - sortableIsoMs(a.createdAt));
+}
+
+export function createWecomBridgeAccessToken(actor: User, raw: any): WecomBridgeAccessTokenCreateResult {
+  const now = new Date().toISOString();
+  const token = `wocb_${randomBytes(32).toString('base64url')}`;
+  const item: WecomBridgeAccessToken = {
+    id: randomUUID(),
+    name: str(raw?.name ?? raw?.label ?? 'Mac Runner token', 80).trim() || 'Mac Runner token',
+    note: str(raw?.note ?? raw?.description ?? '', 300).trim() || undefined,
+    tokenHash: bridgeAccessTokenHash(token),
+    tokenPrefix: bridgeAccessTokenPrefix(token),
+    createdAt: now,
+    createdBy: actor.username,
+    updatedAt: now,
+  };
+  data.bridgeAccessTokens.push(item);
+  data.bridgeAccessTokens = data.bridgeAccessTokens.slice(-MAX_BRIDGE_ACCESS_TOKENS);
+  persist();
+  addAutomationAudit({
+    action: 'bridge_token_created',
+    actor: actor.username,
+    message: `创建 Bridge Runner token「${item.name}」（${item.tokenPrefix}）`,
+  });
+  return { token, accessToken: publicBridgeAccessToken(item) };
+}
+
+export function revokeWecomBridgeAccessToken(actor: User, tokenId: string): WecomBridgeAccessTokenPublic {
+  const id = str(tokenId, 120).trim();
+  const item = data.bridgeAccessTokens.find((token) => token.id === id);
+  if (!item) throw new Error('Bridge token 不存在');
+  if (!item.revokedAt) {
+    const now = new Date().toISOString();
+    item.revokedAt = now;
+    item.revokedBy = actor.username;
+    item.updatedAt = now;
+    persist();
+    addAutomationAudit({
+      action: 'bridge_token_revoked',
+      actor: actor.username,
+      message: `撤销 Bridge Runner token「${item.name}」（${item.tokenPrefix}）`,
+    });
+  }
+  return publicBridgeAccessToken(item);
+}
+
+export function verifyWecomBridgeAccessToken(token: string): WecomBridgeAccessTokenPublic | null {
+  const raw = String(token || '').trim();
+  if (!raw) return null;
+  const hash = bridgeAccessTokenHash(raw);
+  const item = data.bridgeAccessTokens.find((candidate) => !candidate.revokedAt && candidate.tokenHash === hash);
+  if (!item) return null;
+  const now = new Date().toISOString();
+  if (!item.lastUsedAt || Date.parse(now) - Date.parse(item.lastUsedAt) > 60_000) {
+    item.lastUsedAt = now;
+    item.updatedAt = now;
+    persist();
+  }
+  return publicBridgeAccessToken(item);
 }
 
 export function recordWecomBridgeHeartbeat(actor: User, raw: any): WecomBridgeWorkerStatus {
@@ -6067,6 +6167,7 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
   const materialRaw = Array.isArray(raw?.materialAssets) ? raw.materialAssets : [];
   const bridgeEventsRaw = Array.isArray(raw?.bridgeEvents) ? raw.bridgeEvents : [];
   const bridgeWorkersRaw = Array.isArray(raw?.bridgeWorkers) ? raw.bridgeWorkers : [];
+  const bridgeAccessTokensRaw = Array.isArray(raw?.bridgeAccessTokens) ? raw.bridgeAccessTokens : [];
   const bridgeRunReportsRaw = Array.isArray(raw?.bridgeRunReports) ? raw.bridgeRunReports : [];
   const rpaPackageIssuesRaw = Array.isArray(raw?.rpaPackageIssues) ? raw.rpaPackageIssues : [];
   const massJobsRaw = Array.isArray(raw?.massSendJobs) ? raw.massSendJobs : [];
@@ -6081,6 +6182,10 @@ function normalizeData(raw: any, preserveIds: boolean): AutomationData {
     materialAssets: materialRaw.slice(-MAX_MATERIAL_ASSETS).map((asset: any) => normalizeMaterialAsset(asset, preserveIds, now)),
     bridgeEvents: bridgeEventsRaw.slice(-MAX_BRIDGE_EVENTS).map((event: any) => normalizeBridgeEvent(event, preserveIds, now)),
     bridgeWorkers: bridgeWorkersRaw.slice(-MAX_BRIDGE_WORKERS).map((worker: any) => normalizeBridgeWorker(worker, preserveIds, now)),
+    bridgeAccessTokens: bridgeAccessTokensRaw
+      .slice(-MAX_BRIDGE_ACCESS_TOKENS)
+      .map((token: any) => normalizeBridgeAccessToken(token, preserveIds, now))
+      .filter(Boolean) as WecomBridgeAccessToken[],
     bridgeRunReports: bridgeRunReportsRaw.slice(-MAX_BRIDGE_RUN_REPORTS).map((report: any) => normalizeBridgeRunReport(report, preserveIds, now)),
     rpaPackageIssues: compactRpaPackageIssues(
       rpaPackageIssuesRaw.slice(-MAX_RPA_PACKAGE_ISSUES).map((issue: any) => normalizeRpaPackageIssue(issue, preserveIds, now)),
@@ -6337,6 +6442,52 @@ function normalizeBridgeWorker(raw: any, preserveIds: boolean, now: string): Wec
     createdAt,
     updatedAt,
   };
+}
+
+function normalizeBridgeAccessToken(raw: any, preserveIds: boolean, now: string): WecomBridgeAccessToken | null {
+  const tokenHash = str(raw?.tokenHash ?? raw?.hash, 128).trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(tokenHash)) return null;
+  const createdAt = typeof raw?.createdAt === 'string' && raw.createdAt ? raw.createdAt : now;
+  const updatedAt = typeof raw?.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : createdAt;
+  return {
+    id: typeof raw?.id === 'string' && raw.id ? raw.id : randomUUID(),
+    name: str(raw?.name ?? raw?.label ?? 'Mac Runner token', 80).trim() || 'Mac Runner token',
+    note: str(raw?.note ?? raw?.description ?? '', 300).trim() || undefined,
+    tokenHash,
+    tokenPrefix: str(raw?.tokenPrefix ?? raw?.prefix ?? 'wocb_...', 32).trim() || 'wocb_...',
+    createdAt,
+    createdBy: str(raw?.createdBy ?? raw?.actor ?? 'system', 120).trim() || 'system',
+    updatedAt,
+    lastUsedAt: typeof raw?.lastUsedAt === 'string' && raw.lastUsedAt ? raw.lastUsedAt : undefined,
+    revokedAt: typeof raw?.revokedAt === 'string' && raw.revokedAt ? raw.revokedAt : undefined,
+    revokedBy: str(raw?.revokedBy ?? '', 120).trim() || undefined,
+  };
+}
+
+function publicBridgeAccessToken(item: WecomBridgeAccessToken): WecomBridgeAccessTokenPublic {
+  return {
+    id: item.id,
+    name: item.name,
+    note: item.note,
+    tokenPrefix: item.tokenPrefix,
+    createdAt: item.createdAt,
+    createdBy: item.createdBy,
+    updatedAt: item.updatedAt,
+    lastUsedAt: item.lastUsedAt,
+    revokedAt: item.revokedAt,
+    revokedBy: item.revokedBy,
+    active: !item.revokedAt,
+  };
+}
+
+function bridgeAccessTokenHash(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+function bridgeAccessTokenPrefix(token: string): string {
+  const raw = String(token || '').trim();
+  if (raw.length <= 14) return raw;
+  return `${raw.slice(0, 10)}...${raw.slice(-4)}`;
 }
 
 function normalizeBridgeWorkerMaterialMap(raw: any, now: string): WecomBridgeWorkerMaterialMapStatus | undefined {

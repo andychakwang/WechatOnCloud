@@ -1693,6 +1693,15 @@ button {
   font-size: 12px;
   line-height: 1.5;
 }
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .auto-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

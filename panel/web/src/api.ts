@@ -638,10 +638,28 @@ export interface AutomationBridgeRunnerGuide {
   };
 }
 
+export interface WecomBridgeAccessToken {
+  id: string;
+  name: string;
+  note?: string;
+  tokenPrefix: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  revokedBy?: string;
+  active: boolean;
+}
+
 export interface AutomationBridgeStatus {
   enabled: boolean;
   configured: boolean;
   tokenLengthOk: boolean;
+  envConfigured?: boolean;
+  envTokenLengthOk?: boolean;
+  accessTokens?: WecomBridgeAccessToken[];
+  activeAccessTokenCount?: number;
   tokenEnvName: string;
   compatibilityEnvName: string;
   endpoint: string;
@@ -1387,6 +1405,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(policy),
     }),
+  createWecomBridgeAccessToken: (payload: { name?: string; note?: string }) =>
+    req<{ token: string; accessToken: WecomBridgeAccessToken }>('/api/admin/automation/bridge-tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  revokeWecomBridgeAccessToken: (tokenId: string) =>
+    req<{ accessToken: WecomBridgeAccessToken }>(`/api/admin/automation/bridge-tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }),
   recoverAutomationBridgeOutbox: (payload: {
     dryRun?: boolean;
     releaseClaims?: BridgeRecoveryReleaseMode | boolean;

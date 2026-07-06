@@ -478,6 +478,51 @@ if [[ "$(json_get bridge.runnerGuide.envFile)" != *"WECOM_REQUIRE_HANDLER_VERIFI
   sed -n '1,120p' "$body_file" >&2
   exit 1
 fi
+
+say "Managed Bridge token"
+managed_token_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+print(json.dumps({"name": f"smoke-runner-{sys.argv[1]}", "note": "temporary smoke token"}, ensure_ascii=False))
+PY
+)"
+request_json POST /api/admin/automation/bridge-tokens "$managed_token_payload"
+json_assert_path token
+json_assert_path accessToken.id
+json_assert_path accessToken.tokenPrefix
+managed_bridge_token="$(json_get token)"
+managed_token_id="$(json_get accessToken.id)"
+request_json GET /api/admin/automation/bridge
+json_assert_path bridge.activeAccessTokenCount
+managed_heartbeat_payload="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+  "source": "smoke-managed-token",
+  "workerId": f"managed-token-{sys.argv[1]}",
+  "mode": "dry-run",
+  "capabilities": ["reply", "material-map"]
+}, ensure_ascii=False))
+PY
+)"
+AUTOMATION_BRIDGE_TOKEN="$managed_bridge_token" request_bridge_json POST /api/automation/bridge/wecom/heartbeat "$managed_heartbeat_payload"
+json_assert_path worker.workerId
+request_json DELETE "/api/admin/automation/bridge-tokens/$managed_token_id"
+json_assert_eq accessToken.active False
+revoked_status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+  -X POST \
+  -H 'content-type: application/json' \
+  -H "Authorization: Bearer $managed_bridge_token" \
+  --data "$managed_heartbeat_payload" \
+  "$PANEL_URL/api/automation/bridge/wecom/heartbeat")"
+if [[ "$revoked_status" != "403" && "$revoked_status" != "404" ]]; then
+  echo "ERROR: revoked managed Bridge token expected HTTP 403 or 404, got $revoked_status" >&2
+  sed -n '1,80p' "$body_file" >&2
+  exit 1
+fi
+
 if [[ -n "${AUTOMATION_BRIDGE_TOKEN:-}" ]] && grep -qF "$AUTOMATION_BRIDGE_TOKEN" "$body_file"; then
   echo "ERROR: Bridge runner guide leaked the real AUTOMATION_BRIDGE_TOKEN" >&2
   exit 1

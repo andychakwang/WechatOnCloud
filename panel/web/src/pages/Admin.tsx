@@ -829,6 +829,9 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [actionQueue, setActionQueue] = useState<AutomationActionQueue | null>(null);
   const [actionQueueFilter, setActionQueueFilter] = useState<AutomationActionQueueListTarget>('all');
   const [bridge, setBridge] = useState<AutomationBridgeStatus | null>(null);
+  const [bridgeTokenName, setBridgeTokenName] = useState('Mac Runner');
+  const [bridgeTokenNote, setBridgeTokenNote] = useState('');
+  const [newBridgeToken, setNewBridgeToken] = useState('');
   const [bridgeEvents, setBridgeEvents] = useState<WecomBridgeEvent[]>([]);
   const [bridgeRuns, setBridgeRuns] = useState<WecomBridgeRunReport[]>([]);
   const [bridgeRunSummary, setBridgeRunSummary] = useState<WecomBridgeRunReportsSummary | null>(null);
@@ -1176,6 +1179,43 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '保存 Runner 策略失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const createBridgeToken = async () => {
+    setBusy('bridge-token-create');
+    try {
+      const { token } = await api.createWecomBridgeAccessToken({
+        name: bridgeTokenName.trim() || 'Mac Runner',
+        note: bridgeTokenNote.trim(),
+      });
+      setNewBridgeToken(token);
+      setBridgeTokenNote('');
+      toast('Runner token 已创建，请立即复制保存', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '创建 Runner token 失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const revokeBridgeToken = async (tokenId: string, tokenName: string) => {
+    const ok = await confirm({
+      title: `撤销 Runner token「${tokenName}」？`,
+      body: '撤销后使用该 token 的 Mac Runner 会立即无法访问 Bridge。已经写入本机配置的明文不会自动删除。',
+      confirmText: '撤销',
+    });
+    if (!ok) return;
+    setBusy(`bridge-token-${tokenId}`);
+    try {
+      await api.revokeWecomBridgeAccessToken(tokenId);
+      toast('Runner token 已撤销', 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '撤销 Runner token 失败', 'error');
     } finally {
       setBusy('');
     }
@@ -2932,7 +2972,70 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 <div className="chip-row">
                   <span className={'chip chip-static ' + (bridge.configured ? '' : 'chip-bad')}>{bridge.tokenEnvName}</span>
                   <span className={'chip chip-static ' + (bridge.tokenLengthOk ? '' : 'chip-bad')}>token 长度</span>
+                  <span className={'chip chip-static ' + (bridge.envConfigured ? '' : 'chip-muted')}>环境变量</span>
+                  <span className={'chip chip-static ' + ((bridge.activeAccessTokenCount || 0) > 0 ? '' : 'chip-muted')}>
+                    托管 token {bridge.activeAccessTokenCount || 0}
+                  </span>
                   <span className="chip chip-static">Bearer / X-Automation-Token</span>
+                </div>
+                <div className="bridge-runner-guide">
+                  <div className="bridge-runner-head">
+                    <div>
+                      <b>Runner token</b>
+                      <div className="muted small">为每台 Mac Runner 单独创建 token；明文只在创建后显示一次，落盘只保存 hash。</div>
+                    </div>
+                    <button className="btn-text" disabled={busy === 'bridge-token-create'} onClick={createBridgeToken}>
+                      创建 token
+                    </button>
+                  </div>
+                  <div className="auto-grid two compact">
+                    <label>
+                      <span className="field-label">名称</span>
+                      <input className="input" value={bridgeTokenName} onChange={(e) => setBridgeTokenName(e.target.value)} />
+                    </label>
+                    <label>
+                      <span className="field-label">备注</span>
+                      <input className="input" placeholder="例如 办公室 Mac mini / 测试机" value={bridgeTokenNote} onChange={(e) => setBridgeTokenNote(e.target.value)} />
+                    </label>
+                  </div>
+                  {newBridgeToken && (
+                    <div className="auto-code-block">
+                      <div className="code-head">
+                        <span>新 token 只显示一次</span>
+                        <button className="btn-text" onClick={() => copyBridgeText(newBridgeToken, 'Runner token')}>
+                          复制
+                        </button>
+                      </div>
+                      <code>{newBridgeToken}</code>
+                    </div>
+                  )}
+                  {(bridge.accessTokens || []).length > 0 ? (
+                    <div className="auto-list">
+                      {(bridge.accessTokens || []).slice(0, 8).map((token) => (
+                        <div key={token.id} className="auto-list-item">
+                          <span>
+                            <b>{token.name}</b>
+                            <span className="muted small">
+                              {' '}
+                              {token.tokenPrefix} · {token.active ? '可用' : '已撤销'}
+                              {token.lastUsedAt ? ` · 最近使用 ${new Date(token.lastUsedAt).toLocaleString()}` : ''}
+                            </span>
+                          </span>
+                          {token.active ? (
+                            <button
+                              className="btn-text danger"
+                              disabled={busy === `bridge-token-${token.id}`}
+                              onClick={() => revokeBridgeToken(token.id, token.name)}
+                            >
+                              撤销
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="muted small">还没有托管 token；旧的环境变量 token 仍可继续使用。</div>
+                  )}
                 </div>
                 {runnerPolicy && (
                   <div className="bridge-runner-guide">
