@@ -841,6 +841,41 @@ export interface InstanceAutomationSelfTest {
   checks: { name: string; ok: boolean; detail: string }[];
 }
 
+export interface InstanceAutomationWindowSnapshot {
+  id: string;
+  name: string;
+  geometry: {
+    x: number | null;
+    y: number | null;
+    width: number | null;
+    height: number | null;
+    screen: number | null;
+  };
+}
+
+export interface InstanceAutomationVisualSnapshot {
+  ok: boolean;
+  capturedAt: string;
+  display: string;
+  activeWindow: InstanceAutomationWindowSnapshot | null;
+  focusedWindow: InstanceAutomationWindowSnapshot | null;
+  visibleWindows: InstanceAutomationWindowSnapshot[];
+  pointer: { x: number | null; y: number | null; screen: number | null; windowId: string };
+  capabilities: {
+    xdotool: boolean;
+    xclip: boolean;
+    screenshot: boolean;
+    ocr: boolean;
+  };
+  screenshot?: {
+    mime: 'image/png';
+    dataUrl: string;
+    bytes: number;
+  };
+  warnings: string[];
+  summary: string;
+}
+
 export async function automationSelfTestInInstance(inst: Instance): Promise<InstanceAutomationSelfTest> {
   const marker = `woc-selftest-${Date.now()}`;
   const b64 = Buffer.from(marker, 'utf8').toString('base64');
@@ -865,6 +900,161 @@ export async function automationSelfTestInInstance(inst: Instance): Promise<Inst
       return { name, ok: status === 'ok', detail: rest.join(':') };
     });
   return { ok: checks.length > 0 && checks.every((check) => check.ok), display, checks };
+}
+
+export async function inspectAutomationInInstance(
+  inst: Instance,
+  options: { includeScreenshot?: boolean } = {},
+): Promise<InstanceAutomationVisualSnapshot> {
+  const includeScreenshot = !!options.includeScreenshot;
+  const cmd = [
+    'set -e',
+    'display="${DISPLAY:-}"',
+    'if [ -z "$display" ]; then for x in /tmp/.X11-unix/X*; do [ -e "$x" ] || continue; display=":${x##*X}"; break; done; fi',
+    'export DISPLAY="${display:-:1}"',
+    'printf "DISPLAY\\t%s\\n" "$DISPLAY"',
+    'if command -v xdotool >/dev/null 2>&1; then echo "CAP\\txdotool\\t1"; else echo "CAP\\txdotool\\t0"; fi',
+    'if command -v xclip >/dev/null 2>&1; then echo "CAP\\txclip\\t1"; else echo "CAP\\txclip\\t0"; fi',
+    'if command -v tesseract >/dev/null 2>&1; then echo "CAP\\tocr\\t1"; else echo "CAP\\tocr\\t0"; fi',
+    'if command -v import >/dev/null 2>&1 || { command -v xwd >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; }; then echo "CAP\\tscreenshot\\t1"; else echo "CAP\\tscreenshot\\t0"; fi',
+    'sanitize(){ printf "%s" "$1" | tr "\\t\\r\\n" "   " | cut -c 1-180; }',
+    'emit_window(){ wid="$1"; role="$2"; [ -n "$wid" ] || return 0; name="$(xdotool getwindowname "$wid" 2>/dev/null || true)"; geom="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null | tr "\\n" ";" || true)"; printf "WINDOW\\t%s\\t%s\\t%s\\t%s\\n" "$role" "$wid" "$(sanitize "$name")" "$geom"; }',
+    'if command -v xdotool >/dev/null 2>&1; then active="$(xdotool getactivewindow 2>/dev/null || true)"; focus="$(xdotool getwindowfocus 2>/dev/null || true)"; emit_window "$active" active; emit_window "$focus" focus; xdotool getmouselocation --shell 2>/dev/null | tr "\\n" ";" | sed "s/^/POINTER\\t/"; wins="$(xdotool search --onlyvisible --name ".*" 2>/dev/null | tail -n 12 || true)"; for wid in $wins; do emit_window "$wid" visible; done; else echo "WARN\\txdotool unavailable"; fi',
+    includeScreenshot
+      ? [
+          'shot=/tmp/woc-automation-snapshot.png',
+          'rm -f "$shot"',
+          'if command -v import >/dev/null 2>&1; then import -window root png:"$shot" >/dev/null 2>&1 || true; elif command -v xwd >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then xwd -root -silent 2>/dev/null | convert xwd:- png:"$shot" >/dev/null 2>&1 || true; fi',
+          'if [ -s "$shot" ]; then size="$(wc -c < "$shot" | tr -d " ")"; if [ "$size" -le 700000 ]; then printf "SCREENSHOT\\timage/png\\t%s\\t" "$size"; base64 -w0 "$shot" 2>/dev/null || base64 "$shot" | tr -d "\\n"; printf "\\n"; else printf "WARN\\tscreenshot too large: %s bytes\\n" "$size"; fi; else echo "WARN\\tscreenshot unavailable"; fi',
+          'rm -f "$shot"',
+        ].join('; ')
+      : ':',
+  ].join('; ');
+  const out = await execCapture(inst, ['bash', '-c', cmd]);
+  return parseAutomationVisualSnapshot(out);
+}
+
+function parseAutomationVisualSnapshot(out: string): InstanceAutomationVisualSnapshot {
+  const capabilities = { xdotool: false, xclip: false, screenshot: false, ocr: false };
+  const warnings: string[] = [];
+  const visibleWindows: InstanceAutomationWindowSnapshot[] = [];
+  let display = '';
+  let activeWindow: InstanceAutomationWindowSnapshot | null = null;
+  let focusedWindow: InstanceAutomationWindowSnapshot | null = null;
+  let pointer = { x: null, y: null, screen: null, windowId: '' } as InstanceAutomationVisualSnapshot['pointer'];
+  let screenshot: InstanceAutomationVisualSnapshot['screenshot'];
+
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    const [kind, ...parts] = line.split('\t');
+    if (kind === 'DISPLAY') {
+      display = parts.join('\t').trim();
+      continue;
+    }
+    if (kind === 'CAP') {
+      const key = parts[0] as keyof typeof capabilities;
+      if (key in capabilities) capabilities[key] = parts[1] === '1';
+      continue;
+    }
+    if (kind === 'WARN') {
+      const message = parts.join('\t').trim();
+      if (message) warnings.push(message);
+      continue;
+    }
+    if (kind === 'POINTER') {
+      const parsed = parseShellPairs(parts.join('\t'));
+      pointer = {
+        x: nullableInt(parsed.X),
+        y: nullableInt(parsed.Y),
+        screen: nullableInt(parsed.SCREEN),
+        windowId: parsed.WINDOW || '',
+      };
+      continue;
+    }
+    if (kind === 'SCREENSHOT') {
+      const [mime, bytes, b64] = parts;
+      const n = Number.parseInt(bytes || '', 10);
+      if (mime === 'image/png' && Number.isFinite(n) && b64) {
+        screenshot = { mime, bytes: n, dataUrl: `data:image/png;base64,${b64}` };
+      }
+      continue;
+    }
+    if (kind === 'WINDOW') {
+      const [role, id = '', name = '', geometryText = ''] = parts;
+      const window = parseWindowSnapshot(id, name, geometryText);
+      if (role === 'active') activeWindow = window;
+      else if (role === 'focus') focusedWindow = window;
+      else if (role === 'visible') visibleWindows.push(window);
+    }
+  }
+
+  const dedupedVisible = dedupeWindows(visibleWindows);
+  const ok = capabilities.xdotool && !!(activeWindow || focusedWindow || dedupedVisible.length);
+  const title = activeWindow?.name || focusedWindow?.name || dedupedVisible[0]?.name || '未知窗口';
+  const summary = ok
+    ? `当前活动窗口：${title}；可见窗口 ${dedupedVisible.length} 个${screenshot ? '；已截屏' : ''}${capabilities.ocr ? '；OCR 可用' : '；OCR 未安装'}。`
+    : '未能读取实例窗口状态；请确认实例正在运行且 X11 工具可用。';
+  return {
+    ok,
+    capturedAt: new Date().toISOString(),
+    display,
+    activeWindow,
+    focusedWindow,
+    visibleWindows: dedupedVisible,
+    pointer,
+    capabilities,
+    screenshot,
+    warnings: uniqueStrings(warnings).slice(0, 12),
+    summary,
+  };
+}
+
+function parseWindowSnapshot(id: string, name: string, geometryText: string): InstanceAutomationWindowSnapshot {
+  const geom = parseShellPairs(geometryText.replace(/;/g, '\n'));
+  return {
+    id,
+    name,
+    geometry: {
+      x: nullableInt(geom.X),
+      y: nullableInt(geom.Y),
+      width: nullableInt(geom.WIDTH),
+      height: nullableInt(geom.HEIGHT),
+      screen: nullableInt(geom.SCREEN),
+    },
+  };
+}
+
+function parseShellPairs(value: string): Record<string, string> {
+  const pairs: Record<string, string> = {};
+  for (const raw of value.split(/[;\n]/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const index = line.indexOf('=');
+    if (index <= 0) continue;
+    pairs[line.slice(0, index)] = line.slice(index + 1);
+  }
+  return pairs;
+}
+
+function nullableInt(value?: string): number | null {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function dedupeWindows(windows: InstanceAutomationWindowSnapshot[]): InstanceAutomationWindowSnapshot[] {
+  const seen = new Set<string>();
+  const result: InstanceAutomationWindowSnapshot[] = [];
+  for (const window of windows) {
+    const key = window.id || `${window.name}:${window.geometry.x}:${window.geometry.y}:${window.geometry.width}:${window.geometry.height}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(window);
+  }
+  return result.slice(0, 12);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function normalizeXdotoolShortcut(value: string): string {

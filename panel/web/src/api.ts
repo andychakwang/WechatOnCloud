@@ -999,6 +999,41 @@ export interface InstanceAutomationSelfTest {
   checks: { name: string; ok: boolean; detail: string }[];
 }
 
+export interface InstanceAutomationWindowSnapshot {
+  id: string;
+  name: string;
+  geometry: {
+    x: number | null;
+    y: number | null;
+    width: number | null;
+    height: number | null;
+    screen: number | null;
+  };
+}
+
+export interface InstanceAutomationVisualSnapshot {
+  ok: boolean;
+  capturedAt: string;
+  display: string;
+  activeWindow: InstanceAutomationWindowSnapshot | null;
+  focusedWindow: InstanceAutomationWindowSnapshot | null;
+  visibleWindows: InstanceAutomationWindowSnapshot[];
+  pointer: { x: number | null; y: number | null; screen: number | null; windowId: string };
+  capabilities: {
+    xdotool: boolean;
+    xclip: boolean;
+    screenshot: boolean;
+    ocr: boolean;
+  };
+  screenshot?: {
+    mime: 'image/png';
+    dataUrl: string;
+    bytes: number;
+  };
+  warnings: string[];
+  summary: string;
+}
+
 export interface MomentDraft {
   id: string;
   title: string;
@@ -1391,6 +1426,11 @@ export const api = {
     }),
   automationSelfTest: (id: string) =>
     req<{ result: InstanceAutomationSelfTest }>(`/api/admin/instances/${id}/automation/self-test`, { method: 'POST' }),
+  automationInspect: (id: string, payload: { includeScreenshot?: boolean }) =>
+    req<{ snapshot: InstanceAutomationVisualSnapshot }>(`/api/admin/instances/${id}/automation/inspect`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   automationSendNextMassItem: (
     id: string,
     jobId: string,

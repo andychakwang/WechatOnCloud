@@ -58,6 +58,7 @@ import {
   readTextFromInstanceClipboard,
   openConversationInInstance,
   automationSelfTestInInstance,
+  inspectAutomationInInstance,
   listOrphanVolumes,
   removeVolume,
   listOrphanContainers,
@@ -1234,6 +1235,25 @@ app.post('/api/admin/instances/:id/automation/self-test', async (req, reply) => 
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '自动化自检失败' });
+  }
+});
+
+app.post('/api/admin/instances/:id/automation/inspect', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  const id = (req.params as any).id;
+  const inst = findInstance(id);
+  if (!inst) return reply.code(404).send({ error: '实例不存在' });
+  try {
+    const includeScreenshot = !!(req.body as any)?.includeScreenshot;
+    const snapshot = await inspectAutomationInInstance(inst, { includeScreenshot });
+    appendPanelLog(
+      'INFO',
+      `实例「${inst.name}」自动化视觉快照 by ${admin.username}：${snapshot.ok ? '成功' : '未就绪'}${snapshot.screenshot ? '，含截图' : ''}`,
+    );
+    return { snapshot };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '读取实例视觉快照失败' });
   }
 });
 

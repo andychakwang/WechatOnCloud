@@ -24,6 +24,7 @@ import {
   type AutomationActionQueue,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
+  type InstanceAutomationVisualSnapshot,
   type MassSendJob,
   type MomentDraft,
   type PanelUser,
@@ -284,6 +285,26 @@ function bridgeRunVerificationSummary(item: { verification?: WecomBridgeRunRepor
   if (verification.inputReady === false) parts.push('输入框未就绪');
   if (verification.error) parts.push(verification.error);
   return parts.slice(0, 4).join(' · ');
+}
+
+function visualWindowLabel(window?: InstanceAutomationVisualSnapshot['activeWindow']): string {
+  if (!window) return '未知窗口';
+  const geom = window.geometry;
+  const size = geom.width && geom.height ? `${geom.width}x${geom.height}` : '';
+  const pos = geom.x !== null && geom.y !== null ? `@${geom.x},${geom.y}` : '';
+  return [window.name || window.id || '未命名窗口', size || pos ? `${size}${pos}` : ''].filter(Boolean).join(' · ');
+}
+
+function visualCapabilityLabel(snapshot: InstanceAutomationVisualSnapshot): string {
+  const caps = snapshot.capabilities;
+  return [
+    caps.xdotool ? 'xdotool' : '',
+    caps.xclip ? 'xclip' : '',
+    caps.screenshot ? '截图' : '',
+    caps.ocr ? 'OCR' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ') || '无可用感知能力';
 }
 
 function bridgeRunHealthTag(summary: WecomBridgeRunReportsSummary): string {
@@ -638,6 +659,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [selfTest, setSelfTest] = useState<InstanceAutomationSelfTest | null>(null);
+  const [visualSnapshot, setVisualSnapshot] = useState<InstanceAutomationVisualSnapshot | null>(null);
 
   const [replyInbound, setReplyInbound] = useState('');
   const [replyContext, setReplyContext] = useState('');
@@ -758,6 +780,11 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   useEffect(() => {
     if (!selectedInstanceId && runningInstances[0]) setSelectedInstanceId(runningInstances[0].id);
   }, [instances, selectedInstanceId]);
+
+  useEffect(() => {
+    setSelfTest(null);
+    setVisualSnapshot(null);
+  }, [selectedInstanceId]);
 
   const cfg = config ?? defaultAutomationConfig();
   const knowledgeItems = cfg.knowledgeItems ?? [];
@@ -1380,6 +1407,21 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
     }
   };
 
+  const inspectInstanceVisual = async (includeScreenshot = false) => {
+    if (!selectedInstance) return toast('请先选择一个运行中的实例', 'error');
+    setBusy(includeScreenshot ? 'visual-screenshot' : 'visual-inspect');
+    setVisualSnapshot(null);
+    try {
+      const { snapshot } = await api.automationInspect(selectedInstance.id, { includeScreenshot });
+      setVisualSnapshot(snapshot);
+      toast(snapshot.ok ? '已读取实例感知快照' : '实例感知快照未就绪', snapshot.ok ? 'ok' : 'error');
+    } catch (e: any) {
+      toast(e.message || '读取视觉快照失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const buildReplyPlan = async () => {
     setBusy('reply-plan');
     setReplyPlan(null);
@@ -1728,6 +1770,12 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
             <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'self-test'} onClick={runSelfTest}>
               实例自检
             </button>
+            <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'visual-inspect'} onClick={() => inspectInstanceVisual(false)}>
+              感知快照
+            </button>
+            <button className="chip chip-toggle" disabled={!selectedInstance || busy === 'visual-screenshot'} onClick={() => inspectInstanceVisual(true)}>
+              截图快照
+            </button>
           </div>
         </div>
         <div className="auto-toolbar auto-toolbar-secondary">
@@ -2031,6 +2079,54 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                 </span>
               ))}
             </div>
+          </div>
+        )}
+        {visualSnapshot && (
+          <div className={'auto-visual-snapshot ' + (visualSnapshot.ok ? 'ok' : 'bad')}>
+            <div className="auto-visual-head">
+              <div>
+                <b>{visualSnapshot.ok ? '实例感知快照' : '感知未就绪'}</b>
+                <div className="muted small">
+                  {fmtDate(Date.parse(visualSnapshot.capturedAt))} · DISPLAY {visualSnapshot.display || 'unknown'} · {visualCapabilityLabel(visualSnapshot)}
+                </div>
+              </div>
+              <span className={'tag ' + (visualSnapshot.ok ? 'tag-on' : 'tag-off')}>{visualSnapshot.ok ? '可用' : '失败'}</span>
+            </div>
+            <div className="muted small">{visualSnapshot.summary}</div>
+            <div className="chip-row">
+              <span className="chip chip-static">活动 {visualWindowLabel(visualSnapshot.activeWindow)}</span>
+              <span className="chip chip-static">焦点 {visualWindowLabel(visualSnapshot.focusedWindow)}</span>
+              <span className="chip chip-static">可见窗口 {visualSnapshot.visibleWindows.length}</span>
+              {visualSnapshot.pointer.x !== null && visualSnapshot.pointer.y !== null && (
+                <span className="chip chip-static">
+                  指针 {visualSnapshot.pointer.x},{visualSnapshot.pointer.y}
+                </span>
+              )}
+            </div>
+            {visualSnapshot.visibleWindows.length > 0 && (
+              <div className="auto-visual-windows">
+                {visualSnapshot.visibleWindows.slice(0, 6).map((window) => (
+                  <span key={window.id || window.name} className="chip chip-static" title={window.id}>
+                    {visualWindowLabel(window)}
+                  </span>
+                ))}
+              </div>
+            )}
+            {visualSnapshot.warnings.length > 0 && (
+              <div className="chip-row">
+                {visualSnapshot.warnings.map((warning) => (
+                  <span key={warning} className="chip chip-static chip-bad">
+                    {warning}
+                  </span>
+                ))}
+              </div>
+            )}
+            {visualSnapshot.screenshot && (
+              <div className="auto-visual-preview">
+                <img src={visualSnapshot.screenshot.dataUrl} alt="实例截图快照" />
+                <div className="muted small">{Math.round(visualSnapshot.screenshot.bytes / 1024)} KB</div>
+              </div>
+            )}
           </div>
         )}
 

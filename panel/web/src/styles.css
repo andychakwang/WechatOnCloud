@@ -1445,6 +1445,42 @@ button {
 .auto-self-test.bad {
   background: rgba(var(--danger-rgb) / 0.08);
 }
+.auto-visual-snapshot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(var(--green-rgb) / 0.08);
+}
+.auto-visual-snapshot.bad {
+  background: rgba(var(--danger-rgb) / 0.08);
+}
+.auto-visual-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+.auto-visual-windows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.auto-visual-preview {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+.auto-visual-preview img {
+  width: min(100%, 720px);
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--shadow) / 0.12);
+  background: #111;
+}
 .auto-bridge {
   padding: 10px;
   border-radius: 12px;
