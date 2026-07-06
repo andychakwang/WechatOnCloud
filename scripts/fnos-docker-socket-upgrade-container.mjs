@@ -280,7 +280,7 @@ async function createHelper(inspect, projectDir) {
     Env: env,
     Cmd: cmd,
     HostConfig: {
-      AutoRemove: false,
+      AutoRemove: true,
       Binds: binds,
       RestartPolicy: { Name: 'no' },
     },
