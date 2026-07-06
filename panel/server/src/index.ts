@@ -91,6 +91,7 @@ import {
   getAutomationPreflightReport,
   getAutomationActionQueue,
   approveAutomationActionQueueReview,
+  approveAutomationActionQueueReviews,
   updateAutomationConfig,
   exportAutomationBundle,
   exportWecomRpaPackage,
@@ -581,6 +582,21 @@ app.post('/api/admin/automation/action-queue/items/:itemId/approve', async (req,
     return { result };
   } catch (e: any) {
     return reply.code(400).send({ error: e?.message || '审核自动化队列项失败' });
+  }
+});
+
+app.post('/api/admin/automation/action-queue/reviews/approve', async (req, reply) => {
+  const admin = requireAdmin(req, reply);
+  if (!admin) return;
+  try {
+    const result = approveAutomationActionQueueReviews(admin, req.body as any);
+    appendPanelLog(
+      'INFO',
+      `${result.dryRun ? '预览批量审核' : '批量审核'}自动化队列 by ${admin.username}：target=${result.target} candidates=${result.candidates.length} approved=${result.approved.total} failed=${result.failed.length}`,
+    );
+    return { result };
+  } catch (e: any) {
+    return reply.code(400).send({ error: e?.message || '批量审核自动化队列失败' });
   }
 });
 

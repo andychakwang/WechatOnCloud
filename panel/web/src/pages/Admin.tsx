@@ -24,6 +24,7 @@ import {
   type AutomationPreflightReport,
   type AutomationActionQueue,
   type AutomationActionQueueItem,
+  type AutomationActionQueueReviewBulkTarget,
   type AutomationReplyPlan,
   type InstanceAutomationSelfTest,
   type InstanceAutomationTargetVerifyResult,
@@ -542,6 +543,33 @@ function actionQueueRpaTarget(queue: AutomationActionQueue): {
   };
 }
 
+function actionQueueReviewBatchTarget(queue: AutomationActionQueue): {
+  target: AutomationActionQueueReviewBulkTarget;
+  total: number;
+  reply: number;
+  mass: number;
+  moment: number;
+  label: string;
+} {
+  const counts = { reply: 0, mass: 0, moment: 0 };
+  for (const item of queue.items) {
+    if (!actionQueueApproveReviewAction(item)) continue;
+    if (item.target === 'reply' || item.target === 'mass' || item.target === 'moment') counts[item.target] += 1;
+  }
+  const active = [
+    { target: 'reply' as const, count: counts.reply, label: 'AI 回复' },
+    { target: 'mass' as const, count: counts.mass, label: '群发' },
+    { target: 'moment' as const, count: counts.moment, label: '朋友圈' },
+  ].filter((item) => item.count > 0);
+  const total = counts.reply + counts.mass + counts.moment;
+  return {
+    target: active.length === 1 ? active[0].target : 'all',
+    total,
+    ...counts,
+    label: active.length === 1 ? active[0].label : '全部待审',
+  };
+}
+
 function fallbackRpaWorkerReadiness(
   target: 'replies' | 'mass' | 'moments',
   label: string,
@@ -870,6 +898,7 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
   const bridgeWorkerOptions = Array.from(new Map(bridgeWorkersSorted.map((worker) => [worker.workerId, worker])).values());
   const selectedRpaPackageWorker = bridgeWorkersSorted.find((worker) => worker.id === rpaPackageWorkerRef) || null;
   const actionQueueRpa = actionQueue ? actionQueueRpaTarget(actionQueue) : null;
+  const actionQueueReview = actionQueue ? actionQueueReviewBatchTarget(actionQueue) : null;
   const actionQueueRpaReadiness = actionQueueRpa
     ? (['replies', 'mass', 'moments'] as const)
         .map((target) => actionQueueRpa.workerReadiness[target])
@@ -902,6 +931,32 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
       await loadAutomation();
     } catch (e: any) {
       toast(e.message || '快捷审核失败', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const approveActionQueueReviews = async () => {
+    if (!actionQueueReview || actionQueueReview.total <= 0) return toast('当前队列没有待审核草稿', 'error');
+    const ok = await confirm({
+      title: `批量审核 ${actionQueueReview.total} 个${actionQueueReview.label}任务？`,
+      body: '这里只会批准 AI 回复草稿、把群发置为 queued、把朋友圈置为 ready；不会发送、粘贴、填入发布框或发布。',
+      confirmText: '批量审核',
+    });
+    if (!ok) return;
+    setBusy('action-review-bulk');
+    try {
+      const { result } = await api.approveAutomationActionQueueReviews({
+        target: actionQueueReview.target,
+        limit: 100,
+        queueLimit: 12,
+      });
+      setActionQueue(result.queue);
+      const suffix = result.failed.length ? `，失败 ${result.failed.length} 个` : '';
+      toast(`已批量审核 ${result.approved.total} 个任务${suffix}`, result.failed.length ? 'error' : 'ok');
+      await loadAutomation();
+    } catch (e: any) {
+      toast(e.message || '批量审核失败', 'error');
     } finally {
       setBusy('');
     }
@@ -2306,6 +2361,14 @@ function AutomationWorkbench({ instances }: { instances: InstanceWithStatus[] })
                     ))}
                   </div>
                 )}
+                <button
+                  className="btn-text"
+                  disabled={busy === 'action-review-bulk' || !actionQueueReview?.total}
+                  title="只审核待审草稿，不会发送、粘贴或发布。"
+                  onClick={approveActionQueueReviews}
+                >
+                  审核 {actionQueueReview?.label || '待审'} {actionQueueReview?.total || 0}
+                </button>
                 <button
                   className="btn-text"
                   disabled={busy === 'rpa-package' || !actionQueueRpa?.total}

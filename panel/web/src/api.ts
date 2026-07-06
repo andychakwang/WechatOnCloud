@@ -919,6 +919,28 @@ export interface AutomationActionQueueReviewResult {
   draft?: MomentDraft;
 }
 
+export type AutomationActionQueueReviewBulkTarget = 'all' | 'reply' | 'mass' | 'moment';
+
+export interface AutomationActionQueueBulkReviewResult {
+  target: AutomationActionQueueReviewBulkTarget;
+  dryRun: boolean;
+  limit: number;
+  candidates: AutomationActionQueueItem[];
+  approved: {
+    reply: number;
+    mass: number;
+    moment: number;
+    total: number;
+  };
+  failed: Array<{
+    id: string;
+    title: string;
+    target: AutomationActionQueueTarget;
+    error: string;
+  }>;
+  queue: AutomationActionQueue;
+}
+
 export interface AutomationAuditEvent {
   id: string;
   timestamp: string;
@@ -1223,6 +1245,16 @@ export const api = {
     req<{ result: AutomationActionQueueReviewResult }>(`/api/admin/automation/action-queue/items/${encodeURIComponent(itemId)}/approve`, {
       method: 'POST',
       body: JSON.stringify({ limit }),
+    }),
+  approveAutomationActionQueueReviews: (payload: {
+    target?: AutomationActionQueueReviewBulkTarget;
+    dryRun?: boolean;
+    limit?: number;
+    queueLimit?: number;
+  }) =>
+    req<{ result: AutomationActionQueueBulkReviewResult }>('/api/admin/automation/action-queue/reviews/approve', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
   updateAutomationConfig: (config: AutomationConfig) =>
     req<{ config: AutomationConfig }>('/api/admin/automation/config', { method: 'PUT', body: JSON.stringify(config) }),

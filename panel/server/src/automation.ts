@@ -733,6 +733,28 @@ export interface AutomationActionQueueReviewResult {
   draft?: MomentDraft;
 }
 
+export type AutomationActionQueueReviewBulkTarget = 'all' | 'reply' | 'mass' | 'moment';
+
+export interface AutomationActionQueueBulkReviewResult {
+  target: AutomationActionQueueReviewBulkTarget;
+  dryRun: boolean;
+  limit: number;
+  candidates: AutomationActionQueueItem[];
+  approved: {
+    reply: number;
+    mass: number;
+    moment: number;
+    total: number;
+  };
+  failed: Array<{
+    id: string;
+    title: string;
+    target: AutomationActionQueueTarget;
+    error: string;
+  }>;
+  queue: AutomationActionQueue;
+}
+
 export type RiskLevel = 'normal' | 'review' | 'block';
 
 export interface RiskAssessment {
@@ -2310,6 +2332,58 @@ export function approveAutomationActionQueueReview(actor: User, itemId: string, 
     return { item, target: item.target, draft, queue: getAutomationActionQueue(limit) };
   }
   throw new Error('该队列项暂不支持快捷审核');
+}
+
+export function approveAutomationActionQueueReviews(actor: User, raw: any = {}): AutomationActionQueueBulkReviewResult {
+  const target = normalizeActionQueueReviewBulkTarget(raw?.target);
+  const limit = clampInt(raw?.limit, 1, 100, 20);
+  const queueLimit = clampInt(raw?.queueLimit, 1, 100, 20);
+  const dryRun = raw?.dryRun === true || raw?.dryRun === '1' || raw?.dryRun === 'true';
+  const candidates = getAutomationActionQueue(100).items
+    .filter((item) => item.kind === 'review-task' && !!item.refId && (target === 'all' || item.target === target))
+    .slice(0, limit);
+  const result: AutomationActionQueueBulkReviewResult = {
+    target,
+    dryRun,
+    limit,
+    candidates,
+    approved: { reply: 0, mass: 0, moment: 0, total: 0 },
+    failed: [],
+    queue: getAutomationActionQueue(queueLimit),
+  };
+  if (dryRun) return result;
+
+  for (const item of candidates) {
+    try {
+      if (item.target === 'reply') {
+        patchWecomBridgeEvent(actor, item.refId!, { replyApproved: true });
+        result.approved.reply += 1;
+      } else if (item.target === 'mass') {
+        patchMassSendJob(actor, item.refId!, { approved: true, status: 'queued' });
+        result.approved.mass += 1;
+      } else if (item.target === 'moment') {
+        patchMomentDraft(actor, item.refId!, { approved: true, status: 'ready' });
+        result.approved.moment += 1;
+      }
+    } catch (e: any) {
+      result.failed.push({
+        id: item.id,
+        title: item.title,
+        target: item.target,
+        error: e?.message || String(e),
+      });
+    }
+  }
+  result.approved.total = result.approved.reply + result.approved.mass + result.approved.moment;
+  result.queue = getAutomationActionQueue(queueLimit);
+  return result;
+}
+
+function normalizeActionQueueReviewBulkTarget(value: unknown): AutomationActionQueueReviewBulkTarget {
+  const raw = str(value || 'all', 20).trim();
+  if (!raw || raw === 'all') return 'all';
+  if (raw === 'reply' || raw === 'mass' || raw === 'moment') return raw;
+  throw new Error('批量审核目标不合法');
 }
 
 function actionQueueItemActions(item: AutomationActionQueueItem): AutomationActionQueueItemAction[] {
